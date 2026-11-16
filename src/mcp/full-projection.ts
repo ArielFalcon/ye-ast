@@ -18,7 +18,7 @@ export interface NestedFact {
   fact: Json;
 }
 
-const NESTED_ENVELOPE_GUIDE = "Nested facts state only what differs from the answer: a missing schema, snapshot or producer is the answer's, and so is an inputs key missing there (null: absent in that fact).";
+const NESTED_ENVELOPE_GUIDE = "Nested facts omit schema, snapshot, producer and the inputs keys they share with the answer (an inputs key null: absent there).";
 const SHARED_FINDING_GUIDE = "A finding {sharedFinding: n} in value.answers[].findings is value.sharedFindings[n], shared by several answers.";
 const SAME_HANDLER_GUIDE = "Evidence {sameAs: \"handler\"} is the place of the finding's value.handler.";
 const DECISION_ID_GUIDE = "A decision without id has the id kind:subject.";

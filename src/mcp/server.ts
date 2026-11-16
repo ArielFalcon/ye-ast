@@ -544,7 +544,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const guidance = [
         ...recoveryText,
         ...projection.guidance,
-        ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
+        ...(repositoryRoots === undefined ? [] : ["Repository locations: repositoryRoots[].path is the clone of repositoryRoots[].repo; evidence paths are relative to its snapshot."]),
         ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
         ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
         ...(workspaceLive === undefined ? [] : ["Workspace live context: inspect workspaceLive for captured snapshots and stale or unavailable checks. Captures are not an atomic workspace instant."]),

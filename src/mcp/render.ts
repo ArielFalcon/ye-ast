@@ -447,7 +447,7 @@ export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseM
     const section = fact.value.entrypoints;
     return section.status === "unknown"
       ? "Check value.entrypoints.status, reason and evidence; this section has no value."
-      : `${context?.recovery?.status === "unavailable" ? `Recovery unavailable (${context.recovery.reason}); recorded coordinates` : "Selection lookup"}: findingIndex is the zero-based position in value.entrypoints.value. Check value.entrypoints.status and value.entrypoints.value; match each complete finding in value.entrypoints.value[].value by kind/name and handler or component coordinates. Inspect basePath status and evidence for HTTP routes; unknown findings carry reason and evidence, and partial sections carry cuts.${section.value.some((item) => item.status === "complete" && item.value.kind === "ui-route") ? " For UI routes, match kind and name, then inspect value.entrypoints.value[].value.guards; these are each route's own guards, not inherited or runtime restrictions." : ""}`;
+      : `${context?.recovery?.status === "unavailable" ? `Recovery unavailable (${context.recovery.reason}); recorded coordinates` : "Selection lookup"}: findingIndex is the zero-based position in value.entrypoints.value. Check value.entrypoints.status; match each complete finding (value.entrypoints.value[].value) by kind/name and handler or component coordinates. HTTP routes: inspect basePath status and evidence. Unknown findings carry reason and evidence; partial sections carry cuts.${section.value.some((item) => item.status === "complete" && item.value.kind === "ui-route") ? " UI routes: inspect value.entrypoints.value[].value.guards; they are the route's own, not inherited or runtime restrictions." : ""}`;
   }
   const undecided = fact.status === "unknown" || fact.value.entrypoints.status === "unknown" ? 0 : undecidedOf(fact.value.entrypoints.value);
   const lines = headerLines(fact, { undecided });
@@ -983,12 +983,12 @@ function impactCutLayout(cuts: readonly Cut[], detail: ResponseMode, owner: CutO
 
 function impactLookups(value: ImpactValue, path: string, context?: RenderContext): string[] {
   const lines: string[] = [];
-  if (value.entrypoints.length > 0) lines.push(`  To inspect a reached entrypoint, select ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into ${path}.seeds; resolve those indexes to recover all associated origins, not a complete call chain.`);
-  if (value.symbols.length > 0) lines.push(`  To inspect a dependency omitted from text, filter ${path}.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, or in via.resource when present, not in via.file. Preserve via.basis, via.derivation and confidence when interpreting it; a name-match derivation may be no dependence.`);
-  if (value.seeds.length > 0 && value.entrypoints.length === 0) lines.push(`  To identify the walk origins, match ${path}.seeds by file, symbol and line; basis distinguishes requested targets from change-derived origins.`);
-  if (value.modules !== undefined && (value.modules.origins.length > 0 || value.modules.modules.length > 0)) lines.push(`  Inspect ${path}.modules.origins and ${path}.modules.modules; each module origin index joins that origins array. Module dependencies are distinct from symbol impact.`);
-  if ((value.changedEntrypoints?.length ?? 0) > 0) lines.push(`  To inspect entrypoints added, removed or altered by the diff, filter ${path}.changedEntrypoints by change, kind/name and handler identity; these are distinct from reached entrypoints.`);
-  if (lines.length > 0 && context?.recovery?.status !== "unavailable") lines.unshift(`  Selection lookup: use handler path, symbol and line with owner ${path === "value" ? '{kind:"local"}' : '{kind:"section",repo:<repository key>}'}${context?.tool === "callers" || value.modules === undefined ? "." : "; module lookup uses file and snapshot (base or head) with the same owner."}`);
+  if (value.entrypoints.length > 0) lines.push(`  Reached entrypoints: ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line; seeds are zero-based indexes into ${path}.seeds (associated origins, not a call chain).`);
+  if (value.symbols.length > 0) lines.push(`  Dependencies: ${path}.symbols by file, symbol, line. via.file/symbol is the recorded dependency; via.lines are lines of that symbol's own file (via.resource when present), not of via.file. Keep via.basis, via.derivation and confidence: a name-match may be no dependence.`);
+  if (value.seeds.length > 0 && value.entrypoints.length === 0) lines.push(`  Walk origins: ${path}.seeds by file, symbol, line; basis tells requested targets from change-derived origins.`);
+  if (value.modules !== undefined && (value.modules.origins.length > 0 || value.modules.modules.length > 0)) lines.push(`  Modules: ${path}.modules.modules; origin indexes join ${path}.modules.origins. Module dependencies are not symbol impact.`);
+  if ((value.changedEntrypoints?.length ?? 0) > 0) lines.push(`  Entrypoints added, removed or altered by the diff: ${path}.changedEntrypoints by change, kind/name and handler; not the reached ones.`);
+  if (lines.length > 0 && context?.recovery?.status !== "unavailable") lines.unshift(`  Selection lookup: use handler path, symbol and line with owner ${path === "value" ? '{kind:"local"}' : '{kind:"section",repo:<repository key>}'}${context?.tool === "callers" || value.modules === undefined ? "." : "; modules: file and snapshot (base or head), same owner."}`);
   return lines;
 }
 
@@ -997,18 +997,18 @@ function impactCutLookup(cuts: readonly Cut[], path: string, context?: RenderCon
   const example = { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 } as const;
   return [
     ...(context !== undefined && canSelect(context, example, false) ? [`  lookup example: ${literalSelection(example)}`] : []),
-    `  ${context?.recovery?.status === "unavailable" ? "Recorded coordinates" : "Selection lookup"}: cutIndex is the zero-based position in ${path}; owner identifies the fact, entrypoints section, repository section or indexed read.
-  Before treating this result as exhaustive, inspect ${path}: filter by kind and the relevant anchor in at; a recorded limit explains where coverage stopped. Full JSON does not extend that coverage.`,
-    ...(cuts.some((cut) => cut.kind === "unresolved-link") ? [`  For unresolved-link in ${path}, at[0] names the unresolved file/declaration anchor and the remaining at entries locate potential references; they are not verified calls.`] : []),
+    `  ${context?.recovery?.status === "unavailable" ? "Recorded coordinates" : "Selection lookup"}: cutIndex is the zero-based position in ${path}; owner names the fact, entrypoints section, repository section or indexed read.
+  Before treating this as exhaustive, inspect ${path} by kind and anchor (at): a limit says where coverage stopped; full JSON does not extend it.`,
+    ...(cuts.some((cut) => cut.kind === "unresolved-link") ? [`  unresolved-link in ${path}: at[0] is the unresolved file/declaration anchor, the rest potential references, not verified calls.`] : []),
     ...walkBoundRemedies(cuts, walk),
   ];
 }
 
 function impactSnapshotGuide(snapshot: SnapshotRef, mergeBase?: string, context?: RenderContext, hasBaseModules = false): string {
-  if (context?.tool === "callers" && snapshot.kind === "sha") return `  Repeat callers with repo ${JSON.stringify(snapshot.repo)} and revision ${JSON.stringify(snapshot.sha)}, retaining declared scope and symbol selection. Related outline/importers queries answer a new question.`;
-  if (snapshot.kind === "live") return `  A fresh live query on repo ${JSON.stringify(snapshot.repo)} captures current state; compare its head and stateId with the earlier identity before treating evidence as the same. A past live state cannot be requested, and HEAD alone does not reproduce it.`;
+  if (context?.tool === "callers" && snapshot.kind === "sha") return `  Repeat callers with repo ${JSON.stringify(snapshot.repo)} and revision ${JSON.stringify(snapshot.sha)}, same scope and targets.`;
+  if (snapshot.kind === "live") return `  A fresh live query on repo ${JSON.stringify(snapshot.repo)} captures current state; compare its head and stateId with this identity. A past live state cannot be requested.`;
   const selector = mergeBase === undefined ? `revision ${JSON.stringify(snapshot.sha)}` : `head ${JSON.stringify(snapshot.sha)} and base ${JSON.stringify(mergeBase)}`;
-  return `  Keep repo ${JSON.stringify(snapshot.repo)} and the same snapshot when repeating this query: ${selector}; retain the declared scope and change selection. For a related callers/outline/importers query about head evidence use revision ${JSON.stringify(snapshot.sha)} instead of impact base/head${hasBaseModules ? "; base-side modules use their recorded merge-base revision" : ""}. It answers a new question, not a filter over this result.`;
+  return `  Repeat with repo ${JSON.stringify(snapshot.repo)} and the same snapshot (${selector}), same scope and change selection. For callers/outline/importers on head evidence use revision ${JSON.stringify(snapshot.sha)}${hasBaseModules ? "; base-side modules: their recorded merge-base revision" : ""}.`;
 }
 
 function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.mergeBase, path = "value", reuseLocalBase = false, full = false): string[] {
@@ -1041,7 +1041,7 @@ function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "part
   if (lookups.length === 0 && fact.status === "complete") return ["There are no recorded consequences or walk origins within the declared scope and change selection."];
   return [
     "Investigation guide:",
-    "  JSON navigation: paths below are relative to the result JSON.",
+    "  Paths are relative to the result JSON.",
     ...lookups,
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
     ...impactCutLookup(cutsOf(fact), "cuts", context, fact.inputs.declaredConfig.walk),
@@ -1063,28 +1063,28 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
   const otherImpacts = Object.entries(value.sections).flatMap(([repo, section]) => repo === value.trigger.repo || section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]);
   return [
     "Investigation guide:",
-    "  JSON navigation: paths below are relative to the result JSON.",
-    ...(Object.keys(value.sections).length === 0 ? [] : ["  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value."]),
-    ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath, context)] : []),
-    ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
-    ...(value.links.length === 0 ? [] : ["  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository."]),
-    ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and, for the call sites this question sends onward, section.value.unmatched and section.value.external when present; section.value.unrelated counts the others. Use ye_ast_workspace to list them, investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
+    "  Paths are relative to the result JSON.",
+    ...(Object.keys(value.sections).length === 0 ? [] : ["  Select value.sections by exact repository key. Before using a section's evidence check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason; an unknown section has no value."]),
+    ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath, context)] : []),
+    ...(otherImpacts.length === 0 ? [] : ["  Other repository walks: value.sections[repo].value.impact when present; entrypoints[].seeds index that walk's own seeds, never across repositories."]),
+    ...(value.links.length === 0 ? [] : ["  Cross-repository consequences: filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). reach lists link.id values, nearest the change first, the link numbers the text prints. Keep direction, basis and confidence; reach does not prove a path inside a repository."]),
+    ...(value.workspace.unserved.length === 0 ? [] : ["  Missing service coverage: value.workspace.unserved and, for the call sites sent onward, section.value.unmatched and section.value.external (section.value.unrelated counts the others). ye_ast_workspace lists them with outward-name evidence and candidate repositories; adding workspace.repos changes coverage, it does not filter this fact."]),
     ...impactCutLookup(cutsOf(fact), "cuts", context, fact.inputs.declaredConfig.walk),
-    ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
+    ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits are in value.sections[repo].cuts and its section.value.reads[].fact; a complete read does not resolve an unknown contributing one."] : []),
     ...(crossRepository(value) ? [workspaceOwnerGuide("full")] : []),
     ...workspaceBaseModuleGuides(value, "full"),
-    ...value.links.map(({ link }) => {
+    ...new Set(value.links.map(({ link }) => {
       const snapshot = value.repositorySnapshots.find((entry) => entry.repo === link.to.repo)?.snapshot;
       const coordinate = snapshot === undefined ? "snapshot unavailable" : snapshot.kind === "sha" ? `revision ${JSON.stringify(snapshot.sha)}` : `earlier live head ${JSON.stringify(snapshot.head)} stateId ${JSON.stringify(snapshot.stateId)}; a fresh live query must be compared`;
-      return `  Destination: repo ${JSON.stringify(link.to.repo)}, ${coordinate}, file ${JSON.stringify(link.to.handler.path)}, symbol ${JSON.stringify(link.to.handler.symbol)}. Use outline or callers on the declared owner.`;
-    }),
+      return `  Destination: repo ${JSON.stringify(link.to.repo)}, ${coordinate}, file ${JSON.stringify(link.to.handler.path)}, symbol ${JSON.stringify(link.to.handler.symbol)}.`;
+    })),
     workspaceSnapshotGuide(fact, context),
   ];
 }
 
 function workspaceOwnerGuide(mode: ResponseMode): string {
   const snapshots = mode === "full" ? "value.repositorySnapshots" : "the repositories line";
-  return `  For a related callers or outline query about head evidence choose the recorded owner with repo and its own snapshot from ${snapshots}; base-side modules require their owning walk's recorded merge base instead. An undeclared owner requires a host registration update or an instance bound to that clone. A symbol name may match multiple declarations.`;
+  return `  For callers or outline on head evidence choose the recorded owner with repo and its own snapshot from ${snapshots}; base-side modules use their walk's recorded merge base. An undeclared owner needs a host registration update or an instance bound to that clone. A symbol name may match several declarations.`;
 }
 
 /** Evidence owned by a repository other than the bound one: only then does a follow-up query need to choose an owner. */

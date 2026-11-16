@@ -296,7 +296,7 @@ test("impact guidance explains contextual full lookups and the origin-index join
   }
 });
 
-test("workspace guidance qualifies repository payloads and joins reach IDs rather than display numbers", () => {
+test("workspace guidance qualifies repository payloads and joins reach entries to the link keys the text prints as numbers", () => {
   const link = { id: "link-a", from: { repo: "a", file: "call.ts", symbol: "send", line: 4 }, to: { repo: "b", kind: "http-route" as const, name: "GET /x", handler: { path: "route.ts", line: 9, symbol: "handler" } }, transport: "http" as const, basis: "route-overlap" as const, confidence: 0.6 };
   const value: WorkspaceImpactValue = {
     workspace: { repos: ["a", "b"], gateways: [], unmatchedGateways: [], unserved: ["missing-api"], source: "request" }, repositorySnapshots: [], trigger: { repo: "a" },
@@ -309,7 +309,7 @@ test("workspace guidance qualifies repository payloads and joins reach IDs rathe
   assert.ok(guide.includes('value.sections["a"].value.impact'));
   assert.ok(guide.includes("section.status") && guide.includes("value.reads"));
   assert.ok(guide.includes("value.links") && guide.includes("reach") && guide.includes("link.id"));
-  assert.ok(guide.includes("IDs") && guide.includes("display numbers"));
+  assert.ok(guide.includes("link.id values") && guide.includes("link numbers the text prints"));
   assert.ok(guide.includes("value.workspace.unserved") && guide.includes("ye_ast_workspace"));
   assert.doesNotMatch(guide, /value\.entrypoints/);
 });
