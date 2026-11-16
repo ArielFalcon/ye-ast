@@ -1,6 +1,6 @@
 # ADR-0101: A name stated only after an undecided base is never unserved
 
-- Status: Accepted, 2026-11-15, owner
+- Status: Accepted, 2026-11-15, owner; amended by [ADR-0107](0107-a-name-stated-only-after-an-undecided-base-is-listed-in-its-own-group.md), which lists such a name in its own group
 - Decision source: Owner, 2026-11-15: "Si" (yes), approving the second fix round of MCP evaluation run
   20261114T190541Z-a57733, whose finding workspace-N1 (major, regression) reads: the route a repository's own server
   serves is listed under "no local repository serves". The owner's rule for the unit: never say "no local repository
