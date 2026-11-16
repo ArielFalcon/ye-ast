@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { composeCli } from "./compose.ts";
 import { RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT } from "../mcp/server.ts";
+import { expandFull } from "../mcp/full-projection.testing.ts";
 
 function resultFields(result: any): any {
   const text = result.content?.[0]?.text;
@@ -151,7 +152,7 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   const code = await composeCli({ scratchRoot })(["map", repo], { out: (line) => printed.push(line), err: () => {} });
   assert.equal(code, 0);
   assert.equal(called.structuredContent, undefined);
-  const { mode, repositoryRoots, recovery, text: _text, ...fact } = resultFields(called);
+  const { mode, repositoryRoots, recovery, text: _text, ...fact } = expandFull("entrypoints", resultFields(called));
   assert.ok(recovery);
   assert.deepEqual(repositoryRoots, [{ repo: "shop-service", path: realpathSync(repo) }]);
   assert.equal(mode, "full");

@@ -22,6 +22,7 @@ import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import { createMcpServer, RESULT_JSON_LABEL } from "../mcp/server.ts";
 import { openSession, type ToolResult } from "../mcp/test-session.testing.ts";
 import { serveQueries } from "../protocol/query-server.ts";
+import { expandFull } from "../mcp/full-projection.testing.ts";
 
 const REPO = "/work/shop";
 
@@ -372,7 +373,7 @@ async function consequencesThroughMcp(subject: Subject, fact: Fact<ConsequencesV
     const result = await session.callTool("ye_ast_contract_consequences", { ...subject, mode: "full" }) as ToolResult;
     if (result.isError === true) return { accepted: false, requests };
     const text = (result.content as { text: string }[])[0]!.text;
-    return { accepted: true, requests, fact: JSON.parse(text.slice(text.lastIndexOf(`\n${RESULT_JSON_LABEL}`) + 1 + RESULT_JSON_LABEL.length)) };
+    return { accepted: true, requests, fact: expandFull("contract_consequences", JSON.parse(text.slice(text.lastIndexOf(`\n${RESULT_JSON_LABEL}`) + 1 + RESULT_JSON_LABEL.length))) };
   } finally {
     await session.close();
   }
