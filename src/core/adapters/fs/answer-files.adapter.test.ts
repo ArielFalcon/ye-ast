@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { createSha256Digest } from "../crypto/sha256-digest.adapter.ts";
+import { createHash } from "node:crypto";
 import { ANSWER_FILE_NAMES, type AnswerFolder } from "../../ports/answer-files.port.ts";
 import { DEBRIS_STALE_MS } from "../../ports/live-mirror.port.ts";
 import { createAnswerFiles } from "./answer-files.adapter.ts";
@@ -33,7 +33,7 @@ function answer(overrides: Partial<AnswerFolder> = {}, bytes = "{}"): AnswerFold
 
 function adapter(directory: string, extra: Partial<Parameters<typeof createAnswerFiles>[0]> = {}) {
   const lines: string[] = [];
-  const files = createAnswerFiles({ directory, digest: createSha256Digest(), engine: "engine-1", report: (line) => lines.push(line), ...extra });
+  const files = createAnswerFiles({ directory, digest: { of: (text) => createHash("sha256").update(text).digest("hex") }, engine: "engine-1", report: (line) => lines.push(line), ...extra });
   return { files, lines };
 }
 
