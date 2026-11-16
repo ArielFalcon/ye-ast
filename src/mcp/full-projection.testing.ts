@@ -1,6 +1,6 @@
 import { decisionId, type DecisionKind } from "../core/domain/decisions/decision.ts";
 import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
-import { isRecord, nestedFacts, type Json } from "./full-projection.ts";
+import { handlerPlace, isRecord, nestedFacts, type Json } from "./full-projection.ts";
 
 /** The source answer a full projection stands for: every folded or referenced part put back where it was. */
 export function expandFull(tool: QueryFamily, projected: Json): Json {
@@ -24,10 +24,9 @@ export function expandFull(tool: QueryFamily, projected: Json): Json {
   }
   const entrypoints = value["entrypoints"];
   for (const finding of tool === "entrypoints" && isRecord(entrypoints) && Array.isArray(entrypoints["value"]) ? entrypoints["value"] : []) {
+    const place = handlerPlace(finding as Json);
+    if (place === undefined) continue;
     const { value: found } = finding as Json;
-    const handler = isRecord(found) ? found["handler"] : undefined;
-    if (!isRecord(handler)) continue;
-    const place = { path: handler["path"], line: handler["line"], ...(handler["endLine"] === undefined ? {} : { endLine: handler["endLine"] }) };
     for (const owner of [finding as Json, ...(isRecord((found as Json)["basePath"]) ? [(found as Json)["basePath"] as Json] : [])]) {
       if (isRecord(owner["evidence"]) && owner["evidence"]["sameAs"] === "handler") owner["evidence"] = [place];
     }

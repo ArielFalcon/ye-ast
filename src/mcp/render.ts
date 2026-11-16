@@ -148,7 +148,7 @@ function placeReasons(cut: Cut): string[] {
 
 /** Where the property a `reassignable` cut's calls run may have been replaced, from its cause. */
 function reassignedAt(cuts: readonly Cut[]): string {
-  const places = new Set(cuts.flatMap((cut) => (cut.reason === "reassignable" ? (cut.cause ?? []).map((place) => `${placeOf(place).file}:${placeOf(place).line}`) : [])));
+  const places = new Set(cuts.flatMap((cut) => (cut.reason === "reassignable" ? (cut.cause ?? []).map((cause) => { const place = placeOf(cause); return `${place.file}:${place.line}`; }) : [])));
   return places.size === 0 ? "" : `; may have been reassigned at ${[...places].sort(compareText).join(", ")}`;
 }
 
@@ -1666,7 +1666,7 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
 }
 
 /**
- * The names written only after an undecided base that no repository serves (ADR-0108): not unserved and no decision, so a
+ * The names written only after an undecided base that no repository serves (ADR-0107): not unserved and no decision, so a
  * summary counts each name's places, details lists them, and names that share the same places say them once.
  */
 function undecidedBaseBlock(names: readonly RepositoryOutwardName[] | undefined, detail: ResponseMode): string[] {

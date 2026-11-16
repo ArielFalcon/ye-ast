@@ -68,7 +68,7 @@ function shareFindings(value: Json): boolean {
   return true;
 }
 
-function handlerPlace(finding: Json): Json | undefined {
+export function handlerPlace(finding: Json): Json | undefined {
   const { value } = finding;
   const handler = isRecord(value) ? value["handler"] : undefined;
   return isRecord(handler) ? { path: handler["path"], line: handler["line"], ...(handler["endLine"] === undefined ? {} : { endLine: handler["endLine"] }) } : undefined;
