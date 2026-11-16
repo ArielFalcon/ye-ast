@@ -2079,6 +2079,24 @@ test("a live callers query over an unchanged capture reads sources and relations
   assert.deepEqual([counter.calls, fourth.log.reads], [2, 0]);
 });
 
+test("a live callers query over an unchanged capture reads nothing again when the working set exceeds the floor budget", async () => {
+  const live = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
+  const snapshotCache = createSnapshotDataCache(1, undefined, { floor: true });
+  const counter = { calls: 0 };
+  const run = () => liveRun(live, snapshotCache, { relationReader: relationsCounted(counter) });
+
+  const first = run();
+  await first.queries.callers(LIVE_CALLERS);
+  const second = run();
+  await second.queries.callers(LIVE_CALLERS);
+  assert.deepEqual([counter.calls, first.log.reads, second.log.reads], [1, 1, 0]);
+
+  live.tree.set("src/A.java", "2");
+  const third = run();
+  await third.queries.callers(LIVE_CALLERS);
+  assert.deepEqual([counter.calls, third.log.reads], [2, 1]);
+});
+
 test("a live query answered from retained data still reports the paths that changed while it ran", async () => {
   const live = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
   const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);

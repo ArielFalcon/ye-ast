@@ -48,7 +48,10 @@ export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache"
   return {
     facts: createDerivedFacts(cache, deps.digest, trust),
     lookup() {
-      entry ??= deps.digest.of(canonicalJson({ key: identity, listing }));
+      if (entry === undefined) {
+        cache.beginRead();
+        entry = deps.digest.of(canonicalJson({ key: identity, listing }));
+      }
       return cache.get(entry);
     },
     keepSources(sources) {

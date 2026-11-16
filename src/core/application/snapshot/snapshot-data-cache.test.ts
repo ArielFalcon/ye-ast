@@ -123,3 +123,36 @@ test("a derived fact is charged on the shared budget, evicts the least recently 
   assert.deepEqual(events.map(({ outcome }) => outcome), ["evicted"]);
   assert.equal(cache.get("a"), undefined);
 });
+
+test("a floor budget keeps what the current read and the two before it used past the floor, and evicts older entries first", () => {
+  const floor = bytes("a", empty) * 2;
+  const cache = createSnapshotDataCache(floor, undefined, { floor: true });
+  const read = (keys: string[]): boolean[] => {
+    cache.beginRead();
+    return keys.map((key) => {
+      const hit = cache.get(key) !== undefined;
+      if (!hit) cache.put(key, empty);
+      return hit;
+    });
+  };
+  const older = ["o1", "o2", "o3", "o4"];
+  const latest = ["l1", "l2", "l3"];
+  assert.deepEqual(read(older), [false, false, false, false]);
+  assert.deepEqual(read(older), [true, true, true, true]);
+  assert.ok(cache.usage().retainedBytes > floor);
+  assert.deepEqual(read(latest), [false, false, false]);
+  assert.deepEqual(read(latest), [true, true, true]);
+  assert.deepEqual(read(["n1"]), [false]);
+  assert.deepEqual(read(latest), [true, true, true]);
+  assert.deepEqual(read(["o1"]), [false]);
+});
+
+test("a cap budget never holds more than its bytes, whatever the reads used", () => {
+  const cap = bytes("a", empty) * 2;
+  const cache = createSnapshotDataCache(cap);
+  for (let read = 0; read < 3; read++) {
+    cache.beginRead();
+    for (const key of ["a", "b", "c", "d"]) cache.put(key, empty);
+  }
+  assert.ok(cache.usage().retainedBytes <= cap);
+});

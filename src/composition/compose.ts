@@ -189,7 +189,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const reader = createFsSourceReader();
   const digest = createSha256Digest();
   const matcher = createPathMatcher();
-  const snapshotCache = { snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES, measurement === undefined ? undefined : measuredSnapshotCache(measurement)) };
+  const snapshotCache = { snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES, measurement === undefined ? undefined : measuredSnapshotCache(measurement), { floor: options.snapshotCacheBytes === undefined }) };
   const entrypointEngines = Object.fromEntries(ENTRYPOINT_ENGINES.map((name) => [name, installedVersion(name)]));
   const budget = options.exportBudget && { budget: options.exportBudget };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };

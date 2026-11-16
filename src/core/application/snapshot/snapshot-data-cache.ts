@@ -12,13 +12,23 @@ export interface SnapshotCacheEvent {
   retainedBytes: number;
 }
 
-export function createSnapshotDataCache(maxBytes: number, observe?: (event: SnapshotCacheEvent) => void): SnapshotDataCache {
-  const entries = new Map<string, { payload: Uint8Array; size: number; fact: boolean }>();
+/** The reads before the current one whose entries a floor budget never evicts: the base and the head of a change query. */
+const HELD_READS = 2;
+
+/**
+ * `maxBytes` is a hard cap on the retained bytes. With `floor` it is instead the budget below which nothing is held
+ * back: an admission still evicts least recently used entries, but never one the current read or the `HELD_READS` before
+ * it used, so a working set larger than the budget is retained whole and the next read finds it (ADR-0112).
+ */
+export function createSnapshotDataCache(maxBytes: number, observe?: (event: SnapshotCacheEvent) => void, { floor = false }: { floor?: boolean } = {}): SnapshotDataCache {
+  const entries = new Map<string, { payload: Uint8Array; size: number; fact: boolean; read: number }>();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const budget = Number.isSafeInteger(maxBytes) && maxBytes > 0 ? maxBytes : 0;
   let used = 0;
   let factBytes = 0;
+  let read = 0;
+  const held = (entry: { read: number }): boolean => floor && entry.read > 0 && entry.read >= read - HELD_READS;
   const release = (key: string): number => {
     const entry = entries.get(key)!;
     entries.delete(key);
@@ -30,6 +40,7 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
     const entry = entries.get(key);
     if (entry === undefined) return undefined;
     entries.delete(key);
+    entry.read = read;
     entries.set(key, entry);
     return entry.payload;
   };
@@ -37,16 +48,21 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
   const admit = (key: string, payload: Uint8Array, size: number, fact: boolean): number => {
     let evicted = 0;
     while (used + size > budget) {
-      const evictedBytes = release(entries.keys().next().value!);
+      const oldest = entries.entries().next().value;
+      if (oldest === undefined || held(oldest[1])) break;
+      const evictedBytes = release(oldest[0]);
       evicted++;
       observe?.({ outcome: "evicted", entryBytes: evictedBytes, retainedBytes: used });
     }
-    entries.set(key, { payload, size, fact });
+    entries.set(key, { payload, size, fact, read });
     used += size;
     if (fact) factBytes += size;
     return evicted;
   };
   return {
+    beginRead() {
+      read++;
+    },
     get(key) {
       const payload = lookup(key);
       if (payload === undefined) {
@@ -60,13 +76,13 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
       if (entries.has(key)) release(key);
       if (budget === 0) return;
       const lowerBound = encoder.encode(key).byteLength + data.sources.reduce((sum, source) => sum + Buffer.byteLength(source.content), 0);
-      if (lowerBound > budget) {
+      if (!floor && lowerBound > budget) {
         observe?.({ outcome: "oversize-skipped", entryBytes: lowerBound, retainedBytes: used });
         return;
       }
       const payload = encoder.encode(JSON.stringify(data));
       const size = encoder.encode(key).byteLength + payload.byteLength;
-      if (size > budget) {
+      if (!floor && size > budget) {
         observe?.({ outcome: "oversize-skipped", entryBytes: size, retainedBytes: used });
         return;
       }
@@ -81,7 +97,7 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
       if (entries.has(key)) release(key);
       const payload = encoder.encode(json);
       const size = encoder.encode(key).byteLength + payload.byteLength;
-      if (size > budget) return { admitted: false, entryBytes: size, evicted: 0 };
+      if (!floor && size > budget) return { admitted: false, entryBytes: size, evicted: 0 };
       return { admitted: true, entryBytes: size, evicted: admit(key, payload, size, true) };
     },
     usage: () => ({ factBytes, retainedBytes: used }),
