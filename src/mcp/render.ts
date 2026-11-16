@@ -2019,8 +2019,14 @@ const findingKind = (finding: ConsequenceFinding<UseConsequence | ProducerConseq
 export const ROOT_PATH_TEXT = "(whole body)";
 const accessPathText = (path: string): string => (path === "" ? ROOT_PATH_TEXT : path);
 
+/** The places of a finding, the first ones listed and the rest counted with the mode that lists every one. */
+function findingPlaces(evidence: readonly Parameters<typeof repositoryEvidenceText>[0][]): string {
+  const left = evidence.length - LISTED_ITEMS;
+  return `${evidence.slice(0, LISTED_ITEMS).map(repositoryEvidenceText).join(", ")}${left > 0 ? `, and ${left} more places (mode: "full" lists every one)` : ""}`;
+}
+
 function findingLine(finding: ConsequenceFinding<UseConsequence | ProducerConsequence>): string {
-  const places = finding.evidence.map(repositoryEvidenceText).join(", ");
+  const places = findingPlaces(finding.evidence);
   if (finding.status === "unknown") return `    - unknown (${finding.reason})${places === "" ? "" : ` at ${places}`}`;
   const { value } = finding;
   const call = `${value.link.call.file}:${value.link.call.line} ${value.link.call.symbol} -> ${value.link.handler.repo}:${placeText(value.link.handler.path, value.link.handler.line)} ${value.link.handler.symbol}`;
@@ -2033,12 +2039,22 @@ function findingLine(finding: ConsequenceFinding<UseConsequence | ProducerConseq
   return `    - producer ${verdict.kind}${verdict.kind === "review" ? ` (${verdict.reason})` : ""} at ${places || value.repo}; writes ${accessPathText(value.path)}; via ${call}${witness}`;
 }
 
-function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMode): string[] {
+/** The line of a finding, or a pointer to the earlier finding it repeats when the pointer is the shorter text. */
+function findingListed(finding: ConsequenceFinding<UseConsequence | ProducerConsequence>, label: string, seen: Map<string, string>): string {
+  const line = findingLine(finding);
+  const key = canonicalJson(finding);
+  const first = seen.get(key);
+  if (first === undefined) { seen.set(key, label); return line; }
+  const pointer = `    - same as ${first}`;
+  return size([pointer]) < size([line]) ? pointer : line;
+}
+
+function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMode, seen: Map<string, string>): string[] {
   const head = `  ${index + 1}. ${hypothesisText(answer.hypothesis)}`;
   if (answer.status === "unknown") return [`${head}: unknown (${answer.reason}): ${answer.detail}`];
   const status = answer.status === "partial" ? `partial (cuts: ${cutCounts(answer.cuts)})` : completeText(undecidedOf(answer.findings));
   const open = `${head}: ${status}${answer.silent === undefined ? "" : `; ${answer.silent} silent uses`}`;
-  const listing = [open, ...(answer.findings.length === 0 ? ["    (no findings)"] : answer.findings.map(findingLine))];
+  const listing = [open, ...(answer.findings.length === 0 ? ["    (no findings)"] : answer.findings.map((finding, at) => findingListed(finding, `answer ${index + 1}, finding ${at + 1}`, seen)))];
   const counts = [`${open}; ${answer.findings.length === 0 ? "no findings" : `${answer.findings.length} findings: ${countedBy(answer.findings.map(findingKind))}`}${answer.findings.length === 0 ? "" : `; ${categoryRecovery({ details: "lists each with its place", full: "retains the chains and witnesses" })}`}`];
   return elided(counts, listing, detail);
 }
@@ -2084,7 +2100,8 @@ export function renderContractConsequences(fact: Fact<ConsequencesValue>, detail
   const { value } = fact;
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   if (value.change !== undefined) lines.push(...derivationLines(value.change, detail));
-  lines.push(`answers (${value.answers.length}):`, ...(value.answers.length === 0 ? [NONE] : value.answers.flatMap((answer, index) => answerLines(answer, index, detail))));
+  const seen = new Map<string, string>();
+  lines.push(`answers (${value.answers.length}):`, ...(value.answers.length === 0 ? [NONE] : value.answers.flatMap((answer, index) => answerLines(answer, index, detail, seen))));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }

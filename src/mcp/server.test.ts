@@ -2612,6 +2612,23 @@ test("a workspace link is named by its answer-local key in the text, the full JS
   } finally { await session.close(); }
 });
 
+test("contract consequences full states a finding several answers share once, validated by the published output schema, and says how to read the reference", async () => {
+  const place = (line: number) => ({ repo: "shop-web", path: "src/auth.ts", line });
+  const shared = { status: "unknown" as const, reason: "unresolved" as const, evidence: [place(1), place(2)] };
+  const answerOf = (path: string) => ({ hypothesis: { method: "GET" as const, path, target: "response" as const, property: "name", change: "nullable" as const }, oldContract: "present-and-non-null" as const, status: "complete" as const, findings: [shared] });
+  const fact = { ...base(), status: "complete" as const, value: { repositorySnapshots: [], answers: [answerOf("/a"), answerOf("/b")] } } as unknown as Fact<ConsequencesValue>;
+  const { session } = await setup({ consequences: async () => ({ ok: true as const, value: fact }) });
+  try {
+    const result = await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS], mode: "full" });
+    const full = resultFields(result);
+    assert.deepEqual(full.value.sharedFindings, [shared]);
+    assert.deepEqual(full.value.answers.map((answer: { findings: unknown[] }) => answer.findings), [[{ sharedFinding: 0 }], [{ sharedFinding: 0 }]]);
+    assert.equal(CONTRACT_CONSEQUENCES_OUTPUT.safeParse(full).success, true);
+    assert.deepEqual(expandFull("contract_consequences", { ...full, text: undefined }).value, fact.value);
+    assert.match(textOf(result), /sharedFinding/);
+  } finally { await session.close(); }
+});
+
 test("the workspace parameter names its repositories by a nested path, accepts gateways, and refuses what it does not define", async () => {
   const { session, calls } = await setup();
   const tools = await session.listTools();

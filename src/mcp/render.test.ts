@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { LISTED_ITEMS } from "./render-budget.ts";
 import { BASE_UNDECIDED, renderContractConsequences, renderEntrypointMap, renderImpact, renderTrace, renderWorkspaceImpact, ROOT_PATH_TEXT } from "./render.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
@@ -361,6 +362,27 @@ function consequences(findings: object[]): Fact<ConsequencesValue> {
   };
   return { ...base, status: "partial", cuts: [{ kind: "section", at: ["change.derivation"], reason: "section-partial", reach: { kind: "anything" } }], value } as unknown as Fact<ConsequencesValue>;
 }
+
+test("a finding two answers share is listed once and the later answer says which it repeats, and a place list beyond what a text lists is counted with the mode that lists it", () => {
+  const places = Array.from({ length: LISTED_ITEMS + 30 }, (_, index) => ({ repo: "web", path: `src/auth/use-${index}.ts`, line: index + 1 }));
+  const shared = { status: "unknown", reason: "unresolved", evidence: places };
+  const own = { status: "unknown", reason: "unresolved", evidence: [{ repo: "web", path: "src/own.ts", line: 4 }] };
+  const value = {
+    repositorySnapshots: [],
+    answers: [
+      { hypothesis: HYPOTHESIS, oldContract: "present-and-non-null", status: "complete", findings: [own, shared] },
+      { hypothesis: { ...HYPOTHESIS, path: "/vets" }, oldContract: "present-and-non-null", status: "complete", findings: [shared, { ...own, evidence: [{ repo: "web", path: "src/own.ts", line: 5 }] }] },
+    ],
+  };
+  const fact = { ...base, status: "complete", value } as unknown as Fact<ConsequencesValue>;
+  const details = renderContractConsequences(fact, "details");
+  assert.equal(details.split("src/auth/use-0.ts:1").length - 1, 1, "the shared places are printed once");
+  assert.match(details, /^ {4}- same as answer 1, finding 2$/m);
+  assert.match(details, /src\/own\.ts:5/);
+  assert.match(details, new RegExp(`src/auth/use-${LISTED_ITEMS - 1}\\.ts:${LISTED_ITEMS}`));
+  assert.equal(details.includes(`src/auth/use-${LISTED_ITEMS}.ts`), false, "a place beyond the listed ones is not printed");
+  assert.match(details, /and 30 more places \(mode: "full" lists every one\)/);
+});
 
 test("a contract consequences summary counts each answer's verdicts and keeps its unknown reasons, derivation cuts and frontier counts, while details lists every finding with its place", () => {
   const verdicts = [{ kind: "incompatible", witness: "null", at: 1, failing: {}, capability: "member" }, { kind: "admits", guards: [] }, { kind: "review", reason: "consumed" }];
