@@ -2088,7 +2088,9 @@ test("Java type references reach their declaring owner and unread types remain e
   assert.ok(answer.ok && answer.value.status !== "unknown");
   assert.equal(answer.value.status, "complete", JSON.stringify(answer.value));
   assert.ok(answer.value.value.symbols.some((symbol) => symbol.symbol === "Holder" && symbol.depth > 0 && symbol.via?.lines?.includes(2)), JSON.stringify(answer.value));
-  for (const name of ["Port", "Kind"]) assert.ok(answer.value.value.symbols.some((symbol) => symbol.symbol === name && symbol.depth > 0 && symbol.via?.basis === "reference"), JSON.stringify(answer.value));
+  assert.ok(answer.value.value.symbols.some((symbol) => symbol.symbol === "Kind" && symbol.depth > 0 && symbol.via?.basis === "reference"), JSON.stringify(answer.value));
+  assert.ok(answer.value.value.symbols.some((symbol) => symbol.file === "Port.java" && symbol.symbol === "copy" && symbol.depth > 0 && symbol.via?.basis === "reference"), JSON.stringify(answer.value));
+  assert.ok(answer.value.value.symbols.some((symbol) => symbol.symbol === "Port" && symbol.depth > 0 && symbol.via?.basis === "contains"), JSON.stringify(answer.value));
   const bounded = await query("bounded-type-reference", files, { include: ["Holder.java", "Target.java"] });
   assert.ok(bounded.ok && bounded.value.status === "partial");
   assert.ok(bounded.value.cuts.some((cut) => cut.reason === "name-only" || cut.reason === "hidden-caller"));
