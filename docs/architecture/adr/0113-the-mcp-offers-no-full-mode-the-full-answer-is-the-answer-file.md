@@ -40,7 +40,8 @@ why none was written. `ye_ast_compose` writes its full composition to an answer 
    where `<sections>` are the non-empty lists of ADR-0110 decision 7. The folder stays in `_meta` under
    `ye-ast/answer-files`.
 4. **A reply without a folder says why.** When no folder was written (the server has no cache directory, the answer was
-   cut by a deadline or holds `index-unavailable` (ADR-0110 decision 5), or the folder could not be written) the reply
+   cut by a deadline or holds `index-unavailable` (ADR-0110 decision 5), the full answer does not match its output
+   schema, or the folder could not be written) the reply
    is `summary` or `details` and ends with `no answer file written: <reason>` in place of the line above. No other
    delivery of the full result exists.
 5. **Hints point to the file.** A model-visible hint that named `mode: "full"` as the way to retrieve what a presentation
@@ -68,7 +69,7 @@ why none was written. `ye_ast_compose` writes its full composition to an answer 
   the platform gives none.
 - `answerBytes` bounds the text of `summary` and `details` as before; it no longer has a `full` reply to shorten.
 - The exported output schemas still describe `answer.json`; the server validates the full fields against them before
-  writing the file.
+  writing the file, and an answer that does not match writes none and says so instead of failing a `summary`.
 
 ## Not decided here
 
