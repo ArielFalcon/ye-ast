@@ -30,6 +30,13 @@ import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import { inRepository } from "../core/domain/topology/repository-identity.ts";
 import type { EvidenceComposition } from "../core/ports/evidence-composition.port.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
+import type { AnswerFiles } from "../core/ports/answer-files.port.ts";
+import type { QueryExecutionDeps } from "./query-runner.ts";
+import { createAnswerFiles } from "../core/adapters/fs/answer-files.adapter.ts";
+import { ANSWER_FILES_META } from "./answer-files.ts";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
 import { partSchema } from "./composition-schema-parts.ts";
 import { expandFull } from "./full-projection.testing.ts";
@@ -325,7 +332,7 @@ interface Answers {
   consequences: (request: HypothesesRequest | ChangeRequest) => Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>>;
 }
 
-async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh, repositories?: readonly { path: string; repoId: string }[], repository = REPOSITORY, redaction: Redaction = fakeRedaction, answerBytes?: number): Promise<{ session: Session; calls: Calls }> {
+async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh, repositories?: readonly { path: string; repoId: string }[], repository = REPOSITORY, redaction: Redaction = fakeRedaction, answerBytes?: number, answerFiles?: AnswerFiles): Promise<{ session: Session; calls: Calls }> {
   const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], outline: [], trace: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [], hypotheses: [], changes: [] };
   /** A fact with the sidecar a read that refreshed something carries, and without one when it refreshed nothing. */
   const read = <T>(fact: Fact<T>): FactRead<T> => (refresh === undefined ? { fact } : { fact, refresh });
@@ -389,7 +396,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
     ofHypotheses: (request) => (calls.hypotheses.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
     ofChange: (request) => (calls.changes.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, evidenceComposition: {} as EvidenceComposition, redaction, repository, ...(answerBytes === undefined ? {} : { answerBytes }), ...(repositories === undefined ? {} : { repositories }) });
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, evidenceComposition: {} as EvidenceComposition, redaction, repository, ...(answerBytes === undefined ? {} : { answerBytes }), ...(answerFiles === undefined ? {} : { answerFiles }), ...(repositories === undefined ? {} : { repositories }) });
   return { session: await openSession(server), calls };
 }
 
@@ -4714,4 +4721,148 @@ test("scope faults and partial scope notices reach MCP", async () => {
     assert.equal(failed.isError, true);
     assert.deepEqual(failed._meta?.["ye-ast/fault"], fault);
   } finally { await session.close(); }
+});
+
+const DIGEST = { of: (value: string) => createHash("sha256").update(value).digest("hex") };
+const CALLERS_ARGS = { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }] };
+
+async function withAnswerFiles(): Promise<{ files: AnswerFiles; directory: string; lines: string[]; done: () => Promise<void> }> {
+  const directory = await mkdtemp(join(tmpdir(), "ye-ast-mcp-answers-"));
+  const lines: string[] = [];
+  return { files: createAnswerFiles({ directory, digest: DIGEST, engine: "test-engine", report: (line) => lines.push(line) }), directory, lines, done: () => rm(directory, { recursive: true, force: true }) };
+}
+
+const lastLine = (result: ToolResult): string => textOf(result).split("\n").at(-1)!;
+const folderOf = (result: ToolResult): string => result._meta?.[ANSWER_FILES_META] as string;
+
+test("a reply names the folder its answer was written to, and the folder holds the full projection, a guide, and the two texts", async () => {
+  const { files, directory, done } = await withAnswerFiles();
+  const { session } = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
+  try {
+    const [summary, details, full] = await Promise.all((["summary", "details", "full"] as const).map((mode) => session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode })));
+    const folder = folderOf(summary!);
+    assert.equal(folderOf(details!), folder);
+    assert.equal(folderOf(full!), folder);
+    assert.ok(folder.startsWith(join(directory, "answers", "callers")));
+    assert.match(lastLine(summary!), new RegExp(`^answer files: ${folder.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")} — answer.json: .*value\\.symbols 1.*; summary\\.txt, details\\.txt$`));
+    assert.match(lastLine(details!), /^answer files: /);
+    assert.equal(textOf(full!).includes("answer files:"), false);
+    const { text: _receiptText, ...receiptFields } = resultFields(summary);
+    assert.equal(JSON.stringify(receiptFields).includes(folder), false);
+    const stored = JSON.parse(await readFile(join(folder, "answer.json"), "utf8")) as Record<string, unknown>;
+    const { guide, ...projection } = stored;
+    assert.equal(Object.keys(stored)[0], "guide");
+    assert.equal(typeof guide, "string");
+    const { text: _text, ...fullFields } = resultFields(full);
+    assert.deepEqual(projection, fullFields);
+    const without = (result: ToolResult): string => textOf(result).split("\n").slice(0, -1).join("\n");
+    assert.equal(await readFile(join(folder, "summary.txt"), "utf8"), without(summary!));
+    assert.equal(await readFile(join(folder, "details.txt"), "utf8"), without(details!));
+    assert.deepEqual((await readdir(join(directory, "answers", "callers"))), [folder.split("/").at(-1)]);
+  } finally { await session.close(); await done(); }
+});
+
+test("a reply without answer files is the reply with them minus that line, and its fields are the same", async () => {
+  const { files, done } = await withAnswerFiles();
+  const plain = await setup();
+  const kept = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
+  try {
+    for (const mode of ["summary", "details", "full"] as const) {
+      const before = await plain.session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode });
+      const after = await kept.session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode });
+      assert.equal(before._meta?.[ANSWER_FILES_META], undefined);
+      const expected = mode === "full" ? textOf(before) : `${textOf(before)}\n${lastLine(after)}`;
+      assert.equal(textOf(after), expected);
+      assert.deepEqual(resultFields(after), { ...resultFields(before), text: resultFields(after).text });
+    }
+  } finally { await plain.session.close(); await kept.session.close(); await done(); }
+});
+
+test("the key follows the question: another target is another folder, and the mode is not part of it", async () => {
+  const { files, done } = await withAnswerFiles();
+  const { session } = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
+  try {
+    const asked = folderOf(await session.callTool("ye_ast_callers", CALLERS_ARGS));
+    assert.equal(folderOf(await session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode: "details" })), asked);
+    assert.notEqual(folderOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderService.java", symbol: "OrderService.other" }] })), asked);
+  } finally { await session.close(); await done(); }
+});
+
+test("the same key with other bytes writes one stderr line and leaves the reply and the folder as they were", async () => {
+  const { files, lines, done } = await withAnswerFiles();
+  let calls = 0;
+  const { session } = await setup({ callers: async (r) => ({ ok: true, value: { ...impactFact(), snapshot: { ...base().snapshot, repo: r.repoId }, value: { ...IMPACT, symbols: IMPACT.symbols.map((symbol) => ({ ...symbol, line: symbol.line + calls++ })) } } }) }, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
+  try {
+    const first = await session.callTool("ye_ast_callers", CALLERS_ARGS);
+    assert.deepEqual(lines, []);
+    const second = await session.callTool("ye_ast_callers", CALLERS_ARGS);
+    assert.equal(second.isError, undefined);
+    assert.equal(folderOf(second), folderOf(first));
+    assert.equal(lastLine(second), lastLine(first));
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(await readFile(join(folderOf(first), "answer.json"), "utf8")).value.symbols[0].line, 17);
+  } finally { await session.close(); await done(); }
+});
+
+test("an answer cut by a deadline, or one that could not read its index, writes no folder and names none", async () => {
+  const { files, directory, done } = await withAnswerFiles();
+  const cut: Cut = { kind: "deadline", at: ["src/OrderService.java"], reason: "deadline", reach: { kind: "anything" } };
+  const partial: Fact<ImpactValue> = { ...base(), status: "partial", value: IMPACT, cuts: [cut] };
+  const noIndex: Fact<ImpactValue> = { ...base(), status: "unknown", reason: "index-unavailable" };
+  for (const fact of [partial, noIndex]) {
+    const { session } = await setup({ callers: async () => ({ ok: true, value: fact }) }, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
+    try {
+      const result = await session.callTool("ye_ast_callers", CALLERS_ARGS);
+      assert.equal(result.isError, undefined);
+      assert.equal(result._meta?.[ANSWER_FILES_META], undefined);
+      assert.equal(textOf(result).includes("answer files:"), false);
+    } finally { await session.close(); }
+  }
+  assert.deepEqual(await readdir(directory), []);
+  await done();
+});
+
+test("the files hold what the reply holds: a secret the redaction replaces is in none of them", async () => {
+  const { files, directory, done } = await withAnswerFiles();
+  const leaking = { ...impactFact(), value: { ...IMPACT, seeds: [{ ...IMPACT.seeds[0]!, symbol: `OrderService.${SECRET}` }] } } as Fact<ImpactValue>;
+  const { session } = await setup({ callers: async () => ({ ok: true, value: leaking }) }, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
+  try {
+    const result = await session.callTool("ye_ast_callers", CALLERS_ARGS);
+    const folder = folderOf(result);
+    for (const name of ["answer.json", "summary.txt", "details.txt"]) assert.equal((await readFile(join(folder, name), "utf8")).includes(SECRET), false);
+    assert.equal((await readFile(join(folder, "answer.json"), "utf8")).includes(REDACTED), true);
+    assert.equal(JSON.stringify(result).includes(SECRET), false);
+  } finally { await session.close(); await done(); }
+  assert.ok(directory);
+});
+
+test("a folder that could not be written leaves the reply as it is without answer files", async () => {
+  const plain = await setup();
+  const { session } = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, undefined, { keep: async () => null });
+  try {
+    const result = await session.callTool("ye_ast_callers", CALLERS_ARGS);
+    assert.deepEqual(result, await plain.session.callTool("ye_ast_callers", CALLERS_ARGS));
+  } finally { await session.close(); await plain.session.close(); }
+});
+
+test("a reply bounded by answerBytes carries the line in its text, and a select page writes no folder", async () => {
+  const { files, directory, done } = await withAnswerFiles();
+  const { session } = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, 100000, files);
+  try {
+    const bounded = await session.callTool("ye_ast_callers", CALLERS_ARGS);
+    assert.match(bounded.content[0]!.text, /\nanswer files: .*\nResult JSON fields are in structuredContent\.$/);
+    assert.equal(typeof folderOf(bounded), "string");
+    const before = await readdir(join(directory, "answers", "callers"));
+    const page = await session.callTool("ye_ast_entrypoints", { mode: "full", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
+    assert.equal(page.isError, undefined);
+    assert.equal(page._meta?.[ANSWER_FILES_META], undefined);
+    assert.deepEqual(await readdir(directory), ["answers"]);
+    assert.deepEqual(await readdir(join(directory, "answers")), ["callers"]);
+    assert.deepEqual(await readdir(join(directory, "answers", "callers")), before);
+  } finally { await session.close(); await done(); }
+});
+
+test("the writer is no part of what a read query family receives", () => {
+  const readOnly: "answerFiles" extends keyof QueryExecutionDeps ? never : true = true;
+  assert.equal(readOnly, true);
 });

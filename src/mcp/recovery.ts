@@ -16,11 +16,21 @@ export type Recovery =
   | { version: 1; status: "available"; resultIdentity: string; query: { name: "ye_ast_callers" | "ye_ast_impact"; arguments: Record<string, unknown> } }
   | { version: 1; status: "unavailable"; reason: "deadline" | "unresolved-context" | "redacted-context" };
 
-function hasDeadline(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(hasDeadline);
+function holds(value: unknown, test: (record: Record<string, unknown>) => boolean): boolean {
+  if (Array.isArray(value)) return value.some((member) => holds(member, test));
   if (value === null || typeof value !== "object") return false;
-  const object = value as Record<string, unknown>;
-  return (object.status === "unknown" && object.reason === "deadline") || object.kind === "deadline" || Object.values(object).some(hasDeadline);
+  const record = value as Record<string, unknown>;
+  return test(record) || Object.values(record).some((member) => holds(member, test));
+}
+
+/** A deadline recorded anywhere in the value: an unknown with that reason, or a cut of that kind. */
+export function hasDeadline(value: unknown): boolean {
+  return holds(value, (record) => (record.status === "unknown" && record.reason === "deadline") || record.kind === "deadline");
+}
+
+/** An unknown that could not read its index recorded anywhere in the value. */
+export function hasUnavailableIndex(value: unknown): boolean {
+  return holds(value, (record) => record.status === "unknown" && record.reason === "index-unavailable");
 }
 
 export function entrypointRecovery(fact: Fact<unknown>, original: Fact<unknown>, selected: string, requestedScope: ScopeRequest | undefined, live: boolean, digest: Digest, redaction: Redaction, validate: (args: unknown) => boolean): Recovery {

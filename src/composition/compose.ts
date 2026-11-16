@@ -97,7 +97,7 @@ const SNAPSHOT_CACHE_BYTES = 32 * 1024 * 1024;
 const LIVE_RETENTION: LiveRetentionPolicy = { keepScopes: 3, unusedForMs: 14 * DAY_MS, maxBytes: 512 * 1024 * 1024 };
 
 /** What a host keeps of the full-index cache unless it overrides it (ADR-0027): the live tree's bound of unused time and of logical bytes. */
-const INDEX_RETENTION: IndexRetentionPolicy = { unusedForMs: LIVE_RETENTION.unusedForMs, maxBytes: LIVE_RETENTION.maxBytes };
+export const INDEX_RETENTION: IndexRetentionPolicy = { unusedForMs: LIVE_RETENTION.unusedForMs, maxBytes: LIVE_RETENTION.maxBytes };
 
 export interface CompositionOptions {
   /** Directory that holds the temporary exports; the system temporary directory by default. */

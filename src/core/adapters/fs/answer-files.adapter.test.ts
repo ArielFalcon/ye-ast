@@ -149,6 +149,15 @@ test("the byte cap removes the least recently used folders and never the one jus
   assert.deepEqual((await readdir(dirname(oldest))).sort(), [basename(middle), basename(current)].sort());
 });
 
+test("the folder just written stays even when it alone exceeds the byte cap", async () => {
+  const directory = await fresh();
+  const now = Date.now();
+  const writer = adapter(directory, { retention: { unusedForMs: 365 * DAY_MS, maxBytes: 10 }, now: () => now }).files;
+  const previous = (await writer.keep(answer({ inputs: { n: 1 } }, "x".repeat(100))))!;
+  const current = (await writer.keep(answer({ inputs: { n: 2 } }, "x".repeat(100))))!;
+  assert.deepEqual(await readdir(dirname(previous)), [basename(current)]);
+});
+
 test("a folder is never judged while it is being built: only a build directory unwritten beyond the debris bound is removed", async () => {
   const directory = await fresh();
   const now = Date.now();

@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
 import { EXIT_CODE } from "../cli/main.ts";
+import { SCHEMA } from "../core/domain/shared/fact.ts";
+import type { AnswerFolder } from "../core/ports/answer-files.port.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
 import type { MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ComposedQueries } from "./compose.ts";
@@ -308,5 +310,36 @@ test("--java-sources declares a generated source directory of the launch reposit
     refused.stdin.end();
     assert.equal(await refused.finished(), EXIT_CODE.usage, args.join(" "));
     assert.equal(refused.composed.count, 0);
+  }
+});
+
+test("the server writes each answer through the answer files its host hands over, and writes none without them", async () => {
+  const fact = (value: unknown) => ({ schema: SCHEMA, snapshot: { repo: "projects", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "0.0.0" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [], status: "complete", value });
+  const answered = { ok: true as const, value: fact({ entrypoints: fact([]) }) };
+  const composed = (): ComposedQueries => ({
+    version: "0.0.0",
+    entrypoints: { map: async () => answered },
+    impact: {},
+    redaction: { redact: (text: string) => text, redactValue: (value: unknown) => value, detect: () => ({ redacted: false, patterns: [], count: 0 }), containsSecret: () => false, redactError: () => REDACTED },
+    canonicalRepositoryRoot: async (path: string) => ({ ok: true, value: path }),
+    repositoryName: async () => ({ ok: false, fault: { kind: "git-failed", detail: "stub" } }),
+    warmLive: async () => null,
+  }) as unknown as ComposedQueries;
+  const kept: AnswerFolder[] = [];
+  const handed = harness({ queries: composed, answerFiles: { keep: async (answer) => (kept.push(answer), "/cache/answers/entrypoints/key") } });
+  const alone = harness({ queries: composed });
+  for (const h of [handed, alone]) {
+    h.start([]);
+    await open(h);
+  }
+  const written = await handed.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
+  const unwritten = await alone.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0]!.tool, "entrypoints");
+  assert.match(JSON.stringify(written.result), /answer files: \/cache\/answers\/entrypoints\/key/);
+  assert.doesNotMatch(JSON.stringify(unwritten.result), /answer files:/);
+  for (const h of [handed, alone]) {
+    h.stdin.end();
+    await h.finished();
   }
 });

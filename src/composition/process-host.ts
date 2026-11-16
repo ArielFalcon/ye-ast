@@ -1,4 +1,6 @@
 import type { Readable, Writable } from "node:stream";
+import type { AnswerFiles } from "../core/ports/answer-files.port.ts";
+import { composeAnswerFiles } from "./answer-files.ts";
 import { composeQueries, type ComposedQueries, type CompositionOptions } from "./compose.ts";
 
 export interface ProcessHost {
@@ -16,6 +18,8 @@ export interface ProcessHost {
    * each repository; without it every repository is read `untrusted`, since a host declares the mode itself.
    */
   queries(options?: { trustRecord?: boolean; buildOutputs?: CompositionOptions["buildOutputs"] }): ComposedQueries;
+  /** Writes each answer as a folder of files under the per-user cache directory; absent when the host has none (ADR-0110). */
+  answerFiles?: AnswerFiles;
 }
 
 /** The host of the real process; `indexCache` is the directory that keeps full indexes between calls, `trustDirectory` the one that holds the trust record. */
@@ -29,6 +33,7 @@ export function processHost(options: { signal: AbortSignal; indexCache?: string;
     stdin: process.stdin,
     stdout: process.stdout,
     err,
+    ...(options.indexCache !== undefined && { answerFiles: composeAnswerFiles({ directory: options.indexCache, report: err }) }),
     queries: ({ trustRecord = false, buildOutputs } = {}) =>
       composeQueries({
         signal: options.signal,

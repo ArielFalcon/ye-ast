@@ -8,12 +8,14 @@ import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSour
 import { renderEvidenceSelection, type EvidencePage } from "./render-evidence.ts";
 import { recoveryReference } from "./presentation-guidance.ts";
 import { projectFull } from "./full-projection.ts";
+import { ANSWER_FILES_META, answerFilesLine, answerInputs, isWritable, keepAnswer } from "./answer-files.ts";
 import { keyTraceLinks, keyWorkspaceImpactLinks, keyWorkspaceLinks, withKeyedValue } from "./link-keys.ts";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
 import type { ResponseMode, ResponseRenderer } from "./presentation.ts";
 import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
+import type { AnswerFiles } from "../core/ports/answer-files.port.ts";
 import { TRUST_MODES, UNKNOWN_REASONS } from "../core/domain/shared/fact.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
@@ -49,9 +51,11 @@ function delivered(text: string, fields: Record<string, unknown>, meta: Record<s
   };
 }
 
+/** The read query families plus presentation. The one writer is `answerFiles`, which writes ye-ast's own answer files only and reaches no query family (ADR-0110). */
 export interface McpDeps extends QueryExecutionDeps {
   version: string;
   answerBytes?: number;
+  answerFiles?: AnswerFiles;
   /** Default repository binding, plus additional host-declared targets. */
   repository: RepositoryBinding;
   repositories?: readonly RepositoryBinding[];
@@ -418,14 +422,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
       }
       const executed = await executeQuery(query, { deps, catalog, signal });
       if (!executed.ok) return boundedFailure(failure(executed.fault, context));
-      return present(executed.value, mode, controls, cursor, selectionFailure, limit);
+      return await present(executed.value, mode, controls, cursor, selectionFailure, limit);
     } catch (error) {
       return boundedFailure(failure({ kind: "internal-fault", detail: redaction.redactError(error) }, context));
     }
   }
 
   /** The renderer and selection source of each public payload; the dispatch itself lives in the runner. */
-  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal, answerBytes: number | undefined): CallToolResult {
+  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal, answerBytes: number | undefined): Promise<CallToolResult> {
     switch (source.family) {
       case "entrypoints":
         return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "entrypoints", fact }));
@@ -449,7 +453,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     }
   }
 
-  function respond<V>(
+  async function respond<V>(
     source: ExecutedSource,
     read: PublicRead<V>,
     local: boolean,
@@ -460,7 +464,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     selectionFailure: Refusal,
     answerBytes: number | undefined,
     sourceFor?: (fact: Fact<V>) => EvidenceSource,
-  ): CallToolResult {
+  ): Promise<CallToolResult> {
     const { fact, repositoryRoots, refresh, workspaceLive } = read;
     const { recovery, live: stale } = source;
     const tool: QueryFamily = source.family;
@@ -472,12 +476,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
     }
     const recoveryText = recovery === undefined ? [] : [recoveryReference(recovery)];
     const meta = { ...(stale === undefined ? {} : { [LIVE_META]: stale }), ...(workspaceLive === undefined ? {} : { [WORKSPACE_LIVE_META]: workspaceLive }) };
-    const emit = (text: string, fields: Record<string, unknown>, summary: () => string): CallToolResult => {
+    const emit = (text: string, fields: Record<string, unknown>, summary: () => string, siblings: Record<string, unknown> = meta): CallToolResult => {
       OUTPUTS[tool].parse({ text, ...fields });
-      if (answerBytes === undefined) return delivered(text, fields, meta);
+      if (answerBytes === undefined) return delivered(text, fields, siblings);
       const bounded = boundedText((_fact, candidate) => `${candidate === mode ? text : summary()}\nResult JSON fields are in structuredContent.`, fact, mode, renderContext, { bytes: answerBytes });
-      if (bounded.kind === "refused") return boundRefusal(bounded, meta);
-      return { content: [{ type: "text", text: bounded.text }], structuredContent: fields, ...(Object.keys(meta).length ? { _meta: meta } : {}) };
+      if (bounded.kind === "refused") return boundRefusal(bounded, siblings);
+      return { content: [{ type: "text", text: bounded.text }], structuredContent: fields, ...(Object.keys(siblings).length ? { _meta: siblings } : {}) };
     };
     if (controls?.select !== undefined && controls.page !== undefined && recovery !== undefined && sourceFor !== undefined) {
       if (recovery.status === "unavailable" && recovery.reason === "deadline") return selectionFailure({ code: "replay-unavailable", reason: recovery.reason });
@@ -530,11 +534,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
       ];
       return emit([...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"), fields, () => [...sidecar, renderEvidenceSelection({ mode: "summary", select: controls.select!, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"));
     }
-    if (mode === "full") {
+    const buildFull = () => {
       const location = "full result: the result JSON";
       const projection = projectFull(tool, {
         ...fact,
-        mode,
+        mode: "full",
         ...(recovery === undefined ? {} : { recovery }),
         ...(repositoryRoots === undefined ? {} : { repositoryRoots }),
         ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
@@ -549,24 +553,34 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
         ...(workspaceLive === undefined ? [] : ["Workspace live context: inspect workspaceLive for captured snapshots and stale or unavailable checks. Captures are not an atomic workspace instant."]),
       ];
-      return emit(
-        [
-          `status: ${fact.status}\n${location}`,
-          render(fact, mode, renderContext),
-          ...guidance,
-        ].filter((part) => part !== "").join("\n"),
-        projection.fields,
-        () => [render(fact, "summary", renderContext), location, ...guidance].filter((part) => part !== "").join("\n"),
-      );
-    }
+      return {
+        fields: projection.fields,
+        text: [`status: ${fact.status}\n${location}`, render(fact, "full", renderContext), ...guidance].filter((part) => part !== "").join("\n"),
+        summary: () => [render(fact, "summary", renderContext), location, ...guidance].filter((part) => part !== "").join("\n"),
+      };
+    };
+    let built: ReturnType<typeof buildFull> | undefined;
+    const full = () => (built ??= buildFull());
+    const rootLines = (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`);
     const sidecar = [
       ...(stale === undefined ? [] : [renderStale(stale)]),
       ...(workspaceLive === undefined ? [] : workspaceLive.map((item) => `workspace live: ${JSON.stringify(item)}`)),
       ...(refresh === undefined ? [] : renderRefresh(refresh)),
-      ...(local ? [] : (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)),
+      ...(local ? [] : rootLines),
     ];
+    const plainText = (detail: "summary" | "details"): string => [...sidecar, render(fact, detail, renderContext), ...recoveryText, ...(local ? rootLines : [])].join("\n");
+    const keepFiles = async (): Promise<{ folder: string; line: string } | null> => {
+      if (deps.answerFiles === undefined || !isWritable(fact)) return null;
+      const { text, fields } = full();
+      const folder = await keepAnswer(deps.answerFiles, tool, answerInputs(source.query, fact), { guide: text, fields, summary: plainText("summary"), details: plainText("details") });
+      return folder === null ? null : { folder, line: redaction.redact(answerFilesLine(folder, fields)) };
+    };
+    const kept = await keepFiles();
+    const siblings = kept === null ? meta : { ...meta, [ANSWER_FILES_META]: kept.folder };
+    if (mode === "full") return emit(full().text, full().fields, full().summary, siblings);
+    const closed = (text: string): string => (kept === null ? text : `${text}\n${kept.line}`);
     return emit(
-      [...sidecar, render(fact, mode, renderContext), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n"),
+      closed(plainText(mode)),
       {
         mode,
         status: fact.status,
@@ -574,7 +588,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(recovery === undefined ? {} : { recovery }),
         ...(fact.status === "unknown" ? { reason: fact.reason } : {}),
       },
-      () => [...sidecar, render(fact, "summary", renderContext), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n"),
+      () => closed(plainText("summary")),
+      siblings,
     );
   }
 

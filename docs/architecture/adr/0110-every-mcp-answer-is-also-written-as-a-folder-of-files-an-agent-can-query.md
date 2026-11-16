@@ -76,7 +76,7 @@ these files back: they are a delivery artifact, and the key is proven complete b
    never failing the answer. Last use is the modification time of `answer.json`, refreshed when the same key is written
    again. A temporary directory unwritten for the debris bound (`DEBRIS_STALE_MS`) is removed. The values are those of
    the index cache (14 days, 512 MiB) by the same analogy as ADR-0027, and the budget is separate, so answers never
-   evict indexes and indexes never evict answers. A host overrides it as it does `indexRetention`.
+   evict indexes and indexes never evict answers. A host that composes the answer files passes its own budget, as it does `indexRetention` for the index cache.
 10. **Architecture.** The core declares one driven port, `AnswerFiles`, in `core/ports/answer-files.port.ts`; an `fs`
     adapter implements it; composition builds it from the cache directory and hands it to the MCP beside the query
     families, never inside them. `QueryExecutionDeps` keeps its guarantee ("nothing here can write, by type"): the
