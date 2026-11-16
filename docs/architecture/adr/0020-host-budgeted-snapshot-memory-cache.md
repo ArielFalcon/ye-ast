@@ -13,6 +13,8 @@
   written files, not by the commit or the repository)
 - Amended by: [ADR-0035](0035-derived-facts-are-retained-by-content.md) (decision 2 also admits plain facts derived
   from one file or from named inputs, keyed by content)
+- Amended by: [ADR-0112](0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) (decision 3: under
+  the default budget an admission does not evict what the latest reads used)
 - Related: [ADR-0006](0006-qayaba-graph-state-per-run.md), [ADR-0010](0010-trust-modes.md),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0006](../rfc/0006-configuration.md)
 

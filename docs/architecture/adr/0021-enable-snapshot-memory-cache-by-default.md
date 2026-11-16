@@ -6,6 +6,8 @@
 - Supersedes: the disabled default in [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md) decision 1 only
 - Amended by: [ADR-0030](0030-live-captures-use-the-snapshot-data-cache.md) (decisions 1 and 3: a reconciled live
   capture uses this cache and its budget)
+- Amended by: [ADR-0112](0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) (decision 1: the
+  default budget is a floor that the entries of the latest reads may exceed)
 - Related: [RFC-0006](../rfc/0006-configuration.md)
 
 ## Context

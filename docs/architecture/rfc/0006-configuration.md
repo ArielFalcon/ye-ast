@@ -89,8 +89,8 @@ bookkeeping with the entry count, about 1 KB per listed entry; that is the case 
 
 [ADR-0020](../adr/0020-host-budgeted-snapshot-memory-cache.md) permits an optional in-memory cache for completed SHA
 source reads and entrypoint extraction; [ADR-0026](../adr/0026-snapshot-data-may-retain-reader-outputs.md) adds the
-serialized relations and whole-universe module-dependency outputs, each as its own entry. [ADR-0021](../adr/0021-enable-snapshot-memory-cache-by-default.md) enables it by default with 32 MiB. A host overrides
-the budget with `composeQueries({ snapshotCacheBytes })` (also accepted by `composeCli`); an explicit zero disables it. It is a composition setting, never a repository setting
+serialized relations and whole-universe module-dependency outputs, each as its own entry. [ADR-0021](../adr/0021-enable-snapshot-memory-cache-by-default.md) enables it by default with 32 MiB as a floor that [ADR-0112](../adr/0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) lets the entries of the latest reads exceed. A host overrides
+the budget with `composeQueries({ snapshotCacheBytes })` (also accepted by `composeCli`), which is then a hard cap; an explicit zero disables it. It is a composition setting, never a repository setting
 or an agent tool argument. Zero or an invalid byte budget disables retention.
 
 The budget counts UTF-8 bytes of retained keys and serialized data, including metadata. Admission evicts the
