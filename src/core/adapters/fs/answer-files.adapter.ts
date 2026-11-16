@@ -38,11 +38,14 @@ export function createAnswerFiles(deps: AnswerFilesDeps): AnswerFiles {
     if (refusal !== null) throw new Error(`${directory} ${refusal}`);
   }
 
-  async function publish(parent: string, folder: string, files: AnswerFolder["files"]): Promise<void> {
+  /** Renames a folder built beside it into place; a folder it replaces is first moved aside under a build name, so a killed swap leaves only debris the sweep removes. */
+  async function publish(parent: string, folder: string, files: AnswerFolder["files"], replacing: boolean): Promise<void> {
     const building = await mkdtemp(join(parent, BUILD_PREFIX));
+    const retired = replacing ? await mkdtemp(join(parent, BUILD_PREFIX)) : null;
     let published = false;
     try {
       for (const name of ANSWER_FILE_NAMES) await writeFile(join(building, name), files[name], { mode: OWNER_ONLY_FILE });
+      if (retired !== null) await rename(folder, join(retired, "replaced")).catch(() => undefined);
       try {
         await rename(building, folder);
         published = true;
@@ -51,6 +54,7 @@ export function createAnswerFiles(deps: AnswerFilesDeps): AnswerFiles {
       }
     } finally {
       if (!published) await rm(building, { recursive: true, force: true });
+      if (retired !== null) await rm(retired, { recursive: true, force: true });
     }
   }
 
@@ -92,11 +96,12 @@ export function createAnswerFiles(deps: AnswerFilesDeps): AnswerFiles {
       const key = deps.digest.of(canonicalJson({ engine: deps.engine, tool, inputs }));
       const folder = join(parent, key);
       const kept = await readFile(join(folder, MAIN_FILE), "utf8").catch(() => undefined);
-      if (kept === undefined) await publish(parent, folder, files);
-      else {
-        if (kept !== files[MAIN_FILE]) deps.report(`ye-ast: answer files: ${folder} holds other bytes for the same key; the ${tool} answer was not written again`);
+      if (kept === files[MAIN_FILE]) {
         const used = new Date(now());
         await utimes(join(folder, MAIN_FILE), used, used).catch(() => undefined);
+      } else {
+        if (kept !== undefined) deps.report(`ye-ast: answer files: ${folder} held other bytes for the same key; replaced by the new ${tool} answer`);
+        await publish(parent, folder, files, kept !== undefined);
       }
       await sweep(join(tool, key));
       return folder;

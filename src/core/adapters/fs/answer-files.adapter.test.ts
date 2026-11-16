@@ -80,12 +80,13 @@ test("an identical answer finds its folder and rewrites nothing", async () => {
   assert.deepEqual(lines, []);
 });
 
-test("the same key with other bytes keeps the folder and reports one line", async () => {
+test("the same key with other bytes replaces the folder whole, leaves nothing beside it and reports one line", async () => {
   const directory = await fresh();
   const { files, lines } = adapter(directory);
   const folder = (await files.keep(answer({}, '{"v":1}')))!;
-  assert.equal(await files.keep(answer({}, '{"v":2}')), folder);
-  assert.equal(await readFile(join(folder, "answer.json"), "utf8"), '{"v":1}');
+  assert.equal(await files.keep(answer({ files: { "answer.json": '{"v":2}', "summary.txt": "summary 2", "details.txt": "details 2" } })), folder);
+  assert.deepEqual(await Promise.all(ANSWER_FILE_NAMES.map((name) => readFile(join(folder, name), "utf8"))), ['{"v":2}', "summary 2", "details 2"]);
+  assert.deepEqual(await readdir(dirname(folder)), [basename(folder)]);
   assert.equal(lines.length, 1);
   assert.ok(lines[0]!.includes("callers") && lines[0]!.includes(basename(folder)));
 });

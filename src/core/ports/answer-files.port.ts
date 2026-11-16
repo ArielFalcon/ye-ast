@@ -21,8 +21,8 @@ export interface AnswerFolder {
  */
 export interface AnswerFiles {
   /**
-   * The folder that holds the files of `answer`, written whole once per key: an existing folder is kept, and one line
-   * is reported when its `answer.json` differs from the new bytes. `null` when the folder could not be written, with
+   * The folder that holds the files of `answer`, written whole: a folder of the same key with the same `answer.json` is
+   * kept, one with other bytes is replaced and reported in one line. `null` when the folder could not be written, with
    * one reported line saying why. Never rejects.
    */
   keep(answer: AnswerFolder): Promise<string | null>;

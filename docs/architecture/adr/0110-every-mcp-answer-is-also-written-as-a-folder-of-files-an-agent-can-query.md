@@ -40,7 +40,9 @@ these files back: they are a delivery artifact, and the key is proven complete b
    `--cache`). With no cache directory no file is written and every reply is unchanged.
 2. **A write-only delivery artifact.** ye-ast never reads these files back as facts, and no query consults them. The
    folder is built in a temporary directory beside it and renamed into place, so a reader sees all three files or the
-   folder is absent. When the folder already exists it is kept. The directories are created with mode 0700 and the files
+   folder is absent. When the folder already exists with the same `answer.json` it is kept; with other bytes it is
+   replaced by the new answer (the old one is first moved aside under a build name, so the files a reply names are
+   always the ones that reply was built from). The directories are created with mode 0700 and the files
    with 0600; a directory that is a symbolic link, belongs to another account or is open to the group or others is not
    written to (the rule of the index cache).
 3. **The key** is the digest of the canonical JSON of: the tool; the semantic arguments of the call (those without
@@ -51,7 +53,8 @@ these files back: they are a delivery artifact, and the key is proven complete b
    It does not change when a rule inside a reader changes without bumping one of them. That gap is not covered by
    inventing a version: it is what decision 4 detects, and it is why nothing reuses these files yet.
 4. **Shadow check.** When the folder of a key exists and the new `answer.json` differs from its bytes, one line is
-   written to stderr, naming the tool and the folder, and the reply is unchanged and not failed. A key that never
+   written to stderr, naming the tool and the folder, the folder is replaced (decision 2), and the reply is unchanged
+   and not failed. A key that never
    produces this line over real use is complete; the first line is a missing input to add to the key. Reuse of a stored
    answer waits for that evidence.
 5. **What is never written.** An answer cut by a wall-clock deadline (a `deadline` cut or unknown reason anywhere in
