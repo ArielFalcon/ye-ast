@@ -1,6 +1,4 @@
-import { CUT_REASONS, CUT_SUB_REASONS, UNKNOWN_REASONS } from "../core/domain/shared/fact.ts";
-import { PARSE_STRICT_TYPES } from "../core/domain/entrypoints/route-parameter.ts";
-import { dependencyDiagnostic } from "./dependency-schema.ts";
+import { UNKNOWN_REASONS } from "../core/domain/shared/fact.ts";
 import { z } from 'zod';
 import { RESULT_IDENTITY_PATTERN } from './evidence-cursor.ts';
 import type { CrossField } from './compact-schema.ts';
@@ -160,37 +158,18 @@ export function recoveryControlConstraintsFor(tool: Tool): CrossField {
   return {...pairing, dependentSchemas: {workspace: restrict(workspaceBranch), select: {anyOf: [{required: ['workspace']}, restrict(localBranch)]}}};
 }
 
-/** Existing fact primitives are supplied by the adapter so projection provenance uses its established schema. */
-export type SelectedOutputDeps = { recovery: z.ZodType; baseFact: {schema: z.ZodType; snapshot: z.ZodType; producer: z.ZodType; inputs: z.ZodType; evidence: z.ZodArray<z.ZodType>} };
+/** Existing fact primitives are supplied by the adapter so a selection receipt states its source with the established schema. */
+export type SelectedOutputDeps = { recovery: z.ZodType; baseFact: {schema: z.ZodType; snapshot: z.ZodType; producer: z.ZodType; inputs: z.ZodType} };
 export function selectedOutputFor(tool: Tool, deps: SelectedOutputDeps) {
-  const {schema, snapshot, producer, inputs, evidence} = deps.baseFact;
+  const {schema, snapshot, producer, inputs} = deps.baseFact;
   const analysis = z.discriminatedUnion('status', [z.strictObject({status:z.literal('complete')}), z.strictObject({status:z.literal('partial')}), z.strictObject({status:z.literal('unknown'), reason})]);
   const sourceFields = {schema, snapshot, producer, inputs, scopeSelection: z.strictObject({ unmatchedIncludes: z.array(z.string()), selectedFiles: z.int().min(0) }).optional(), analysis};
   const source = z.strictObject({...sourceFields, reads:z.array(z.strictObject({owner:readOwner,...sourceFields})), limits:z.array(z.strictObject({owner:cutOwner,kind:cutKind,cuts:index,places:index,limit:z.number().optional()}))});
-  const handler = z.strictObject({path:z.string(),symbol:z.string(),line:z.number(),endLine:z.number().optional()});
-  const identity = z.discriminatedUnion('kind', [
-    z.strictObject({kind:z.literal('http-route'),name:z.string(),method:z.enum(['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS','TRACE','ANY']),path:z.string(),version:z.string().optional(),handler}),
-    z.strictObject({kind:z.literal('ui-route'),name:z.string(),path:z.string(),outlet:z.string().optional(),component:z.union([handler,z.literal('unknown')])}),
-    z.strictObject({kind:z.literal('listener'),name:z.string(),protocol:z.enum(['kafka','rabbit','jms','event','nats']),destination:z.string(),handler}),
-    z.strictObject({kind:z.literal('job'),name:z.string(),trigger:z.strictObject({attribute:z.string(),value:z.string()}),handler}),
-    z.strictObject({kind:z.literal('callback'),name:z.string(),contract:z.strictObject({type:z.string(),member:z.string().optional()}),handler}),
-  ]);
-  const finding = z.discriminatedUnion('status', [z.strictObject({status:z.literal('complete'),identity}),z.strictObject({status:z.literal('unknown'),reason})]);
-  const link = z.strictObject({id:z.string(),from:z.strictObject({repo:z.string(),file:z.string(),line:z.number(),symbol:z.string()}),to:z.strictObject({repo:z.string(),kind:z.enum(['http-route','ui-route','listener','job']),name:z.string(),handler}),transport:z.enum(['http','event']),basis:z.enum(['exact','base-path','suffix','event-destination','gateway-prefix','route-overlap']),profiles:z.array(z.string()).optional(),authority:z.literal('undecided').optional(),drift:z.array(z.strictObject({segment:z.string(),parameter:z.string(),type:z.enum(PARSE_STRICT_TYPES)})).optional(),confidence:z.number()});
-  const moduleVia = z.strictObject({file:z.string(),line:z.number(),specifier:z.string(),kind:z.enum(['import','reexport']),typeOnly:z.boolean(),form:z.enum(['dynamic-import','type-query']).optional()});
-  const categories = [
-    {select:handlerSelection, context:z.strictObject({owner:impactOwner,snapshot,handler,matchedEntrypointCount:index,interpretation:z.literal('recorded-origin-union')}), item:z.strictObject({seedIndex:index,seed:z.strictObject({file:z.string(),symbol:z.string(),line:z.number(),endLine:z.number().optional(),basis:z.enum(['lines','top-level','resource','requested'])})})},
-    {select:moduleSelection, context:z.strictObject({owner:impactOwner,snapshot,module:z.strictObject({file:z.string(),snapshot:z.enum(['base','head']),depth:z.number(),via:moduleVia.optional()}),originCount:index}), item:z.strictObject({originIndex:index,origin:z.strictObject({file:z.string(),change:z.enum(['added','modified','deleted'])})})},
-    {select:findingSelection, context:z.strictObject({findingIndex:index,section:analysis,finding}), item:z.strictObject({evidenceIndex:index,evidence:evidence.element})},
-    {select:cutSelection, context:z.strictObject({owner:cutOwner,snapshot,analysis,cutIndex:index,kind:cutKind,reason:z.enum(CUT_REASONS),subReason:z.enum(CUT_SUB_REASONS).optional(),dependency:dependencyDiagnostic.optional(),anchor:z.string(),limit:z.number().optional()}), item:z.strictObject({atIndex:positive,place:z.string()})},
-    {select:linkSelection, context:z.strictObject({link,direction:z.enum(['upstream','downstream']),reachCount:index,endpoints:z.strictObject({from:z.strictObject({snapshot,analysis}),to:z.strictObject({snapshot,analysis})})}), item:z.union([z.strictObject({position:index,linkId:z.string(),link}),z.strictObject({position:index,linkId:z.string(),unavailable:z.literal(true)})])},
-  ];
-  const allowed = tool === 'entrypoints' ? categories.slice(2,4) : tool === 'callers' ? [categories[0]!,categories[3]!,categories[4]!] : [categories[0]!,categories[1]!,categories[3]!,categories[4]!];
+  const selections = [handlerSelection, moduleSelection, findingSelection, cutSelection, linkSelection];
+  const allowed = tool === 'entrypoints' ? selections.slice(2,4) : tool === 'callers' ? [selections[0]!,selections[3]!,selections[4]!] : [selections[0]!,selections[1]!,selections[3]!,selections[4]!];
   const page = z.strictObject({limit:positive,offset:index,returned:index,total:index,nextCursor:z.string().optional()});
   const common = {text:z.string(),projectionSchema:z.literal(1),source,recovery:deps.recovery};
-  const branches = allowed.flatMap(({select,context,item}) => [
-    z.strictObject({...common,kind:z.literal('projection'),select,availability:z.literal('available'),context,items:z.array(item),page}),
-    z.strictObject({...common,kind:z.literal('projection'),select,availability:z.literal('unavailable'),reason,evidence}),
+  const branches = allowed.flatMap((select) => [
     z.strictObject({...common,kind:z.literal('projection-receipt'),select,availability:z.literal('available'),page}),
     z.strictObject({...common,kind:z.literal('projection-receipt'),select,availability:z.literal('unavailable'),reason}),
   ]);
