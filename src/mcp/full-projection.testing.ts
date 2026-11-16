@@ -7,7 +7,7 @@ export function expandFull(tool: QueryFamily, projected: Json): Json {
   const root = structuredClone(projected);
   const value = root["value"];
   if (!isRecord(value)) return root;
-  for (const { fact } of nestedFacts(tool, value)) {
+  for (const fact of nestedFacts(tool, value)) {
     fact["schema"] ??= root["schema"];
     fact["producer"] ??= root["producer"];
     fact["snapshot"] ??= root["snapshot"];

@@ -267,7 +267,12 @@ schema before delivery, including selected responses. The exported full schemas 
 Unselected summary/details result fields form a strict receipt with `mode`, `status`, `snapshot` and `reason` exactly for
 unknown status. A SHA snapshot carries `repo`, `kind`, `sha`; a live snapshot carries `repo`, `kind`, `head`,
 `stateId`. Full carries the fact and `mode`, plus applicable `repositoryRoots`, `freshness`, `resolution`, `live` and `workspaceLive`
-response siblings. Workspace notices also appear in `_meta["ye-ast/workspace-live"]` in every mode, naming the repository and captured snapshot, with stale paths or a typed unavailable cause. A stale notice is also in `_meta["ye-ast/live"]`. Known full facts require a value; partial facts
+response siblings. Full is a projection of the fact that states each repeated part once and keeps every fact
+([ADR-0109](../adr/0109-the-mcp-answer-states-each-repeated-part-once.md)): a nested fact omits the envelope parts it
+shares with the answer, a contract finding several answers share is listed once in `value.sharedFindings`, a workspace
+link is named by its position in the answer, an entrypoint's evidence equal to its handler place is
+`{"sameAs": "handler"}`, and a decision id equal to `kind:subject` is omitted; the answer's guide names each fold it
+applies. Workspace notices also appear in `_meta["ye-ast/workspace-live"]` in every mode, naming the repository and captured snapshot, with stale paths or a typed unavailable cause. A stale notice is also in `_meta["ye-ast/live"]`. Known full facts require a value; partial facts
 also require cuts; unknown facts require a reason and no value. Full permits additive public fields. Per-family
 Server runtime validation covers the common envelope, identities and principal containers/coordinates: entrypoints,
 local or workspace impact/callers, importers, outline, workspace, and decisions. It does not duplicate every domain

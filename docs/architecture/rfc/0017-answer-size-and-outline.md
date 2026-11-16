@@ -226,8 +226,9 @@ same two candidates, both of which print a JSON object on every row:
 Once one example defines `kind`, `owner` and the shape, the per-row object only restates field names; what a row must
 carry is its own values. The text already had a compact form for each: `handlerText` (`path:line[-endLine] symbol`,
 used by entrypoint, changed-entrypoint and link rows) and `<snapshot> <file>` (used by module rows that cannot be
-selected). The other per-row JSON in the renderers is not this pattern: `[linkId "…"]` and `[findingIndex n]` are
-single values, `evidence: […]` rows are evidence, not selectors, and the compose view prints entity anchors, never a
+selected). The other per-row JSON in the renderers is not this pattern: `[linkId "…"]` (the answer-local key of
+[ADR-0109](../adr/0109-the-mcp-answer-states-each-repeated-part-once.md) decision 4, the link's position, not the id
+that spells its ends) and `[findingIndex n]` are single values, `evidence: […]` rows are evidence, not selectors, and the compose view prints entity anchors, never a
 selector.
 
 **The rule.** A shared selector block prints one complete select example and a lookup line saying which fields each row

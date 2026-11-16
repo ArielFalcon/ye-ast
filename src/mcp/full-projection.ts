@@ -13,32 +13,27 @@ export interface FullProjection {
   guidance: readonly string[];
 }
 
-/** A fact an answer nests under its own envelope. */
-export interface NestedFact {
-  fact: Json;
-}
-
 const NESTED_ENVELOPE_GUIDE = "Nested facts omit schema, snapshot, producer and the inputs keys they share with the answer (an inputs key null: absent there).";
 const SHARED_FINDING_GUIDE = "A finding {sharedFinding: n} in value.answers[].findings is value.sharedFindings[n], shared by several answers.";
 const SAME_HANDLER_GUIDE = "Evidence {sameAs: \"handler\"} is the place of the finding's value.handler.";
 const DECISION_ID_GUIDE = "A decision without id has the id kind:subject.";
 
-/** Where each family nests a fact of its own inside the value. */
-export function nestedFacts(tool: QueryFamily, value: Json): NestedFact[] {
-  const found: NestedFact[] = [];
-  if (tool === "entrypoints" && isRecord(value["entrypoints"])) found.push({ fact: value["entrypoints"] });
+/** The facts a family nests under their own envelope inside the value. */
+export function nestedFacts(tool: QueryFamily, value: Json): Json[] {
+  const found: Json[] = [];
+  if (tool === "entrypoints" && isRecord(value["entrypoints"])) found.push(value["entrypoints"]);
   const change = value["change"];
-  if (tool === "contract_consequences" && isRecord(change) && isRecord(change["derivation"])) found.push({ fact: change["derivation"] });
+  if (tool === "contract_consequences" && isRecord(change) && isRecord(change["derivation"])) found.push(change["derivation"]);
   for (const section of isRecord(value["sections"]) ? Object.values(value["sections"]) : []) {
     if (!isRecord(section)) continue;
-    found.push({ fact: section });
+    found.push(section);
     const inner = section["value"];
-    for (const read of isRecord(inner) ? recordsOf(inner["reads"]) : []) if (isRecord(read["fact"])) found.push({ fact: read["fact"] });
+    for (const read of isRecord(inner) ? recordsOf(inner["reads"]) : []) if (isRecord(read["fact"])) found.push(read["fact"]);
   }
   return found;
 }
 
-function foldEnvelope({ fact }: NestedFact, root: Json): boolean {
+function foldEnvelope(fact: Json, root: Json): boolean {
   let folded = false;
   for (const key of ["schema", "snapshot", "producer"]) {
     if (key in fact && same(fact[key], root[key])) { delete fact[key]; folded = true; }
@@ -48,8 +43,9 @@ function foldEnvelope({ fact }: NestedFact, root: Json): boolean {
   if (!isRecord(inputs) || !isRecord(rootInputs)) return folded;
   const delta: Json = Object.fromEntries(Object.entries(inputs).filter(([key, entry]) => !same(entry, rootInputs[key])));
   for (const key of Object.keys(rootInputs)) if (!(key in inputs)) delta[key] = null;
+  const changed = !same(delta, inputs);
   if (Object.keys(delta).length === 0) delete fact["inputs"]; else fact["inputs"] = delta;
-  return folded || Object.keys(delta).length < Object.keys(inputs).length;
+  return folded || changed;
 }
 
 function shareFindings(value: Json): boolean {

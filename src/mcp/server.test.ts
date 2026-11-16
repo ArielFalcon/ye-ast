@@ -2612,11 +2612,28 @@ test("a workspace link is named by its answer-local key in the text, the full JS
   } finally { await session.close(); }
 });
 
+test("the workspace and trace tools name their links by answer-local keys too, internal links numbered after the others", async () => {
+  const link = (id: string, line: number, toRepo: string) => ({ id, from: { repo: "shop-web", file: "src/app/order.api.ts", line, symbol: "OrderApi.create" }, to: { repo: toRepo, kind: "http-route" as const, name: "GET /orders", handler: { path: "src/OrderController.java", symbol: "OrderController.one", line: 17 } }, transport: "http" as const, basis: "route-overlap" as const, confidence: 1 });
+  const workspace = workspaceFact();
+  if (workspace.status === "unknown") throw new Error("fixture");
+  const withLinks = { ...workspace, value: { ...workspace.value, links: [link("long-b", 8, "shop"), link("long-a", 7, "shop")], internalLinks: [link("long-c", 9, "shop-web")] } };
+  const traced = { ...base(), status: "complete" as const, value: { ...TRACE, links: [link("long-t", 7, "shop")] } };
+  const { session } = await setup({ outwardNames: async () => ({ ok: true as const, value: { fact: withLinks } }), trace: async () => ({ ok: true as const, value: traced }) });
+  try {
+    const mapped = resultFields(await session.callTool("ye_ast_workspace", { mode: "full" }));
+    assert.deepEqual(mapped.value.links.map((item: { id: string }) => item.id), ["1", "2"]);
+    assert.deepEqual(mapped.value.internalLinks.map((item: { id: string }) => item.id), ["3"]);
+    const walked = resultFields(await session.callTool("ye_ast_trace", { targets: [{ file: "src/Order.java", symbol: "total" }], mode: "full" }));
+    assert.deepEqual(walked.value.links.map((item: { id: string }) => item.id), ["1"]);
+  } finally { await session.close(); }
+});
+
 test("contract consequences full states a finding several answers share once, validated by the published output schema, and says how to read the reference", async () => {
   const place = (line: number) => ({ repo: "shop-web", path: "src/auth.ts", line });
   const shared = { status: "unknown" as const, reason: "unresolved" as const, evidence: [place(1), place(2)] };
   const answerOf = (path: string) => ({ hypothesis: { method: "GET" as const, path, target: "response" as const, property: "name", change: "nullable" as const }, oldContract: "present-and-non-null" as const, status: "complete" as const, findings: [shared] });
-  const fact = { ...base(), status: "complete" as const, value: { repositorySnapshots: [], answers: [answerOf("/a"), answerOf("/b")] } } as unknown as Fact<ConsequencesValue>;
+  const value = { repositorySnapshots: [], answers: [answerOf("/a"), answerOf("/b")] };
+  const fact = { ...base(), status: "complete" as const, value } as unknown as Fact<ConsequencesValue>;
   const { session } = await setup({ consequences: async () => ({ ok: true as const, value: fact }) });
   try {
     const result = await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS], mode: "full" });
@@ -2624,7 +2641,7 @@ test("contract consequences full states a finding several answers share once, va
     assert.deepEqual(full.value.sharedFindings, [shared]);
     assert.deepEqual(full.value.answers.map((answer: { findings: unknown[] }) => answer.findings), [[{ sharedFinding: 0 }], [{ sharedFinding: 0 }]]);
     assert.equal(CONTRACT_CONSEQUENCES_OUTPUT.safeParse(full).success, true);
-    assert.deepEqual(expandFull("contract_consequences", { ...full, text: undefined }).value, fact.value);
+    assert.deepEqual(expandFull("contract_consequences", full).value, value);
     assert.match(textOf(result), /sharedFinding/);
   } finally { await session.close(); }
 });

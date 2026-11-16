@@ -2020,7 +2020,7 @@ export const ROOT_PATH_TEXT = "(whole body)";
 const accessPathText = (path: string): string => (path === "" ? ROOT_PATH_TEXT : path);
 
 /** The places of a finding, the first ones listed and the rest counted with the mode that lists every one. */
-function findingPlaces(evidence: readonly Parameters<typeof repositoryEvidenceText>[0][]): string {
+function findingPlaces(evidence: readonly RepositoryEvidence[]): string {
   const left = evidence.length - LISTED_ITEMS;
   return `${evidence.slice(0, LISTED_ITEMS).map(repositoryEvidenceText).join(", ")}${left > 0 ? `, and ${left} more places (mode: "full" lists every one)` : ""}`;
 }
