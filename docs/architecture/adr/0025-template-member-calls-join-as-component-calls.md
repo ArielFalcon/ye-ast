@@ -1,6 +1,6 @@
 # ADR-0025: A template call through an injected field joins as a call of the component
 
-- Status: Accepted, 2026-11-05, owner
+- Status: Accepted, 2026-11-05, owner; decision 1 superseded by [ADR-0108](0108-a-call-of-an-own-instance-property-is-proven-at-the-property-and-a-reassignable-one-is-a-cut-that-says-where.md), 2026-11-16
 - Decision source: the owner, 2026-11-05, on the open decisions of the Angular template expression investigation:
   "Aplica las soluciones que recomiendes para las decisiones abiertas" (apply the solutions you recommend for the open
   decisions). The recommended solution is option 1 of "Needs owner decision" in

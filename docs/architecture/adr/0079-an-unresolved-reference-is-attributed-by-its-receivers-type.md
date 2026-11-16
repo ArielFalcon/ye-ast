@@ -1,6 +1,6 @@
 # ADR-0079: An unresolved reference is attributed by its receiver's type, not by the name it spells
 
-- Status: Accepted, 2026-11-13, owner
+- Status: Accepted, 2026-11-13, owner; unit U1 amended by [ADR-0108](0108-a-call-of-an-own-instance-property-is-proven-at-the-property-and-a-reassignable-one-is-a-cut-that-says-where.md), 2026-11-16
 - Decision source: Owner's standing instruction of 2026-11-13: "No te detengas más a preguntarme, escoge tú la opción
   recomendada" (stop asking me; pick the recommended option yourself). The recommended design and the recommended
   answer of each question below are adopted under it and reported to the owner afterwards. It settles ADR-0041 open
