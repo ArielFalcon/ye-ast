@@ -358,6 +358,61 @@ test("a property a write may have replaced is no proof: its call is a reassigned
   assert.deepEqual([method.memberUses, method.reassignedUses], [[], []]);
 });
 
+const STORE_PROPERTY = "export class Store {\n  write = () => {};\n}";
+const STORE_METHOD = "export class Store {\n  write() {}\n}";
+const WRITTEN = { path: "src/writer.ts", line: 3 };
+
+function writerOf(type: string, body = "receiver.write = () => {};"): Record<string, string> {
+  return { "src/shapes.ts": "export interface Motion { write: () => void; velocity: number }\nexport interface Writer { write: unknown }", "src/writer.ts": `import { Motion, Writer } from './shapes';\nexport function replace(receiver: ${type}) {\n  ${body}\n}` };
+}
+
+test("a write through a receiver the checker types as something the class is not assignable to neither refuses its member proof nor names its place", async () => {
+  const property = await memberProofs(OWNER, STORE_PROPERTY, writerOf("Motion"));
+  assert.deepEqual([property.memberUses?.map(({ member }) => member), property.reassignedUses], [[{ path: "src/store.ts", symbol: "write", line: 2 }], []]);
+  const method = await memberProofs(OWNER, STORE_METHOD, writerOf("Motion"));
+  assert.deepEqual([method.memberUses?.map(({ member }) => member), method.reassignedUses], [[{ path: "src/store.ts", symbol: "write", line: 2 }], []]);
+});
+
+test("a write through a receiver typed with a type the class satisfies structurally still refuses the proof and is cited", async () => {
+  const property = await memberProofs(OWNER, STORE_PROPERTY, writerOf("Writer"));
+  assert.deepEqual([property.memberUses, property.reassignedUses?.map(({ writes }) => writes)], [[], [[WRITTEN]]]);
+  const method = await memberProofs(OWNER, STORE_METHOD, writerOf("Writer"));
+  assert.deepEqual(method.memberUses, []);
+  const inherited = await memberProofs(OWNER, STORE_PROPERTY, writerOf("{ toString(): string; write: unknown }"));
+  assert.deepEqual([inherited.memberUses, inherited.reassignedUses?.map(({ writes }) => writes)], [[], [[WRITTEN]]]);
+});
+
+test("a write through a receiver the checker cannot bound to a type keeps refusing the proof", async () => {
+  const cases: [string, Record<string, string>][] = [
+    ["an implicit any", { ...writerOf("Motion"), "src/writer.ts": "export function replace(receiver) {\n  \n  receiver.write = () => {};\n}" }],
+    ["an any cast", writerOf("unknown", "(receiver as any).write = () => {};")],
+    ["a cast", writerOf("Motion", "(receiver as unknown as Motion).write = () => {};")],
+    ["a union with a satisfied member", writerOf("Motion | Writer")],
+    ["a type the program cannot read", { ...writerOf("Gone"), "src/writer.ts": "import { Gone } from 'gone-package';\nexport function replace(receiver: Gone) {\n  receiver.write = () => {};\n}" }],
+    ["a type argument the caller picks", { ...writerOf("Motion"), "src/writer.ts": "export function replace<U>(receiver: { write: U }) {\n  receiver.write = () => {};\n}" }],
+    ["a type parameter", { ...writerOf("Motion"), "src/writer.ts": "import { Motion } from './shapes';\nexport function replace<U extends Motion>(receiver: U) {\n  receiver.write = () => {};\n}" }],
+  ];
+  for (const [label, extra] of cases) {
+    const meta = await memberProofs(OWNER, STORE_PROPERTY, extra);
+    assert.deepEqual(meta.memberUses, [], label);
+    assert.equal(meta.reassignedUses?.length, 1, label);
+  }
+});
+
+test("a class whose own type the checker cannot read in full is never excluded: a base only the reader resolves, however far up, or a type parameter", async () => {
+  const aliased = { "tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@core/*": ["src/core/*"] } } }), "src/core/base.ts": "export class Base { velocity = 1; }", "src/middle.ts": "import { Base } from '@core/base';\nexport class Middle extends Base {}" };
+  const cases: [string, Record<string, string>][] = [
+    ["import { Base } from '@core/base';\nexport class Store extends Base {\n  write = () => {};\n}", aliased],
+    ["import { Middle } from './middle';\nexport class Store extends Middle {\n  write = () => {};\n}", aliased],
+    ["export class Store<X> {\n  write = () => {};\n}", {}],
+  ];
+  for (const [target, extra] of cases) {
+    const meta = await memberProofs(OWNER, target, { ...writerOf("Motion"), ...extra });
+    assert.deepEqual(meta.memberUses, [], target);
+    assert.equal(meta.reassignedUses?.length, 1, target);
+  }
+});
+
 test("optional or computed receiver and member calls cannot prove a member", async () => {
   for (const expression of ["this.store?.write()", "this.store.write?.()", "this.store['write']()", "this['store'].write()"])
     assert.deepEqual((await memberProofs(`export class Owner { store = new Store(); run() { ${expression}; } }`)).memberUses, [], expression);

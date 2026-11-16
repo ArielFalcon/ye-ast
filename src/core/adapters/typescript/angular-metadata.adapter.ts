@@ -16,9 +16,10 @@ import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { TemplateEffects } from "../../ports/template-usage.port.ts";
 import type { AngularMetadata, AngularMetadataReader, AngularMetadataReadOptions } from "../../ports/angular-metadata.port.ts";
-import { coreExternalOf, readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMember, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawWrite, type RawWriteTarget } from "./angular-metadata.extractor.ts";
+import { coreExternalOf, readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMember, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawReceiver, type RawWrite, type RawWriteTarget } from "./angular-metadata.extractor.ts";
 import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extractor.ts";
 import { createDeclarationLookup } from "./declaration-lookup.ts";
+import { createReceiverTypes, type ReceiverTypes } from "./receiver-types.ts";
 import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
 import { createModuleResolver, type ManifestPackages } from "./module-resolver.ts";
 import { providerIdentityEvidence, type ProviderIdentityEvidence } from "./provider-identity.ts";
@@ -58,11 +59,12 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   const reassignedUses: ReassignedMemberUseOrigin[] = [];
   const manifests = manifestsOf(files);
   const replaced = replacedFiles(files);
+  const receiverTypes = createReceiverTypes(files, sourcePaths);
   for (const [project, sources] of byProject) {
     const scope = proof?.completeSource === true && contents.size === files.length
       ? { sites: new Set(sources.filter((path) => projectOf(path, manifests)?.directory === project.directory)), evidence: sourcePaths, ...(replaced === undefined ? {} : { replaced }) }
       : undefined;
-    const metadata = await readProject(contents, project.packages, sources, scope, proof !== undefined, templateEffects);
+    const metadata = await readProject(contents, project.packages, sources, scope, proof !== undefined, receiverTypes, templateEffects);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);
     fields.push(...metadata.fields);
@@ -91,7 +93,7 @@ interface ProofScope {
 }
 
 
-async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: ManifestPackages, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean, templateEffects?: AngularMetadataReadOptions["templateEffects"]): Promise<AngularMetadata> {
+async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: ManifestPackages, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean, receiverTypes: ReceiverTypes, templateEffects?: AngularMetadataReadOptions["templateEffects"]): Promise<AngularMetadata> {
   const proveMembers = scope !== undefined;
   const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
   const resolver = createModuleResolver(read, packages);
@@ -306,7 +308,8 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
    * A provider replaces only the class it provides, and a known substitute class qualifies the proof instead of refusing it.
    * An object or a token the reader cannot place reaches every class its file names, and the file that declares the token.
    * A mutation API used as a value, a replaced export of an installed package (every token it constructs could become any
-   * class) and an unreadable source have no bound, and then nothing is proven.
+   * class) and an unreadable source have no bound, and then nothing is proven. A write whose object the checker types as
+   * something a class is not assignable to does not reach that class (ADR-0111).
    */
   const effectsByComponent = new Map<AngularClass, TemplateEffects | undefined>();
   const effectsOf = (component: Extract<AngularClass, { kind: "component" }>): TemplateEffects | undefined => {
@@ -319,10 +322,11 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     let unbounded = false;
     const classKey = (ref: SymbolRef): string => `${ref.path}\0${ref.symbol}\0${ref.line}`;
     const unsafe = new Map<string, WritePlace[]>();
-    const names = new Map<string, WritePlace[]>();
+    const names = new Map<string, { at?: WritePlace; holds?: Holds }[]>();
     const substitutes = new Map<string, MemberSubstitute[]>();
     const reached = (reaches: Map<string, WritePlace[]>, key: string, at?: WritePlace): void => { reaches.set(key, [...(reaches.get(key) ?? []), ...(at === undefined ? [] : [at])]); };
     const reach = (ref: SymbolRef, member?: string, at?: WritePlace): void => reached(unsafe, `${classKey(ref)}\0${member ?? "*"}`, at);
+    const holdsOf = (file: string, receiver: RawReceiver | undefined): Holds | undefined => (receiver === undefined ? undefined : (instance) => receiverTypes.mayHold(file, receiver, instance));
     const fieldsByOwner = Map.groupBy(proofFields, (field) => `${field.owner.path}\0${field.owner.line}\0${field.field}`);
     const namedByFile = new Map<string, Promise<SymbolRef[]>>();
     const namedClasses = (file: string, source: Parsed): Promise<SymbolRef[]> => {
@@ -339,8 +343,8 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     };
     /** Set once members no syntax names are written on an object the syntax does not place: it may be any instance passed on. */
     let opaque = false;
-    const unplaced = async (file: string, source: Parsed, member?: string, at?: WritePlace): Promise<void> => {
-      if (member !== undefined) return void reached(names, member, at);
+    const unplaced = async (file: string, source: Parsed, member?: string, at?: WritePlace, holds?: Holds): Promise<void> => {
+      if (member !== undefined) return void names.set(member, [...(names.get(member) ?? []), { ...(at === undefined ? {} : { at }), ...(holds === undefined ? {} : { holds }) }]);
       opaque = true;
       for (const ref of await namedClasses(file, source)) reach(ref, undefined, at);
     };
@@ -349,19 +353,20 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     /** `at` is the write's own place; a template write has none the reader can name. */
     const place = async (file: string, source: Parsed, write: RawWrite, at?: WritePlace): Promise<void> => {
       const { target, member } = write;
+      const mayHold = holdsOf(file, write.receiver);
       if (member !== undefined) writtenMembers.add(member);
-      if ("unplaced" in target) return unplaced(file, source, member, at);
-      if ("below" in target) return member === undefined ? void belowFields.push({ file, source, below: target.below, ...(at === undefined ? {} : { at }) }) : unplaced(file, source, member, at);
+      if ("unplaced" in target) return unplaced(file, source, member, at, mayHold);
+      if ("below" in target) return member === undefined ? void belowFields.push({ file, source, below: target.below, ...(at === undefined ? {} : { at }) }) : unplaced(file, source, member, at, mayHold);
       if ("self" in target) return reach({ path: file, symbol: target.self.name, line: target.self.line }, member, at);
       if ("field" in target) {
         const held = fieldsByOwner.get(`${file}\0${target.field.owner.line}\0${target.field.field}`) ?? [];
         const holds = held.length === 1 ? held[0]!.holds : undefined;
-        return holds !== undefined && "class" in holds ? reach(holds.class, member, at) : unplaced(file, source, member, at);
+        return holds !== undefined && "class" in holds ? reach(holds.class, member, at) : unplaced(file, source, member, at, mayHold);
       }
       if ("prototype" in target) {
         const placed = await resolve(file, target.prototype);
         if ("class" in placed) return reach(placed.class, member, at);
-        return "external" in placed || "token" in placed || "array" in placed ? undefined : unplaced(file, source, member, at);
+        return "external" in placed || "token" in placed || "array" in placed ? undefined : unplaced(file, source, member, at, mayHold);
       }
       const namespace = target.binding.member === undefined && source.shape.imports.get(target.binding.name)?.imported === "*";
       const placed = await resolve(file, namespace && member !== undefined ? { name: target.binding.name, member } : target.binding);
@@ -371,7 +376,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         return undefined;
       }
       if (target.whole === true && !("unresolved" in placed)) return undefined;
-      return unplaced(file, source, namespace ? undefined : member, at);
+      return unplaced(file, source, namespace ? undefined : member, at, mayHold);
     };
     for (const { file, source } of parsedEvidence) {
       const parsedSource = source!;
@@ -492,7 +497,8 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     if (unbounded) return undefined;
     return {
       writesOf: (receiver, member) => {
-        const reaching = [names.get(member), unsafe.get(`${classKey(receiver)}\0${member}`), unsafe.get(`${classKey(receiver)}\0*`)].filter((places) => places !== undefined);
+        const byName = (names.get(member) ?? []).filter(({ holds }) => holds === undefined || holds(receiver));
+        const reaching = [byName.length === 0 ? undefined : byName.flatMap(({ at }) => (at === undefined ? [] : [at])), unsafe.get(`${classKey(receiver)}\0${member}`), unsafe.get(`${classKey(receiver)}\0*`)].filter((places) => places !== undefined);
         return reaching.length === 0 ? undefined : uniquePlaces(reaching.flat());
       },
       substitutesOf: (receiver) => substitutes.get(classKey(receiver))?.toSorted((a, b) => compareText(a.at.path, b.at.path) || a.at.line - b.at.line || compareText(a.class.path, b.class.path) || compareText(a.class.symbol, b.class.symbol)),
@@ -609,6 +615,9 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
 }
 
 type WritePlace = ReassignedMemberUseOrigin["writes"][number];
+
+/** Whether the object a write names may be an instance of the class. */
+type Holds = (instance: SymbolRef) => boolean;
 
 function uniquePlaces(places: readonly WritePlace[]): WritePlace[] {
   return [...new Map(places.map((place) => [`${place.path}:${place.line}`, place])).values()].toSorted((a, b) => compareText(a.path, b.path) || a.line - b.line);

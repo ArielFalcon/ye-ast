@@ -68,8 +68,13 @@ export type RawWriteTarget =
   | { binding: RawReference; whole?: true }
   | { prototype: RawReference }
   | { unplaced: true };
-/** A write to `member` of the target, or to members no syntax names when `member` is absent. */
-export interface RawWrite { target: RawWriteTarget; member?: string; line: number }
+/** Where the object of a write stands in its file, as offsets of the text the reader parsed. */
+export interface RawReceiver { start: number; end: number }
+/**
+ * A write to `member` of the target, or to members no syntax names when `member` is absent. `receiver` is the object
+ * as written, left out when a type assertion makes its declared type no claim about it.
+ */
+export interface RawWrite { target: RawWriteTarget; member?: string; line: number; receiver?: RawReceiver }
 /**
  * A value that leaves its holder for code the reader does not follow: a field read used as a value, the instance an
  * `inject()` or a typed constructor parameter gives, or a field read through another object, by its name.
@@ -485,10 +490,18 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     const reference = namespaced(o);
     return reference?.member === undefined ? { unplaced: true } : { binding: reference };
   };
+  const receiverOf = (object: ts.Expression): RawReceiver | undefined => {
+    for (let at: ts.Expression = object; ; ) {
+      if (ts.isAsExpression(at) || ts.isTypeAssertionExpression(at)) return undefined;
+      if (ts.isParenthesizedExpression(at) || ts.isNonNullExpression(at) || ts.isSatisfiesExpression(at) || ts.isPropertyAccessExpression(at) || ts.isElementAccessExpression(at)) at = at.expression;
+      else return { start: object.getStart(sf), end: object.getEnd() };
+    }
+  };
   const record = (object: ts.Expression, member: string | undefined, at: ts.Node): void => {
     const target = targetOf(object);
     if (target === undefined) return;
-    result.writes.push({ target, ...(member === undefined ? {} : { member }), line: lineAt(at) });
+    const receiver = receiverOf(object);
+    result.writes.push({ target, ...(member === undefined ? {} : { member }), line: lineAt(at), ...(receiver === undefined ? {} : { receiver }) });
     const subclass = "self" in target ? subclassOf.get(topLevelThisClass(unwrapped(object))!) : undefined;
     if (subclass === undefined) return;
     if (member !== undefined) subclass.members.add(member);

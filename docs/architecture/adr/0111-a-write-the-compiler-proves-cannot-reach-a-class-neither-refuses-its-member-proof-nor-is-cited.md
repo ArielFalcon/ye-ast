@@ -57,7 +57,8 @@ read.
    outside tests and the compiler's libraries, through the confined host of ADR-0037 with no declared directory, no
    `tsconfig` and the default options (the most permissive assignability, so a class is excluded only when no mode of the
    language accepts it). Every use of the compiler stays in `core/adapters/typescript` (ADR-0008); the lexical binder's
-   resolver (ADR-0029) still asks symbols only.
+   resolver (ADR-0029) still asks symbols only. `receiver-types.ts` becomes the third owner of a `ts.createProgram` call,
+   beside the lexical binder and the type bindings, and the single-rule fitness test lists it.
 5. **The proof is as strong as the types the program reads.** A type it cannot read, through an installed package or a
    `paths` alias the program is not given, is an unresolved type and falls under decision 3.
 

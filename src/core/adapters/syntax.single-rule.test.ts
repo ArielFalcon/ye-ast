@@ -25,9 +25,9 @@ const RULES: readonly Rule[] = [
     pending: [],
   },
   {
-    concept: "a program: one file's lexical bindings, or a snapshot's type bindings over declared build outputs",
+    concept: "a program: one file's lexical bindings, a snapshot's type bindings over declared build outputs, or the assignability of a class to a written object's type (ADR-0111)",
     pattern: /\bts\.createProgram\(/,
-    owners: ["typescript/lexical-bindings.ts", "typescript/type-bindings.adapter.ts"],
+    owners: ["typescript/lexical-bindings.ts", "typescript/receiver-types.ts", "typescript/type-bindings.adapter.ts"],
     pending: [],
   },
   {

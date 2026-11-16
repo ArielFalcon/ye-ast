@@ -11,7 +11,7 @@ import type { Cut } from "../core/domain/shared/fact.ts";
 /**
  * `Page` injects `Store` and `Cart`, whose `items` is a property holding a computed signal that `Page` calls, and `Wallet`, whose
  * `balance` is a property `overdraft` assigns on an object the syntax does not place. `Other` declares `items` too, in
- * another file.
+ * another file. `move` writes `items` and `balance` on a `Motion`, a type none of those classes is assignable to.
  */
 const FILES: Record<string, string> = {
   "package.json": JSON.stringify({ name: "fixture", dependencies: { "@angular/core": "20.0.0" } }),
@@ -68,9 +68,16 @@ const FILES: Record<string, string> = {
     "  funds(): number {",
     "    return this.wallet.balance();",
     "  }",
+    "",
+    "  private readonly cart = inject(Cart);",
+    "",
+    "  total(): number {",
+    "    return this.cart.items().length;",
+    "  }",
     "}",
     "",
   ].join("\n"),
+  "src/motion.ts": ["export interface Motion {", "  items: () => string[];", "  balance: () => number;", "  velocity: number;", "}", "", "export function move(motion: Motion): void {", "  motion.items = () => [];", "  motion.balance = () => 0;", "}", ""].join("\n"),
   "src/overdraft.ts": ["export function overdraft(target: any): void {", "  target.balance = () => -1;", "}", ""].join("\n"),
 };
 
@@ -123,4 +130,8 @@ test("a call of a property that code assigns on an object the syntax does not pl
   assert.deepEqual((cuts as Cut[]).map(({ reason, at, cause }) => ({ reason, at, cause })), [
     { reason: "reassignable", at: ["src/page.ts", "src/page.ts:16 this.wallet.balance"], cause: ["src/overdraft.ts:2 reassignment"] },
   ]);
+});
+
+test("a property that code assigns only on a receiver typed as something the class is not assignable to is a proven caller with no cut", async () => {
+  assert.deepEqual(await callerOf("src/cart.ts", "items", "total"), { settled: PROVEN, cuts: [] });
 });
