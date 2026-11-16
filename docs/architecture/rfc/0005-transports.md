@@ -418,6 +418,18 @@ refreshes ye-ast's mirror of the working tree before it answers:
 Staleness is a property of the response, not a fact status ([RFC-0002](0002-facts-contract.md) rule 8). qayaba measured
 a one-file `sync` at 0.68 s on a 17 717-node index (qayaba@4105c582 `odd/tasks/codegraph-migration.md:230`).
 
+## Answer files
+
+With ye-ast's per-user cache directory, the MCP also writes every answer of a read tool as a folder
+`<cache>/answers/<tool>/<key>/` holding `answer.json` (the full JSON projection, its guide as the first field),
+`summary.txt` and `details.txt` ([ADR-0110](../adr/0110-every-mcp-answer-is-also-written-as-a-folder-of-files-an-agent-can-query.md)),
+so an agent can query the parts it needs with `jq` or `python`. The files are a delivery artifact ye-ast never reads
+back. Summary and details text end, before the `result JSON:` line, with `answer files: <folder> — answer.json:
+<section> <count>, ...; summary.txt, details.txt`, and every mode carries the folder in `_meta` under
+`ye-ast/answer-files`, a response-level sibling of the fact like the live freshness signal, never one of its fields.
+An answer cut by a deadline, or holding `index-unavailable`, writes no folder; a key whose folder exists with other
+bytes writes one stderr line and changes no reply. `full`, `select` and `page` replies keep their fields.
+
 ## First index
 
 A clone starts with no index and no fixed layer, since `ye-ast init` keeps `.ye-ast/` and `.ye-ast-graph/` out of

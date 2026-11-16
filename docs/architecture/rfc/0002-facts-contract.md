@@ -218,6 +218,7 @@ names are settled in the first slice; the union, the cuts and the inputs are the
 8. **Snapshot and staleness.** A fact states the snapshot it reflects. An answer about a live tree that moved on after
    the last index is stale; the transport says so and names the changed paths ([RFC-0005](0005-transports.md)).
    Staleness is not a status: a stale fact can be `complete` for the state it reflects.
+   The folder of answer files an MCP reply names ([ADR-0110](../adr/0110-every-mcp-answer-is-also-written-as-a-folder-of-files-an-agent-can-query.md)) is a response-level sibling in the same way, never a field of the fact; an answer rule 3 excludes is not written to it.
 9. **Confidence.** Graph-derived evidence carries the path confidence defined in
    [RFC-0003](0003-codegraph-integration.md).
 
