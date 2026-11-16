@@ -7,6 +7,7 @@ import { selectEvidence, type EvidenceSelection, type EvidenceSource, type Evide
 import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSourceIdentity, encodeCursor, selectionDigest, type CursorV1 } from "./evidence-cursor.ts";
 import { renderEvidenceSelection, type EvidencePage } from "./render-evidence.ts";
 import { recoveryReference } from "./presentation-guidance.ts";
+import { keyTraceLinks, keyWorkspaceImpactLinks, keyWorkspaceLinks, withKeyedValue } from "./link-keys.ts";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
@@ -425,15 +426,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
       case "callers":
         return source.branch === "local"
           ? respond(source, source.read, true, renderImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "local", fact }))
-          : respond(source, source.read, false, renderWorkspaceImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "workspace", fact }));
+          : respond(source, withKeyedValue(source.read, keyWorkspaceImpactLinks), false, renderWorkspaceImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "workspace", fact }));
       case "importers":
         return respond(source, source.read, true, renderImporters, mode, controls, cursor, selectionFailure, answerBytes);
       case "outline":
         return respond(source, source.read, true, renderOutline, mode, controls, cursor, selectionFailure, answerBytes);
       case "trace":
-        return respond(source, source.read, true, renderTrace, mode, controls, cursor, selectionFailure, answerBytes);
+        return respond(source, withKeyedValue(source.read, keyTraceLinks), true, renderTrace, mode, controls, cursor, selectionFailure, answerBytes);
       case "workspace":
-        return respond(source, source.read, false, renderWorkspace, mode, controls, cursor, selectionFailure, answerBytes);
+        return respond(source, withKeyedValue(source.read, keyWorkspaceLinks), false, renderWorkspace, mode, controls, cursor, selectionFailure, answerBytes);
       case "decisions":
         return respond(source, source.read, false, renderDecisions, mode, controls, cursor, selectionFailure, answerBytes);
       case "contract_consequences":

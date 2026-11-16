@@ -2587,6 +2587,30 @@ test("a workspace link into a handler serving a changed contract operation says 
   await session.close();
 });
 
+test("a workspace link is named by its answer-local key in the text, the full JSON, the reach and a link selection, never by the id that spells its ends", async () => {
+  const fact = workspaceImpactFact();
+  if (fact.status === "unknown") throw new Error("unknown");
+  const [first] = fact.value.links;
+  const spelled = JSON.stringify([first!.link.from.repo, first!.link.from.file, first!.link.from.line, first!.link.from.symbol, first!.link.to.repo, first!.link.to.handler.symbol]);
+  const second = { ...first!, link: { ...first!.link, id: "second-id", from: { ...first!.link.from, line: 8 } }, reach: [spelled, "second-id", "an-id-no-link-holds"] };
+  const value = { ...fact.value, links: [{ ...first!, link: { ...first!.link, id: spelled }, reach: [spelled] }, second] };
+  const replay = { version: 1 as const, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha" as const, sha: "a".repeat(40) }] };
+  const answer = async () => ({ ok: true as const, value: { fact: { ...fact, value }, workspaceReplay: replay } });
+  const { session } = await setup({ workspaceOfChange: answer, workspaceCallers: answer });
+  try {
+    const args = { base: "main", workspace: {} };
+    const details = textOf(await session.callTool("ye_ast_impact", { ...args, mode: "details" }));
+    assert.match(details, /\[linkId "1"\]/);
+    assert.match(details, /\[linkId "2"\]/);
+    assert.equal(details.includes(spelled), false);
+    const full = resultFields(await session.callTool("ye_ast_impact", { ...args, mode: "full" }));
+    assert.deepEqual(full.value.links.map((item: { link: { id: string } }) => item.link.id), ["1", "2"]);
+    assert.deepEqual(full.value.links.map((item: { reach: string[] }) => item.reach), [["1"], ["1", "2", "an-id-no-link-holds"]]);
+    const selected = resultFields(await session.callTool("ye_ast_impact", { ...args, mode: "full", select: { kind: "workspace-link-evidence", linkId: "2" }, page: { limit: 3 } }));
+    assert.deepEqual(selected.items.map((item: { linkId: string; link?: { id: string } }) => [item.linkId, item.link?.id]), [["1", "1"], ["2", "2"], ["an-id-no-link-holds", undefined]]);
+  } finally { await session.close(); }
+});
+
 test("the workspace parameter names its repositories by a nested path, accepts gateways, and refuses what it does not define", async () => {
   const { session, calls } = await setup();
   const tools = await session.listTools();
@@ -4179,10 +4203,10 @@ test("selected SDK responses bind all categories and modes to actual public sche
       {name:"ye_ast_impact",args:{base:"main"},select:{kind:"module-origins",owner:{kind:"local"},module:{file:"old",snapshot:"base"}},item:{originIndex:0,origin:{file:"old",change:"modified"}}},
       {name:"ye_ast_callers",args:{targets:[{file:"src/A.java",symbol:"A.f"}]},select:{kind:"handler-origins",owner:{kind:"local"},handler:h},item:{seedIndex:0,seed:values.seeds[0]}},
       {name:"ye_ast_impact",args:{base:"main"},select:{kind:"cut-places",owner:{kind:"fact"},cutIndex:0},item:{atIndex:1,place:"a"}},
-      {name:"ye_ast_impact",args:{base:"main",workspace:{}},select:{kind:"workspace-link-evidence",linkId:"link-1"},item:{position:0,linkId:"link-1",link:ws.value.links[0]!.link}},
+      {name:"ye_ast_impact",args:{base:"main",workspace:{}},select:{kind:"workspace-link-evidence",linkId:"1"},item:{position:0,linkId:"1",link:{...ws.value.links[0]!.link,id:"1"}}},
       {name:"ye_ast_callers",args:{targets:[{file:"src/A.java",symbol:"A.f"}],workspace:{}},select:{kind:"handler-origins",owner:{kind:"section",repo:"shop"},handler:h},item:{seedIndex:0,seed:values.seeds[0]}},
       {name:"ye_ast_impact",args:{base:"main",workspace:{}},select:{kind:"module-origins",owner:{kind:"section",repo:"shop"},module:{file:"old",snapshot:"base"}},item:{originIndex:0,origin:{file:"old",change:"modified"}}},
-      {name:"ye_ast_callers",args:{targets:[{file:"src/A.java",symbol:"A.f"}],workspace:{}},select:{kind:"workspace-link-evidence",linkId:"link-1"},item:{position:0,linkId:"link-1",link:ws.value.links[0]!.link}},
+      {name:"ye_ast_callers",args:{targets:[{file:"src/A.java",symbol:"A.f"}],workspace:{}},select:{kind:"workspace-link-evidence",linkId:"1"},item:{position:0,linkId:"1",link:{...ws.value.links[0]!.link,id:"1"}}},
     ];
     for (const c of cases) for (const mode of ["full","summary","details"]) {
       const tool = tools.find((t)=>t.name===c.name)!;
