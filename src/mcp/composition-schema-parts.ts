@@ -349,7 +349,7 @@ export const partSchema = z.discriminatedUnion("kind", [
   }),
   part("trace-root", { target: z.string(), steps: z.array(count) }),
   part("reading-range", { file: ids.file, start: count, end: count, steps: z.array(count) }),
-  part("outward-name", { origin: evidenceOrigin, name: z.string(), kindName: outwardKind, evidence: evidenceList, disposition: z.enum(["stated", "unserved"]) }),
+  part("outward-name", { origin: evidenceOrigin, name: z.string(), kindName: outwardKind, evidence: evidenceList, disposition: z.enum(["stated", "unserved", "undecided-base"]) }),
   part("name-candidate", { context: ids.read, name: z.string(), repo: z.string(), basis: candidateBasis, evidence: evidenceList }),
   part("call-site", {
     site: z.strictObject({

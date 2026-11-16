@@ -641,13 +641,15 @@ function workspace(b: Builder, root: ReadContext, fact: Fact<PublicWorkspaceValu
     const evidence = candidate.evidence.map((item, j) => b.repositoryEvidence(item, root.id, `${at}/evidence/${j}`, false));
     b.part({ kind: "name-candidate", context: root.id, name: candidate.name, repo: candidate.repo, basis: candidate.basis, evidence }, root.id, [at]);
   });
-  value.unserved.forEach((name, index) => {
-    const at = `/value/unserved/${index}`;
+  const outwardNames = (field: "unserved" | "undecidedBase", disposition: "unserved" | "undecided-base") => (value[field] ?? []).forEach((name, index) => {
+    const at = `/value/${field}/${index}`;
     const evidence = name.evidence.map((item, j) => b.repositoryEvidence(item, root.id, `${at}/evidence/${j}`, false));
     const repos = [...new Set(name.evidence.map((item) => item.repo))];
     const origin: EvidenceOrigin = repos.length === 1 ? b.placeOf(repos[0]!, root.id).origin : { kind: "query-context", read: root.id };
-    b.part({ kind: "outward-name", origin, name: name.name, kindName: name.kind, evidence, disposition: "unserved" }, root.id, [at]);
+    b.part({ kind: "outward-name", origin, name: name.name, kindName: name.kind, evidence, disposition }, root.id, [at]);
   });
+  outwardNames("unserved", "unserved");
+  outwardNames("undecidedBase", "undecided-base");
   linkParts(b, root, value.links, value.unlinked, value.internalLinks);
   return sorted;
 }

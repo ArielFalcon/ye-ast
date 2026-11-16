@@ -637,6 +637,15 @@ test("a link to a removed route without a recorded merge base keeps a coordinate
   assert.deepEqual(t.file(t.anchor(handler).file).origin, { kind: "query-context", read: t.set.sources[0]!.rootRead });
 });
 
+test("a workspace name written only after an undecided base keeps its own disposition in a composition", () => {
+  const value = { ...workspaceValue(), undecidedBase: [{ name: "geo", kind: "path-prefix" as const, evidence: [{ repo: "web", path: "src/address.api.ts", line: 26 }] }] };
+  const t = new Tables(normalizeSource(sourceFixture("workspace", { value }), digest));
+  const [geo] = t.list("/value/undecidedBase", "outward-name");
+  assert.equal(geo?.name, "geo");
+  assert.equal(geo?.disposition, "undecided-base");
+  assert.deepEqual(t.list("/value/unserved", "outward-name").map((name) => name.name), ["billing.example", "ghost.example"]);
+});
+
 test("workspace names keep stated and unserved dispositions and resolve repository evidence by its own repo", () => {
   const set = normalizeSource(sourceFixture("workspace"), digest);
   const t = new Tables(set);

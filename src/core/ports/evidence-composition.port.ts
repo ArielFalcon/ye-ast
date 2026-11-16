@@ -255,7 +255,7 @@ export type PartPayload =
     }
   | { kind: "trace-root"; target: string; steps: readonly number[] }
   | { kind: "reading-range"; file: FileId; start: number; end: number; steps: readonly number[] }
-  | { kind: "outward-name"; origin: EvidenceOrigin; name: string; kindName: OutwardKind; evidence: readonly EvidenceId[]; disposition: "stated" | "unserved" }
+  | { kind: "outward-name"; origin: EvidenceOrigin; name: string; kindName: OutwardKind; evidence: readonly EvidenceId[]; disposition: "stated" | "unserved" | "undecided-base" }
   | { kind: "name-candidate"; context: ReadId; name: string; repo: string; basis: NameCandidate["basis"]; evidence: readonly EvidenceId[] }
   | { kind: "call-site"; site: CallSiteData; disposition: "matched" | "unmatched" | "external" }
   /** `repo` names the repository where the owner is no repository section (a decision set). */
