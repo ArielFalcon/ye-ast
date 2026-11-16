@@ -14,7 +14,8 @@ import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapte
 import { composeOutput } from "../mcp/composition-schema.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
 import type { ComposeFull, ComposeReceipt, RepeatRequest } from "../mcp/composition-contract.ts";
-import type { AnchorId, CompositionGraph, EntityId, FileId, PartKind, PartOf } from "../core/ports/evidence-composition.port.ts";
+import type { AnchorId, CompositionGraph, EntityId, FileId, PartKind, PartOf, QueryFamily } from "../core/ports/evidence-composition.port.ts";
+import { expandFull } from "../mcp/full-projection.testing.ts";
 
 const COMPOSE_OUTPUT = composeOutput(createEvidenceComposition(createSha256Digest()));
 
@@ -84,9 +85,9 @@ const available = (requests: readonly RepeatRequest[]): ComposeQuery[] =>
     return (request as Extract<RepeatRequest, { status: "available" }>).query;
   });
 /** A fact as the CLI prints it: the structured content of an original tool without presentation metadata. */
-function originalFact(result: ToolResult): Record<string, any> {
+function originalFact(result: ToolResult, family: QueryFamily): Record<string, any> {
   assert.notEqual(result.isError, true, JSON.stringify(result).slice(0, 2000));
-  const { text: _text, mode, recovery, repositoryRoots, ...fact } = resultFields(result);
+  const { text: _text, mode, recovery, repositoryRoots, ...fact } = expandFull(family, resultFields(result));
   return { ...fact, recovery };
 }
 
@@ -171,7 +172,7 @@ test("stdio discovers ten operations and composes all seven families with the fa
   assert.equal(full.verification.status, "available");
   assert.equal(graph.sources.length, 7);
   const originals = new Map<string, Record<string, any>>();
-  for (const query of fixture.queries) originals.set(query.name, originalFact(await stdio.call(query.name, { ...query.arguments, mode: "full" })));
+  for (const query of fixture.queries) originals.set(query.name, originalFact(await stdio.call(query.name, { ...query.arguments, mode: "full" }), query.name.replace("ye_ast_", "") as QueryFamily));
 
   // Every source answers at the snapshot its original reports, and its request is the original recovery or the query.
   for (const source of graph.sources) {

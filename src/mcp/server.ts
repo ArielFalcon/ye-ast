@@ -7,6 +7,7 @@ import { selectEvidence, type EvidenceSelection, type EvidenceSource, type Evide
 import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSourceIdentity, encodeCursor, selectionDigest, type CursorV1 } from "./evidence-cursor.ts";
 import { renderEvidenceSelection, type EvidencePage } from "./render-evidence.ts";
 import { recoveryReference } from "./presentation-guidance.ts";
+import { projectFull } from "./full-projection.ts";
 import { keyTraceLinks, keyWorkspaceImpactLinks, keyWorkspaceLinks, withKeyedValue } from "./link-keys.ts";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -143,17 +144,20 @@ const receipt = z.discriminatedUnion("status", [
   z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot }),
   z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string() }),
 ]);
-const factOf = (value: z.ZodType) => z.discriminatedUnion("status", [
-  z.looseObject({ ...baseFact, status: z.literal("complete"), value }),
-  z.looseObject({ ...baseFact, status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
-  z.looseObject({ ...baseFact, status: z.literal("unknown"), reason: z.string() })
+/** A nested fact states only what differs from its answer (ADR-0109 decision 2); a missing part is the answer's. */
+const nestedBase = { ...baseFact, schema: baseFact.schema.optional(), snapshot: snapshot.optional(), producer: baseFact.producer.optional(), inputs: z.looseObject({}).optional() };
+const nestedFactOf = (value: z.ZodType) => z.discriminatedUnion("status", [
+  z.looseObject({ ...nestedBase, status: z.literal("complete"), value }),
+  z.looseObject({ ...nestedBase, status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
+  z.looseObject({ ...nestedBase, status: z.literal("unknown"), reason: z.string() })
     .refine((fact) => !("value" in fact))
     .meta({ not: { required: ["value"] } }),
 ]);
-const readProvenance = z.discriminatedUnion("status", [
-  z.looseObject({ ...baseFact, status: z.enum(["complete", "partial"]) }),
-  z.looseObject({ ...baseFact, status: z.literal("unknown"), reason: z.string() }),
+const nestedProvenance = z.discriminatedUnion("status", [
+  z.looseObject({ ...nestedBase, status: z.enum(["complete", "partial"]) }),
+  z.looseObject({ ...nestedBase, status: z.literal("unknown"), reason: z.string() }),
 ]);
+const sameAsHandler = z.strictObject({ sameAs: z.literal("handler") });
 const strings = z.array(z.string());
 const position = z.looseObject({ file: z.string(), symbol: z.string(), line: z.number() });
 const handler = z.looseObject({ path: z.string(), symbol: z.string(), line: z.number() });
@@ -214,8 +218,8 @@ const workspaceImpact = z.looseObject({
   workspace: workspaceIdentity,
   repositorySnapshots: snapshots,
   trigger: z.looseObject({ repo: z.string() }),
-  sections: z.record(z.string(), factOf(z.looseObject({
-    reads: z.array(z.looseObject({ kind: z.string(), fact: readProvenance })),
+  sections: z.record(z.string(), nestedFactOf(z.looseObject({
+    reads: z.array(z.looseObject({ kind: z.string(), fact: nestedProvenance })),
     impact: impact.optional(),
     callSites: z.array(callSite),
     unmatched: z.array(callSite),
@@ -240,7 +244,7 @@ const outwardName = z.looseObject({ name: z.string(), kind: z.string(), evidence
 const repoOutwardName = z.looseObject({ name: z.string(), kind: z.string(), evidence: z.array(repositoryEvidence) });
 const candidate = z.looseObject({ name: z.string(), repo: z.string(), basis: z.string(), evidence: z.array(repositoryEvidence) });
 const decision = z.looseObject({
-  id: z.string(),
+  id: z.string().optional(),
   kind: z.string(),
   subject: z.string(),
   evidence: z.array(repositoryEvidence),
@@ -252,8 +256,9 @@ const entrypoint = z.discriminatedUnion("kind", [
   z.looseObject({ kind: z.enum(["http-route", "listener", "job", "callback"]), name: z.string(), handler }),
   z.looseObject({ kind: z.literal("ui-route"), name: z.string(), component: z.union([handler, z.literal("unknown")]) }),
 ]);
+const findingEvidence = z.union([z.array(evidence), sameAsHandler]);
 const finding = z.discriminatedUnion("status", [
-  z.looseObject({ status: z.literal("complete"), value: entrypoint, evidence: z.array(evidence) }),
+  z.looseObject({ status: z.literal("complete"), value: entrypoint, evidence: findingEvidence }),
   z.looseObject({ status: z.literal("unknown"), reason: z.string(), evidence: z.array(evidence) })
     .refine((item) => !("value" in item))
     .meta({ not: { required: ["value"] } }),
@@ -273,8 +278,9 @@ const outlineImport = z.looseObject({
   target: moduleTarget,
   bindings: z.array(z.looseObject({ imported: z.string(), declaration: outlineDeclaration.extend({ file: z.string() }).optional() })),
 });
+const consequenceFinding = z.looseObject({ status: z.enum(["complete", "unknown"]), evidence: z.array(repositoryEvidence) });
 const shapes = {
-  entrypoints: z.looseObject({ entrypoints: factOf(z.array(finding)) }),
+  entrypoints: z.looseObject({ entrypoints: nestedFactOf(z.array(finding)) }),
   impact: z.union([impact, workspaceImpact]),
   importers: z.looseObject({
     files: z.array(z.looseObject({ file: z.string(), importers: strings, users: strings, unresolvedNamers: strings, places: z.array(z.looseObject({ file: z.string(), line: z.number() })).optional() })),
@@ -303,7 +309,7 @@ const shapes = {
     links: z.array(workspaceLink), internalLinks: z.array(workspaceLink), unlinked: z.array(unlinkedCallSite),
     workspace: workspaceIdentity,
     repositorySnapshots: snapshots,
-    sections: z.record(z.string(), factOf(z.looseObject({
+    sections: z.record(z.string(), nestedFactOf(z.looseObject({
       names: z.array(outwardName),
       unresolved: z.array(unresolvedCallSite),
     inherited: z.array(inheritedGapSchema).optional(),
@@ -317,13 +323,14 @@ const shapes = {
     answers: z.array(z.looseObject({
       hypothesis: z.looseObject({ method: z.string(), path: z.string(), target: z.string(), property: z.string() }),
       status: z.enum(["complete", "partial", "unknown"]),
-      findings: z.array(z.looseObject({ status: z.enum(["complete", "unknown"]), evidence: z.array(repositoryEvidence) })).optional(),
+      findings: z.array(z.union([consequenceFinding, z.strictObject({ sharedFinding: z.int().min(0) })])).optional(),
     })),
+    sharedFindings: z.array(consequenceFinding).optional(),
     change: z.looseObject({
       base: z.string(),
       head: z.string(),
       snapshots: z.looseObject({ base: z.string(), head: z.string() }),
-      derivation: factOf(z.looseObject({
+      derivation: nestedFactOf(z.looseObject({
         differences: z.array(z.looseObject({ rule: z.string(), level: z.enum(["breaking", "review", "compatible"]), target: z.string(), operation: z.string(), delta: z.string(), places: z.looseObject({ base: repositoryEvidence.optional(), head: repositoryEvidence.optional() }) })),
         frontiers: z.array(z.looseObject({ kind: z.string(), reason: z.string(), evidence: z.array(repositoryEvidence) })),
       })),
@@ -525,8 +532,18 @@ export function createMcpServer(deps: McpDeps): McpServer {
     }
     if (mode === "full") {
       const location = "full result: the result JSON";
+      const projection = projectFull(tool, {
+        ...fact,
+        mode,
+        ...(recovery === undefined ? {} : { recovery }),
+        ...(repositoryRoots === undefined ? {} : { repositoryRoots }),
+        ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
+        ...(stale === undefined ? {} : { live: stale }),
+        ...(workspaceLive === undefined ? {} : { workspaceLive }),
+      });
       const guidance = [
         ...recoveryText,
+        ...projection.guidance,
         ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
         ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
         ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
@@ -538,15 +555,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           render(fact, mode, renderContext),
           ...guidance,
         ].filter((part) => part !== "").join("\n"),
-        {
-          ...fact,
-          mode,
-          ...(recovery === undefined ? {} : { recovery }),
-          ...(repositoryRoots === undefined ? {} : { repositoryRoots }),
-          ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
-          ...(stale === undefined ? {} : { live: stale }),
-          ...(workspaceLive === undefined ? {} : { workspaceLive }),
-        },
+        projection.fields,
         () => [render(fact, "summary", renderContext), location, ...guidance].filter((part) => part !== "").join("\n"),
       );
     }

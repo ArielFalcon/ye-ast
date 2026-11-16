@@ -32,6 +32,7 @@ import type { EvidenceComposition } from "../core/ports/evidence-composition.por
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
 import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
 import { partSchema } from "./composition-schema-parts.ts";
+import { expandFull } from "./full-projection.testing.ts";
 
 function resultFields(result: any): any {
   const text = result.content?.[0]?.text;
@@ -809,7 +810,7 @@ test("workspace repository roots accompany the answer without entering the fact"
       const { repositories: _repositories, ...value } = fact.value;
       const { mode: deliveredMode, repositoryRoots: _roots, ...delivered } = fieldsOf(structured);
       assert.equal(deliveredMode, "full");
-      assert.deepEqual(delivered, { ...fact, value });
+      assert.deepEqual(expandFull("workspace", delivered), { ...fact, value });
     } else {
       assert.deepEqual(fieldsOf(structured), envelopeOf(fact, mode));
       assert.equal("repositoryRoots" in structured, false);
@@ -2466,7 +2467,7 @@ test("an answer the working tree moved past opens its text with a stale line and
   assert.deepEqual(withoutRecovery(resultFields(details)), envelopeOf(mapFact(), "details"));
   const full = await session.callTool("ye_ast_entrypoints", { live: true, mode: "full" });
   assert.deepEqual(full._meta, { "ye-ast/live": notice });
-  assert.deepEqual(withoutRecovery(resultFields(full)), { ...mapFact(), mode: "full", live: notice, repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
+  assert.deepEqual(expandFull("entrypoints", withoutRecovery(resultFields(full))), { ...mapFact(), mode: "full", live: notice, repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.match(textOf(full), /live\.stateId and live\.changed/);
   await session.close();
 });
