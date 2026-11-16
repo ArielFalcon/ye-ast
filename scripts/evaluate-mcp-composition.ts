@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "../src/core/domain/shared/canonical-json.ts";
 import { createMcpServer, RESULT_JSON_LABEL, type McpDeps } from "../src/mcp/server.ts";
 import { openSession, type Session, type ToolResult } from "../src/mcp/test-session.testing.ts";
+import { fullReply, memoryAnswerFiles } from "../src/mcp/answer-files.testing.ts";
 import { repositoryCatalog } from "../src/mcp/repository-targeting.ts";
 import { runComposition } from "../src/mcp/compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "../src/mcp/render-composition.ts";
@@ -138,9 +139,11 @@ export function selectQueries(selectors: readonly QuerySelector[], fixture: Fixt
 export type ConditionName = "baseline" | "composed";
 export const CONDITIONS: readonly ConditionName[] = ["baseline", "composed"];
 export const REPLICATES = 2;
+/** The two modes a caller asks for, and the full answer the harness reads back from `answer.json`. */
+type MeasuredMode = ResponseMode | "full";
 /** Prompts carry full responses: citations need the result JSON ids (composed) or pointers (baseline). */
-export const PROMPT_MODE: ResponseMode = "full";
-const MODES: readonly ResponseMode[] = ["summary", "details", "full"];
+export const PROMPT_MODE: MeasuredMode = "full";
+const MODES: readonly MeasuredMode[] = ["summary", "details", "full"];
 
 type Fixture = FixtureView & { deps: McpDeps; root: string; coldDeps(): McpDeps; dispose(): void };
 /** A response as its presentation text and its result fields; a fault has only text. */
@@ -193,7 +196,10 @@ export async function prepare(outDir: string, options: PrepareOptions = {}): Pro
   };
   let session: Session | undefined;
   try {
-    session = await openSession(createMcpServer(fixture.deps));
+    const answers = memoryAnswerFiles();
+    const call = async (s: Session, name: string, args: { mode: MeasuredMode }): Promise<ToolResult> =>
+      args.mode === "full" ? fullReply(await s.callTool(name, { ...args, mode: "summary" }), answers.folders) : s.callTool(name, args);
+    session = await openSession(createMcpServer({ ...fixture.deps, answerFiles: answers.files }));
     const tools = await session.listTools();
     const surface: ComposeSurface = tools.some(tool => tool.name === "ye_ast_compose") ? "public-tool" : "coordinator-direct";
     const catalogue = {
@@ -219,17 +225,17 @@ export async function prepare(outDir: string, options: PrepareOptions = {}): Pro
         },
       };
     };
-    const callOriginal = (s: Session, query: ComposeQuery, mode: ResponseMode) => {
+    const callOriginal = (s: Session, query: ComposeQuery, mode: MeasuredMode) => {
       const args = { ...query.arguments, ...(query.expect === undefined ? {} : { expect: query.expect }), mode };
-      return { args, call: async (): Promise<Channels> => channelsOf(await s.callTool(query.name, args)) };
+      return { args, call: async (): Promise<Channels> => channelsOf(await call(s, query.name, args)) };
     };
-    const callCompose = (s: Session, deps: McpDeps, queries: readonly ComposeQuery[], mode: ResponseMode) => {
+    const callCompose = (s: Session, deps: McpDeps, queries: readonly ComposeQuery[], mode: MeasuredMode) => {
       const args = { queries, mode };
       return {
         args,
         call: async (): Promise<Channels> => {
-          if (surface === "public-tool") return channelsOf(await s.callTool("ye_ast_compose", args));
-          const run = await runComposition(args, { deps, catalog: repositoryCatalog(deps.repository, deps.repositories) });
+          if (surface === "public-tool") return channelsOf(await call(s, "ye_ast_compose", args));
+          const run = await runComposition({ queries, mode: mode === "full" ? "summary" : mode }, { deps, catalog: repositoryCatalog(deps.repository, deps.repositories) });
           if (!run.ok) return { text: run.fault.detail, structured: undefined, isError: true };
           return { text: renderComposition(run.value, mode), structured: mode === "full" ? composeFull(run.value) : composeReceipt(run.value, mode), isError: false };
         },
@@ -297,7 +303,7 @@ export async function prepare(outDir: string, options: PrepareOptions = {}): Pro
           applicable: proposition.applicableWhen === undefined ? true : counts === undefined ? "unknown" : counts[proposition.applicableWhen.counter] >= proposition.applicableWhen.min,
         })),
       };
-      const sum = (calls: unknown[], mode: ResponseMode, key: keyof CallMeasure) => (calls as (CallMeasure & { mode: ResponseMode })[]).filter(c => c.mode === mode).reduce((total, c) => total + (c[key] as number), 0);
+      const sum = (calls: unknown[], mode: MeasuredMode, key: keyof CallMeasure) => (calls as (CallMeasure & { mode: MeasuredMode })[]).filter(c => c.mode === mode).reduce((total, c) => total + (c[key] as number), 0);
       measurements.push({
         caseId: entry.id,
         overlap: entry.overlap,

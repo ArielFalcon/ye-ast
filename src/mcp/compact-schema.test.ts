@@ -162,17 +162,17 @@ test("input guide publishes declared cross-field constraints on a plain root and
 });
 
 const INPUT_CONSTRAINTS: Record<string, string> = {
-  ye_ast_entrypoints: "647121c8746689c115833d07093b35e3ee032ce95596f365484863efdfc18bc8",
-  ye_ast_impact: "7601ad96e1faaa380f4044a109084617aa065febcda66d05dd5e82da812a4c8f",
-  ye_ast_callers: "1d7c1cfc647c78345184762e1b21c0c89030fa033bdacb8da39916ab4d9f9105",
-  ye_ast_importers: "741b3552da816fb505b0233d6dc90540a1718fd4d970edd245d7b14524914305",
-  ye_ast_outline: "600966e8b24d42a72ff5fe5046cc5901c7d59f170c7fc5c4d07135100753660e",
-  ye_ast_trace: "257aaa769d7f5f00ea6cdb85a7b061ded977729f53ca6eea07eb6040c3c7ad8e",
-  ye_ast_workspace: "f31e2522a431e74895b431d8c65884b2d1288cd57f70afd9ac0433dd00699fbc",
-  ye_ast_decisions: "f31e2522a431e74895b431d8c65884b2d1288cd57f70afd9ac0433dd00699fbc",
-  ye_ast_contract_consequences: "ee5aff31b88d53260cbfb40c45e0c5578f6339d77202518fe4a955897b80baea",
+  ye_ast_entrypoints: "33b34a7a826fa2f3ca5f38b84d2cdfb76509a2f0344c38f8ad2999565bef612f",
+  ye_ast_impact: "1c5ae9d4dec7b34997df66c2b8ccbc419bd66df019b11582ae5718820f88c66e",
+  ye_ast_callers: "535000aeb939ffdc853abd55c652c5b51b8d5b91d20966ac4924073ee7b17c61",
+  ye_ast_importers: "402e01b8be549c7dfb26e6ad5aa77fef1883c372654ea058c304eed3c926a492",
+  ye_ast_outline: "c5b6184ef1743939d7c30e868ec8eb12c15b721213c06db553b6ae1ffa8f301b",
+  ye_ast_trace: "5f4c78c25f795246dac4c44a9963578deab7a7112784f8ee00cd975353ca272c",
+  ye_ast_workspace: "2da810ef72c54bb1573eb0d5b0a4906bc4dffd34af1609d7234547a12b472856",
+  ye_ast_decisions: "2da810ef72c54bb1573eb0d5b0a4906bc4dffd34af1609d7234547a12b472856",
+  ye_ast_contract_consequences: "cff0d21b8985ec9dc116d336f33142358e21f2fcb890010ac695627095077eaf",
 };
-const COMPOSE_CONSTRAINTS = "cf30af8869c71cce82a747af796866e15b0fdc365b5abf678ef8c5a63831fc06";
+const COMPOSE_CONSTRAINTS = "70f447d146774397f06a740ba550fa8c12569a9469f8f9f1f43ecaaa1367244f";
 function canonicalConstraints(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalConstraints);
   if (value === null || typeof value !== "object") return value;

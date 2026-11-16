@@ -3,7 +3,7 @@ import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./p
 import type { ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind, cutCounts, cutReasonText, cutRowLabel, completeText, undecidedOf, type StatusContext } from "./presentation-context.ts";
-import type { ResponseMode, RenderContext } from "./presentation.ts";
+import type { RenderDetail, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
@@ -112,7 +112,7 @@ function groupedPlaces(places: readonly string[]): string[] {
 }
 
 /** One cut row; details name why the cut exists. */
-function cutLine(cut: Cut, detail: ResponseMode): string {
+function cutLine(cut: Cut, detail: RenderDetail): string {
   return `  ${detail === "details" ? cutRowLabel(cut) : cut.kind} at ${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`;
 }
 
@@ -196,13 +196,13 @@ function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
 
 /** Every cut once: those that name a single path grouped per kind with every path listed, the rest one line each. Under
  * a summary, an unresolved link keeps only what it could not settle to. */
-function dependencyCutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
+function dependencyCutLines(cuts: readonly Cut[], detail: RenderDetail): string[] {
   return cuts.flatMap((cut) => cut.dependency === undefined ? [] : [`  ${dependencyDiagnosticText(cut.dependency)}${detail === "details" ? ` at ${cutPlaces(cut)}` : ""}`]);
 }
 
 /** Cuts, grouped once by kind; a single-path kind puts all its paths on one line (many skipped files are one fact). In
  * a summary, an unresolved link keeps only what it could not settle to. */
-function cutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
+function cutLines(cuts: readonly Cut[], detail: RenderDetail): string[] {
   const dependencies = dependencyCutLines(cuts, detail);
   if (dependencies.length > 0) return [...dependencies, ...cutLines(cuts.filter((cut) => cut.dependency === undefined), detail)];
   return cutsByKind(cuts).flatMap(([kind, ofKind]) => {
@@ -223,7 +223,7 @@ function cutContextLine(owner: CutOwner, cutIndex: number, context?: RenderConte
     : `  Recorded cut context: ${JSON.stringify({ kind: "cut-places", owner })}; each row supplies its cutIndex.`;
 }
 
-function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: ResponseMode, context?: RenderContext): string[] {
+function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: RenderDetail, context?: RenderContext): string[] {
   if (cuts.length === 0) return [];
   const shown = new Set<Cut["kind"]>();
   const rows = cuts.flatMap((cut, cutIndex) => {
@@ -242,7 +242,7 @@ function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: ResponseM
   return size(shared) < size(literal) ? shared : literal;
 }
 
-function cutsBlock(cuts: readonly Cut[], detail: ResponseMode = "summary"): string[] {
+function cutsBlock(cuts: readonly Cut[], detail: RenderDetail = "summary"): string[] {
   return cuts.length === 0 ? [] : [CUTS, ...cutLines(cuts, detail)];
 }
 
@@ -300,7 +300,7 @@ function entrypointContext(entrypoint: Entrypoint): string[] {
   const base = entrypoint.basePath;
   if (base.status === "unknown") return [`    base path unknown (${base.reason})${base.evidence.length === 0 ? "" : `: ${base.evidence.map(evidenceText).join(", ")}`}`];
   const profiles = Object.keys(base.value.profiles).length;
-  return [`    base path defaults: ${JSON.stringify(base.value.default)}${profiles === 0 ? "" : `; ${profiles} profile-specific settings, ${categoryRecovery({ full: "includes them" })}`}`];
+  return [`    base path defaults: ${JSON.stringify(base.value.default)}${profiles === 0 ? "" : `; ${profiles} profile-specific settings, ${categoryRecovery({ answerJson: "includes them" })}`}`];
 }
 
 /** What an unknown item stands for, as "for <kind> <symbol> (raised by <name>)", leaving out the parts it does not state. */
@@ -332,7 +332,7 @@ function unknownFindingRun(items: readonly Finding<Entrypoint>[], start: number)
 }
 
 /** Repeated extraction evidence can support several findings without repeating the same coordinates. */
-function entrypointItems(items: readonly Finding<Entrypoint>[], detail: ResponseMode, sharedBase?: ReadonlyMap<string, number>, sharedEvidence?: ReadonlyMap<string, number>): string[] {
+function entrypointItems(items: readonly Finding<Entrypoint>[], detail: RenderDetail, sharedBase?: ReadonlyMap<string, number>, sharedEvidence?: ReadonlyMap<string, number>): string[] {
   if (sharedBase === undefined || sharedEvidence === undefined) {
     const evidence = shareExactContext(items.flatMap((item) => item.status === "unknown" && item.evidence.length !== 1 ? item.evidence : []), (place) => place);
     const evidenceCounts = new Map<number, number>();
@@ -441,7 +441,7 @@ function entrypointItems(items: readonly Finding<Entrypoint>[], detail: Response
   return list(lines);
 }
 
-export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseMode = "summary", context?: RenderContext): string {
+export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") {
     if (fact.status === "unknown") return "Inspect reason and evidence; the result has no value.";
     const section = fact.value.entrypoints;
@@ -462,7 +462,7 @@ export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseM
     const guardCount = uiRoutes.reduce((total, route) => total + route.guards.length, 0);
     const guardedRoutes = uiRoutes.filter((route) => route.guards.length > 0).length;
     const guardNote = uiRoutes.length === 0 ? [] : [
-      ...(detail === "summary" && guardCount > 0 ? [`  ${guardCount} own guards across ${guardedRoutes} routes; ${categoryRecovery({ full: "locates them at value.entrypoints.value[].value.guards after matching route kind and name." })}`] : []),
+      ...(detail === "summary" && guardCount > 0 ? [`  ${guardCount} own guards across ${guardedRoutes} routes; ${categoryRecovery({ answerJson: "locates them at value.entrypoints.value[].value.guards after matching route kind and name." })}`] : []),
       "  Only each route's own guards are recorded; inherited or runtime restrictions are not established here.",
     ];
     lines.push(`  findings: ${known} known, ${unknown} unknown`, ...(unknownBases === 0 ? [] : [`  base path unknown for ${unknownBases} ${unknownBases === 1 ? "route" : "routes"}`]), ...guardNote, ...entrypointItems(section.value, detail));
@@ -486,7 +486,7 @@ function changedContractText(change: Omit<ChangedContract, "handlers">): string 
 }
 
 /** A compact row names its handler as `path:line[-endLine] symbol`; a literal row carries its complete selector. */
-function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: ImpactOwner, compact: boolean, sharedOrigin = false): string[] {
+function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: RenderDetail, owner: ImpactOwner, compact: boolean, sharedOrigin = false): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const facts = [`depth ${reached.depth}`];
   if (reached.confidence < 1) facts.push(`confidence ${reached.confidence}`);
@@ -506,7 +506,7 @@ function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail
 /** The symbol is the last word of a compact handler coordinate, so a symbol with whitespace keeps literal selectors. */
 const HANDLER_ROW = "-> <path>:<line>[-<endLine>] <symbol>";
 
-function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner, selectable = true): string[] {
+function reachedGroup(value: ImpactValue, detail: RenderDetail, owner: ImpactOwner, selectable = true): string[] {
   const support = shareExactContext(value.entrypoints, (entrypoint) => ({
     indices: entrypoint.seeds,
     support: entrypoint.seeds.map((index) => value.seeds[index]),
@@ -701,11 +701,11 @@ function areaLines(value: ImpactValue, areas: readonly ChangeArea[], symbols: re
     `impacted symbols (${symbols.length}) by changed area (a symbol counts under the area its first recorded path starts in; indented areas break down the one above):`,
     ...areas.flatMap((area) => row(area, 1)),
     ...(unrecorded === 0 ? [] : [`  origin not recorded: ${plural(unrecorded, "symbol")}`]),
-    `  repeat with changed ["<area>"] to walk one area's seeds; mode "details" shows investigation evidence; ${categoryRecovery({ full: "includes every symbol" })}`,
+    `  repeat with changed ["<area>"] to walk one area's seeds; mode "details" shows investigation evidence; ${categoryRecovery({ answerJson: "includes every symbol" })}`,
   ];
 }
 
-function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
+function impactedSymbols(value: ImpactValue, detail: RenderDetail): string[] {
   const symbols = consequenceSymbols(value);
   const header = `impacted symbols (${symbols.length}):`;
   const none = dependentLevel(symbols) === Infinity ? ["  no dependent recorded"] : [];
@@ -716,16 +716,16 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
     const direct = symbols.filter((symbol) => symbol.depth === 1);
     const deeper = [...Map.groupBy(symbols.filter((symbol) => symbol.depth !== 1), (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
     const counts = deeper.length === 0 ? "" : `by depth: ${deeper.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; `;
-    const counted = [header, ...groupedLines(direct), `  ${counts}mode "details" shows investigation evidence; ${categoryRecovery({ full: "includes every symbol" })}`, ...none];
+    const counted = [header, ...groupedLines(direct), `  ${counts}mode "details" shows investigation evidence; ${categoryRecovery({ answerJson: "includes every symbol" })}`, ...none];
     return size(counted) <= size(literal) ? counted : literal;
   }
   const shown = investigationSymbols(value);
   const omitted = symbols.length - shown.length;
   const level = dependentLevel(shown);
   const view = level === Infinity
-    ? `  evidence view: no dependent recorded${omitted === 0 ? "" : `; ${plural(omitted, "containment or dispatch row")}`}; ${categoryRecovery({ full: "includes all" })}`
+    ? `  evidence view: no dependent recorded${omitted === 0 ? "" : `; ${plural(omitted, "containment or dispatch row")}`}; ${categoryRecovery({ answerJson: "includes all" })}`
     : `  evidence view: nearest dependent depth ${level} and reached handlers`;
-  const evidence = [header, view, ...groupedLines(shown), ...substitutionLegend(shown), ...(level === Infinity || omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; ${categoryRecovery({ full: "includes all" })}`])];
+  const evidence = [header, view, ...groupedLines(shown), ...substitutionLegend(shown), ...(level === Infinity || omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; ${categoryRecovery({ answerJson: "includes all" })}`])];
   return omitted > 0 && size(evidence) <= size(literal) ? evidence : literal;
 }
 
@@ -733,7 +733,7 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
  * The change the answer read: a count per disposition, then a row for each path the walk did not simply start from (a
  * test, a path outside the declared scope, a settled or deleted one, a removal that declared a name); details lists all.
  */
-function changedPathLines(paths: readonly ChangedPath[], detail: ResponseMode): string[] {
+function changedPathLines(paths: readonly ChangedPath[], detail: RenderDetail): string[] {
   const counts = [...Map.groupBy(paths, ({ disposition }) => disposition)].map(([disposition, group]) => `${group.length} ${disposition}`);
   const shown = detail === "details" ? paths : paths.filter(({ disposition, deleted, removed }) => (disposition !== "walked" && disposition !== "not-read") || deleted === true || removed !== undefined);
   return [
@@ -744,7 +744,7 @@ function changedPathLines(paths: readonly ChangedPath[], detail: ResponseMode): 
 }
 
 /** What an impact answer says about its walk, without its header or its cuts. */
-function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner, context?: RenderContext, narrowable = true): string[] {
+function impactBody(value: ImpactValue, detail: RenderDetail, owner: ImpactOwner, context?: RenderContext, narrowable = true): string[] {
   const selectable = (selection: EvidenceSelection) => context === undefined || canSelect(context, selection, owner.kind === "section");
   const handler = value.entrypoints[0]?.handler;
   const module = value.modules?.modules[0];
@@ -757,10 +757,10 @@ function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner
     ...(narrowable && value.testDependents !== undefined ? ["test dependents: excluded; JVM and TypeScript test files are never listed as dependents (ye_ast_importers lists them)"] : []),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) ? [value.entrypoints.length === 1
-      ? `  ${categoryRecovery({ full: "has all origins." })}`
-      : `  Origin counts and examples below: ${categoryRecovery({ full: "includes all" })} recorded associations for this owner.`] : []),
+      ? `  ${categoryRecovery({ answerJson: "has all origins." })}`
+      : `  Origin counts and examples below: ${categoryRecovery({ answerJson: "includes all" })} recorded associations for this owner.`] : []),
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? ["  A recorded origin is an association, not a complete call chain."] : []),
-    ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; ${categoryRecovery({ full: "includes all" })}`] : []),
+    ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; ${categoryRecovery({ answerJson: "includes all" })}`] : []),
     ...reachedGroup(value, detail, owner, handler === undefined || selectable({ kind: "handler-origins", owner, handler: { path: handler.path, symbol: handler.symbol, line: handler.line } })),
     ...consequenceLines(value, detail, owner, module === undefined || selectable({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } }), narrowable),
   ];
@@ -770,7 +770,7 @@ function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner
  * Impacted symbols and module dependencies. A change's summary that the request can narrow with `changed` counts both
  * per changed area instead, when that is not longer.
  */
-function consequenceLines(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner, selectable: boolean, narrowable: boolean): string[] {
+function consequenceLines(value: ImpactValue, detail: RenderDetail, owner: ImpactOwner, selectable: boolean, narrowable: boolean): string[] {
   const listed = [...impactedSymbols(value, detail), ...(value.modules === undefined ? [] : moduleLines(value.modules, detail, owner, selectable))];
   const symbols = consequenceSymbols(value);
   const areas = detail === "summary" && narrowable && value.mergeBase !== undefined && symbols.length > 0
@@ -781,10 +781,10 @@ function consequenceLines(value: ImpactValue, detail: ResponseMode, owner: Impac
   return size(counted) <= size(listed) ? counted : listed;
 }
 
-function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: ImpactOwner, selectable = true, countedByArea = false): string[] {
+function moduleLines(value: ModuleImpactValue, detail: RenderDetail, owner: ImpactOwner, selectable = true, countedByArea = false): string[] {
   const originListing = value.origins.map((origin) => `  ${origin.file} (${origin.change})`);
   const counts = [...Map.groupBy(value.origins, (origin) => origin.change)].map(([change, group]) => `${group.length} ${change}`).join(", ");
-  const originCount = [`  ${value.origins.length} origins (${counts}); ${categoryRecovery({ full: "includes every origin" })}`];
+  const originCount = [`  ${value.origins.length} origins (${counts}); ${categoryRecovery({ answerJson: "includes every origin" })}`];
   const origins = value.origins.length > 0 && size(originCount) < size(originListing) ? originCount : originListing;
   const nearest = value.modules.reduce((depth, module) => module.depth > 0 ? Math.min(depth, module.depth) : depth, Infinity);
   const shown = value.modules.filter((module) => module.depth === 0 || module.depth === nearest);
@@ -814,7 +814,7 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
   };
   const listing = grouped(value.modules);
   const omitted = value.modules.length - shown.length;
-  const omittedNote = omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`];
+  const omittedNote = omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; answer.json includes their recorded evidence.`];
   const nearestListing = [...grouped(shown), ...omittedNote];
   const useNearest = omitted > 0 && size(nearestListing) < size(listing);
   const selectedModules = useNearest ? shown : value.modules;
@@ -828,7 +828,7 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
   if (countedByArea) {
     return [
       `module origins (${value.origins.length}):`, ...origins,
-      `module dependencies (${value.modules.length}, not symbol or entrypoint impact): counted per changed area above; ${categoryRecovery({ full: "includes every module" })}`,
+      `module dependencies (${value.modules.length}, not symbol or entrypoint impact): counted per changed area above; ${categoryRecovery({ answerJson: "includes every module" })}`,
       `module expansions: ${value.cost.expansionsUsed}`,
     ];
   }
@@ -836,14 +836,14 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
     `module origins (${value.origins.length}):`, ...origins,
     `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`,
     ...(value.modules.some((module) => module.origins.length > (detail === "details" ? 1 : 0)) ? [selectedModules.length === 1
-      ? `  ${categoryRecovery({ full: "has all origins." })}`
-      : `  Origin counts/examples below belong to each module; ${categoryRecovery({ full: "includes all" })} recorded associations for this owner.`] : []), ...(size(lookupShared) < size(selected) ? lookupShared : selected),
+      ? `  ${categoryRecovery({ answerJson: "has all origins." })}`
+      : `  Origin counts/examples below belong to each module; ${categoryRecovery({ answerJson: "includes all" })} recorded associations for this owner.`] : []), ...(size(lookupShared) < size(selected) ? lookupShared : selected),
     `module expansions: ${value.cost.expansionsUsed}`,
   ];
 }
 
 /** The ranges and hunks a query set aside (ADR-0043 decisions 3 and 5): one summary count per basis, or one line per entry. */
-function impactSettled(value: ImpactValue, detail: ResponseMode): string[] {
+function impactSettled(value: ImpactValue, detail: RenderDetail): string[] {
   const settled = value.settled ?? [];
   if (settled.length === 0) return [];
   if (detail === "summary") {
@@ -858,7 +858,7 @@ function impactSettled(value: ImpactValue, detail: ResponseMode): string[] {
   });
 }
 
-function impactSeeds(value: ImpactValue, detail: ResponseMode): string[] {
+function impactSeeds(value: ImpactValue, detail: RenderDetail): string[] {
   if (detail === "summary") return [`seeds (${value.seeds.length}):`, ...groupedSeeds(value.seeds)];
   const dependencies = new Set(investigationSymbols(value).flatMap((symbol) => symbol.via === undefined ? [] : [`${symbol.via.file}\0${symbol.via.symbol}`]));
   const shown: Seed[] = [];
@@ -900,7 +900,7 @@ function seedSummary(seeds: readonly Seed[]): string[] {
   const bases = [...Map.groupBy(rest, (seed) => seed.basis)].toSorted(([a], [b]) => compareText(a, b)).map(([basis, group]) => `${basis} ${group.length}`);
   return [
     ...seedListing(requested),
-    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); ${categoryRecovery({ full: "includes every seed" })}`]),
+    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); ${categoryRecovery({ answerJson: "includes every seed" })}`]),
   ];
 }
 
@@ -909,7 +909,7 @@ function groupedSeeds(seeds: readonly Seed[]): string[] {
   return seeds.filter((seed) => seed.basis !== "requested").length <= LISTED_ITEMS ? seedListing(seeds) : seedSummary(seeds);
 }
 
-function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
+function impactCuts(cuts: readonly Cut[], detail: RenderDetail): string[] {
   if (cuts.length === 0) return [];
   const dependencies = dependencyCutLines(cuts, detail);
   if (dependencies.length > 0) return [CUTS, ...dependencies, ...impactCuts(cuts.filter((cut) => cut.dependency === undefined), detail).slice(1)];
@@ -917,7 +917,7 @@ function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
   if (detail === "summary") return [CUTS, ...groups.map(([kind, group]) => {
     const limits = [...new Set(group.flatMap((cut) => cut.limit === undefined ? [] : [cut.limit]))].toSorted((a, b) => a - b);
     return `  ${kind} (${group.length})${limits.length === 0 ? "" : `; ${limits.length === 1 ? "limit" : "limits"} ${limits.join(", ")}`}`;
-  }), '  cuts mark missing coverage; mode "details" locates their recorded anchors and mode: "full" lists every place; neither extends coverage'];
+  }), '  cuts mark missing coverage; mode "details" locates their recorded anchors and answer.json lists every place; neither extends coverage'];
   return [CUTS, ...groups.flatMap(([kind, group]) => {
     if (kind !== "unresolved-link") return cutLines(group, "details");
     const byFile = Map.groupBy(group, (cut) => (cut.at[0] ?? "").split("::")[0] ?? "");
@@ -937,7 +937,7 @@ function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
 
 /** Details list every place of the other kinds; only unresolved-link reference places are counted instead. */
 function referencePlacesNote(cuts: readonly Cut[]): string[] {
-  return cuts.some((cut) => cut.kind === "unresolved-link") ? ['  reference places counted; mode: "full" includes every place'] : [];
+  return cuts.some((cut) => cut.kind === "unresolved-link") ? ['  reference places counted; answer.json includes every place'] : [];
 }
 
 /**
@@ -955,11 +955,11 @@ function walkBoundRemedies(cuts: readonly Cut[], walk: WalkBounds | undefined): 
 }
 
 /** Bind narrative and selection coordinates once, retaining original cut order and per-cut metadata. */
-function impactCutBlock(cuts: readonly Cut[], detail: ResponseMode, owner: CutOwner, context?: RenderContext, walk?: WalkBounds): string[] {
+function impactCutBlock(cuts: readonly Cut[], detail: RenderDetail, owner: CutOwner, context?: RenderContext, walk?: WalkBounds): string[] {
   return [...impactCutLayout(cuts, detail, owner, context), ...walkBoundRemedies(cuts, walk)];
 }
 
-function impactCutLayout(cuts: readonly Cut[], detail: ResponseMode, owner: CutOwner, context?: RenderContext): string[] {
+function impactCutLayout(cuts: readonly Cut[], detail: RenderDetail, owner: CutOwner, context?: RenderContext): string[] {
   const literal = [...impactCuts(cuts, detail), ...cutCoordinates(cuts, owner, detail, context)];
   if (detail !== "details" || cuts.length === 0) return literal;
   const shared = [CUTS, cutContextLine(owner, 0, context)];
@@ -1018,16 +1018,16 @@ function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.me
   const coordinate = reuseLocalBase && Buffer.byteLength("the base recorded below") < Buffer.byteLength(literalCoordinate) ? "the base recorded below" : literalCoordinate;
   const literal = modules.map((module) => `  Base module: repo ${JSON.stringify(repo)}, ${coordinate}, file ${JSON.stringify(module.file)}; use outline only at that recorded merge base.`);
   const shared = [`  Base modules: repo ${JSON.stringify(repo)}, ${coordinate}; inspect ${path}.modules.modules[] for each base module's file; use outline only at that recorded merge base.`];
-  const listed = [`  Base modules (${modules.length}): repo ${JSON.stringify(repo)}, ${coordinate}; each base module's file is in the module dependencies above where listed, and mode: "full" lists every one; use outline only at that recorded merge base.`];
+  const listed = [`  Base modules (${modules.length}): repo ${JSON.stringify(repo)}, ${coordinate}; each base module's file is in the module dependencies above where listed, and answer.json lists every one; use outline only at that recorded merge base.`];
   const bounded = full ? shared : listed;
   return size(bounded) < size(literal) ? bounded : literal;
 }
 
 /**
  * An unknown impact has no value, and no mode adds the missing analysis. The text header already prints its reason and
- * evidence; only full mode carries them as result fields, so only full mode points there.
+ * evidence; only the guide of `answer.json` points at their result fields.
  */
-function unknownImpactGuide(fact: Fact<unknown> & { status: "unknown" }, detail: ResponseMode, context?: RenderContext): string[] {
+function unknownImpactGuide(fact: Fact<unknown> & { status: "unknown" }, detail: RenderDetail, context?: RenderContext): string[] {
   const narrower = context?.tool === "callers" ? "fewer targets" : "a narrower changed selection";
   return [
     "Analysis is unknown, not a verified absence of impact; no mode adds the missing analysis.",
@@ -1049,7 +1049,7 @@ function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "part
   ];
 }
 
-function localQueryCoordinates(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, context: RenderContext | undefined, mode: ResponseMode): string[] {
+function localQueryCoordinates(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, context: RenderContext | undefined, mode: RenderDetail): string[] {
   return [
     ...baseModuleGuides(fact.value, fact.snapshot.repo, fact.value.mergeBase, "value", fact.snapshot.kind === "sha" && fact.value.mergeBase !== undefined && context?.tool !== "callers", mode === "full"),
     impactSnapshotGuide(fact.snapshot, fact.value.mergeBase, context, fact.value.modules?.modules.some((module) => module.snapshot === "base")),
@@ -1082,7 +1082,7 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
   ];
 }
 
-function workspaceOwnerGuide(mode: ResponseMode): string {
+function workspaceOwnerGuide(mode: RenderDetail): string {
   const snapshots = mode === "full" ? "value.repositorySnapshots" : "the repositories line";
   return `  For callers or outline on head evidence choose the recorded owner with repo and its own snapshot from ${snapshots}; base-side modules use their walk's recorded merge base. An undeclared owner needs a host registration update or an instance bound to that clone. A symbol name may match several declarations.`;
 }
@@ -1096,7 +1096,7 @@ function impactHasRecords(value: ImpactValue): boolean {
   return value.seeds.length + value.symbols.length + value.entrypoints.length + (value.modules?.modules.length ?? 0) + (value.changedEntrypoints?.length ?? 0) > 0;
 }
 
-function workspaceBaseModuleGuides(value: WorkspaceImpactValue, mode: ResponseMode): string[] {
+function workspaceBaseModuleGuides(value: WorkspaceImpactValue, mode: RenderDetail): string[] {
   return Object.entries(value.sections).flatMap(([repo, section]) => section.status === "unknown" || section.value.impact === undefined ? [] : baseModuleGuides(section.value.impact, repo, section.value.impact.mergeBase ?? (repo === value.trigger.repo ? value.trigger.mergeBase : undefined), `value.sections[${JSON.stringify(repo)}].value.impact`, false, mode === "full"));
 }
 
@@ -1106,14 +1106,14 @@ function workspaceSnapshotGuide(fact: Fact<WorkspaceImpactValue> & { status: "co
 }
 
 /**
- * Summary and details carry no fact JSON, so JSON paths belong to full mode, and each omitted category already names
- * the mode that recovers it; the text keeps only the coordinates a follow-up query needs.
+ * Summary and details carry no fact JSON, so JSON paths belong to the guide of `answer.json`, and each omitted category
+ * already names what recovers it; the text keeps only the coordinates a follow-up query needs.
  */
 function textModeGuide(coordinates: readonly string[]): string[] {
   return ["Investigation guide:", ...coordinates];
 }
 
-export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "summary", context?: RenderContext): string {
+export function renderImpact(fact: Fact<ImpactValue>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : localImpactGuide(fact, context)).join("\n");
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
@@ -1124,10 +1124,10 @@ export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "su
 
 /** Importer-specific wording; the shared policy supplies general mode conventions. */
 function importerPathRecovery(): string {
-  return '    File paths omitted; use mode: "details" to list them, or mode: "full" for the original structured fact.';
+  return '    File paths omitted; use mode: "details" to list them, or answer.json for the original structured fact.';
 }
 
-function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: string[]; omitted: boolean; listed: boolean } {
+function importerFiles(entry: ImportedFile, detail: RenderDetail): { lines: string[]; omitted: boolean; listed: boolean } {
   const modules: readonly (readonly [string, readonly string[] | undefined])[] = [
     ["importers", entry.importers], ["reexporters", entry.reexporters], ["dynamic importers", entry.dynamicImporters], ["type importers", entry.typeImporters],
   ];
@@ -1156,7 +1156,7 @@ function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: stri
   return { lines: [heading, ...(omitted ? counts : listing), ...notes], omitted, listed: !omitted && memberships.size > 0 };
 }
 
-export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode = "summary"): string {
+export function renderImporters(fact: Fact<ImportersValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; inspect importers and users for recorded links and unresolvedNamers for unconfirmed matches. Inspect places for recorded relationship lines; related files without a place have no recorded line. Inspect cuts for partial results.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
@@ -1226,7 +1226,7 @@ function bindingText({ local, imported, typeOnly, declaration }: OutlineBinding,
   return `${typeOnly ? "type " : ""}${name}${place}`;
 }
 
-export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "summary"): string {
+export function renderOutline(fact: Fact<OutlineValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : fact.value.focus !== undefined ? "Select value.focus: one entry per matched declaration with file, selector, path when its binding is proven (a dotted declaration path), ancestors outermost first (kind, name, line, endLine), declaration (kind, name, line, endLine and children of the same shape), omitted, how many of the file's declarations were left out, and uses, what the declaration's own body uses outside itself in order of first use: a declaration (file, name, kind, line, endLine), a module (package) or a global, each with relations (edge kinds) and at (use lines and columns); a member on a local value is not a use. Imports are not listed. Inspect value.unheld for unavailable files and cuts when partial: an unresolved-link cut at[0] \"file::path\" names the focused declaration, then each place \"file:line spelling\" of a use no binding proves." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports list each module statement or runtime reference with line, endLine, specifier, kind, form, typeOnly, target (repository file, external module, or unresolved with reason) and bindings (local, imported, typeOnly, and the declaration reached with file, name, kind, line, endLine when proven). Inspect value.unheld for unavailable files and cuts when partial: an unresolved-link cut names a binding whose declaration is not proven.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
@@ -1262,7 +1262,7 @@ function traceRootLines(value: TraceValue): string[] {
 }
 
 /** The ranges to open: one per line in details; in summary one line per file, files in their first appearance. */
-function readingPlanLines(value: TraceValue, detail: ResponseMode): string[] {
+function readingPlanLines(value: TraceValue, detail: RenderDetail): string[] {
   const { ranges, lines } = value.readingPlan;
   const span = (start: number, end: number): string => (end === start ? `${start}` : `${start}-${end}`);
   const listed = detail === "details"
@@ -1317,7 +1317,7 @@ function tracePlaceOf(cut: Cut): { why: string; file: string; line: string; spel
 
 type TracePlace = ReturnType<typeof tracePlaceOf>;
 
-const TRACE_PLACES_OMITTED = '    Call places omitted; mode "details" lists them, mode "full" gives the structured fact.';
+const TRACE_PLACES_OMITTED = '    Call places omitted; mode "details" lists them, answer.json gives the structured fact.';
 
 /** The name a call ends with, so calls of one member through different receivers share a line. */
 function trailingName(spelling: string): string {
@@ -1390,7 +1390,7 @@ function traceCallGroupLines(places: readonly TracePlace[]): string[] {
 }
 
 /** The calls no rule settled: grouped by call in summary, then the modes that list each place; one per line with every candidate in details. */
-function traceCutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
+function traceCutLines(cuts: readonly Cut[], detail: RenderDetail): string[] {
   const unresolved = cuts.filter((cut) => cut.kind === "unresolved-link").map(tracePlaceOf);
   const lines = cutLines(cuts.filter((cut) => cut.kind !== "unresolved-link"), detail);
   if (unresolved.length === 0) return lines.length === 0 ? [] : [CUTS, ...lines];
@@ -1400,7 +1400,7 @@ function traceCutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
   return [CUTS, ...lines, `  unresolved-link (${unresolved.length} ${unresolved.length === 1 ? "call" : "calls"}):`, ...places, ...(followable ? [JDK_NEXT_STEP] : [])];
 }
 
-export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summary"): string {
+export function renderTrace(fact: Fact<TraceValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : TRACE_FULL_GUIDE;
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
@@ -1439,13 +1439,13 @@ function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, 
 }
 
 /** Whether an answer prints each link of a list, numbered, rather than counting them: the rule a candidate pointing into the list shares. */
-const linksListed = (links: readonly Link[], detail: ResponseMode): boolean => detail === "details" || links.length <= LISTED_ITEMS;
+const linksListed = (links: readonly Link[], detail: RenderDetail): boolean => detail === "details" || links.length <= LISTED_ITEMS;
 
 /**
  * The links of a workspace map: each one in details, and in summary up to the listed bound, beyond which the count per
  * caller, callee and transport (RFC-0017); the call sites the join reached without a link are always listed.
  */
-function linkMapLines(links: readonly TraceLinked<Link>[], unlinked: readonly TraceLinked<UnlinkedCallSite>[], detail: ResponseMode, label = "links between the repositories read"): string[] {
+function linkMapLines(links: readonly TraceLinked<Link>[], unlinked: readonly TraceLinked<UnlinkedCallSite>[], detail: RenderDetail, label = "links between the repositories read"): string[] {
   const literal = links.map((link, index) => linkLine(link, index + 1));
   const pairs = new Map<string, number>();
   for (const { from, to, transport } of links) pairs.set(`${from.repo} -> ${to.repo} ${transport}`, (pairs.get(`${from.repo} -> ${to.repo} ${transport}`) ?? 0) + 1);
@@ -1472,7 +1472,7 @@ function unrelatedText({ unmatched, external, unresolved }: NonNullable<RepoImpa
   return [["unmatched", unmatched], ["external", external], ["unresolved", unresolved]].filter(([, count]) => count !== 0).map(([label, count]) => `${count} ${label}`).join(", ");
 }
 
-function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: ResponseMode, bound: string, context?: RenderContext): string[] {
+function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: RenderDetail, bound: string, context?: RenderContext): string[] {
   if (section.status === "unknown") return [`  ${repo}: unknown (${section.reason})`];
   const { value } = section;
   return [
@@ -1488,7 +1488,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Respon
   ];
 }
 
-export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: ResponseMode = "summary", context?: RenderContext): string {
+export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : [...workspaceImpactGuide(fact, context), REQUEST_SITE_GUIDE]).join("\n");
   const lines = headerLines(fact, fact.status === "unknown" ? {} : { unknownSection: unknownSectionIn(fact.value.sections) });
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
@@ -1506,7 +1506,7 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   lines.push(`links across and inside repositories (${value.links.length}):${value.links.some(({ reach }) => reach.length > 0) ? " reach lists link numbers nearest to the change first" : ""}`, ...value.links.map((link) => impactedLinkLine(link, linkIndexes)));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo, context))));
   const unserved = counted("no local repository serves", value.workspace.unserved);
-  const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): ${categoryRecovery({ full: "includes all" })} names`;
+  const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): ${categoryRecovery({ answerJson: "includes all" })} names`;
   lines.push(value.workspace.unserved.length > 0 && size([unservedSummary]) <= size([unserved]) ? unservedSummary : unserved);
   if (value.workspace.unserved.length > 0 || stale.length > 0) lines.push(DECISIONS_HINT);
   lines.push("walk origins:", ...value.workspace.repos.flatMap((repo) => {
@@ -1624,7 +1624,7 @@ function groupedByRank<T, K extends string>(items: readonly T[], keyOf: (item: T
 
 /** The names of one repository under their kind: a summary lists a dependency only when a repository given serves it,
  * and counts the rest, since a dependency is what the repository consumes and not what it calls. */
-function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: ResponseMode, indexed: false | "complete" | "locations" = false): string[] {
+function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: RenderDetail, indexed: false | "complete" | "locations" = false): string[] {
   const entries = names.map((name, index) => ({ name, index }));
   const ranked = groupedByRank(entries, (entry) => entry.name.kind, OUTWARD_ORDER);
   const firstWriting = new Map<string, OutwardName>();
@@ -1644,8 +1644,8 @@ function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, 
     const counted = ofKind.length - listed.length;
     const head =
       counted === 0 ? `    ${kind} (${ofKind.length}):`
-      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`
-      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`;
+      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; ${categoryRecovery({ details: "lists them", answerJson: "retains all recorded names" })}`
+      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; ${categoryRecovery({ details: "lists them", answerJson: "retains all recorded names" })}`;
     const line = ({ name, index }: { name: OutwardName; index: number }): string => `      - ${indexed ? `[${index}] ` : ""}${name.name} (${indexed === "complete" ? JSON.stringify(name.evidence) : placesOrSame(name)})`;
     const listing = [head, ...ofKind.map(line)];
     const summarized = [head, ...listed.map(line)];
@@ -1654,14 +1654,14 @@ function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, 
 }
 
 /** The names no repository given serves: a summary lists what the repository could call and counts the coordinates it consumes. */
-function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: ResponseMode): string[] {
+function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: RenderDetail): string[] {
   if (unserved.length === 0) return ["no local repository serves (0):", NONE];
   const listed = detail === "details" ? unserved : unserved.filter((name) => name.kind !== "dependency");
   const counted = unserved.length - listed.length;
   const head = `no local repository serves (${unserved.length}):`;
   const listing = [head, ...unserved.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   if (counted === 0) return listing;
-  const summarized = [`${head} ${counted} dependency counted; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
+  const summarized = [`${head} ${counted} dependency counted; ${categoryRecovery({ details: "lists them", answerJson: "retains all recorded names" })}`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   return size(summarized) <= size(listing) ? summarized : listing;
 }
 
@@ -1669,7 +1669,7 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
  * The names written only after an undecided base that no repository serves (ADR-0107): not unserved and no decision, so a
  * summary counts each name's places, details lists them, and names that share the same places say them once.
  */
-function undecidedBaseBlock(names: readonly RepositoryOutwardName[] | undefined, detail: ResponseMode): string[] {
+function undecidedBaseBlock(names: readonly RepositoryOutwardName[] | undefined, detail: RenderDetail): string[] {
   if (names === undefined || names.length === 0) return [];
   const head = `names whose base is undecided (${names.length}): written only after an undecided base, so none is called unserved and none is a decision${detail === "details" ? "" : `; ${categoryRecovery({ details: "lists the places" })}`}`;
   const firstWriting = new Map<number, RepositoryOutwardName>();
@@ -1690,7 +1690,7 @@ function undecidedBaseBlock(names: readonly RepositoryOutwardName[] | undefined,
 const REQUEST_SITE_GUIDE = "A wrapper request is sited at the call supplying its parameters; the stated request names the path written in code. For a suffix-only match, inspect the gateway prefix or server configuration that would declare the full path.";
 
 /** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
-function unresolvedFiles(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
+function unresolvedFiles(sites: readonly UnresolvedCallSite[], detail: RenderDetail): string[] {
   const sorted = [...sites].toSorted(compareUnresolvedCallSites);
   return [...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [
     `    ${path}`,
@@ -1701,7 +1701,7 @@ function unresolvedFiles(sites: readonly UnresolvedCallSite[], detail: ResponseM
   ]);
 }
 
-function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
+function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: RenderDetail): string[] {
   return [...unresolvedFiles(sites, detail), ...(sites.length === 0 ? [] : [`    ${REQUEST_SITE_GUIDE}`])];
 }
 
@@ -1737,7 +1737,7 @@ function unresolvedByCause(sections: readonly (readonly [string, readonly Unreso
           const listed = inCause.filter((entry) => entry.repo === repo && shown(entry));
           return listed.length === 0 ? [] : [`    ${repo}:`, ...unresolvedFiles(listed.map(({ site }) => site), "summary").map((line) => `  ${line}`)];
         }),
-        ...(omitted.length === 0 ? [] : [`    not listed: ${omitted.length} in ${files.size} ${files.size === 1 ? "file" : "files"} (${perRepo.map(([repo, count]) => `${repo} ${count}`).join(", ")}); ${categoryRecovery({ details: "lists them", full: "retains all recorded sites" })}`]),
+        ...(omitted.length === 0 ? [] : [`    not listed: ${omitted.length} in ${files.size} ${files.size === 1 ? "file" : "files"} (${perRepo.map(([repo, count]) => `${repo} ${count}`).join(", ")}); ${categoryRecovery({ details: "lists them", answerJson: "retains all recorded sites" })}`]),
       ];
     }),
     `  ${REQUEST_SITE_GUIDE}`,
@@ -1750,14 +1750,14 @@ function throughLibraries(sites: readonly UnresolvedCallSite[]): string {
   return counts.length === 0 ? "" : `; through ${counts.map(([via, group]) => `${via} ${group.length}`).join(", ")}`;
 }
 
-function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string {
+function unresolvedLine(site: UnresolvedCallSite, detail: RenderDetail): string {
   const through = site.via === undefined ? "" : `, through ${site.via}`;
   const stated = site.stated === undefined ? "" : ` ${statedRequestText(site)}`;
   const evidence = detail === "details" ? ` <- ${site.evidence.map(evidenceText).join(", ")}${site.diagnostic?.unreadableSources === undefined ? "" : `; unreadable libraries: ${site.diagnostic.unreadableSources.map(evidenceText).join(", ")}`}${site.diagnostic?.alternatives === undefined ? "" : `; chosen at run time, declared alternatives: ${site.diagnostic.alternatives.join(", ")}`}` : ` ${unresolvedLabel(site)}`;
   return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through}${site.deferred === true ? ", deferred" : ""})${stated}${evidence}`;
 }
 
-function inheritedCallerLine({ path, line, endLine, symbol, stated, deferred, through }: InheritedCaller, transport: InheritedGap["transport"], detail: ResponseMode): string {
+function inheritedCallerLine({ path, line, endLine, symbol, stated, deferred, through }: InheritedCaller, transport: InheritedGap["transport"], detail: RenderDetail): string {
   const request = stated === undefined ? "" : ` ${statedRequestText({ stated, transport, symbol })}`;
   const via = detail === "details" && through !== undefined ? ` <- ${through.map(evidenceText).join(", ")}` : "";
   return `${placeText(path, line, endLine)} ${symbol}${deferred === true ? " (deferred)" : ""}${request}${via}`;
@@ -1772,13 +1772,13 @@ function undecidedCount({ unresolved, inherited }: { unresolved: readonly Unreso
  * The gaps a repository's calls inherit, one entry per cause: the cause once, how many calls and files inherit it, and
  * the calls themselves in details (a summary lists those that state a request).
  */
-function inheritedBlock(gaps: readonly InheritedGap[], detail: ResponseMode, indent: string): string[] {
+function inheritedBlock(gaps: readonly InheritedGap[], detail: RenderDetail, indent: string): string[] {
   if (gaps.length === 0) return [];
   const calls = inheritedCallerCount(gaps);
   return [`${indent}inherited gaps (${calls} ${calls === 1 ? "call" : "calls"} from ${gaps.length} ${gaps.length === 1 ? "cause" : "causes"}):`, ...inheritedCauses(gaps, detail, `${indent}  `)];
 }
 
-function inheritedCauses(gaps: readonly InheritedGap[], detail: ResponseMode, indent: string): string[] {
+function inheritedCauses(gaps: readonly InheritedGap[], detail: RenderDetail, indent: string): string[] {
   const unlisted = detail !== "details" && gaps.some(({ callers }) => callers.some(({ stated }) => stated === undefined));
   return [
     ...gaps.flatMap((gap) => {
@@ -1790,12 +1790,12 @@ function inheritedCauses(gaps: readonly InheritedGap[], detail: ResponseMode, in
         ...listed.map((caller) => `${indent}  ${inheritedCallerLine(caller, gap.transport, detail)}`),
       ];
     }),
-    ...(unlisted ? [`${indent}calls not listed; ${categoryRecovery({ details: "lists every call", full: "retains all recorded calls" })}`] : []),
+    ...(unlisted ? [`${indent}calls not listed; ${categoryRecovery({ details: "lists every call", answerJson: "retains all recorded calls" })}`] : []),
   ];
 }
 
 /** The call sites no repository given decides, so the caller settles each one by reading its declaration, never the file. */
-function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: ResponseMode): string[] {
+function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: RenderDetail): string[] {
   const inherited = value.workspace.repos.flatMap((repo) => {
     const section = value.sections[repo];
     return section === undefined || section.status === "unknown" || section.value.inherited === undefined ? [] : [[repo, section.value.inherited] as const];
@@ -1820,7 +1820,7 @@ function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: Re
   return [...(size(grouped) < size(literal) ? grouped : literal), ...inheritedLines];
 }
 
-export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {
+export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.undecidedBase for the names written only after an undecided base, value.links for the links between repositories, value.internalLinks for those inside one repository and value.unlinked for the call sites without one. " + REQUEST_SITE_GUIDE;
   const lines = headerLines(fact, fact.status === "unknown" ? {} : {
     undecided: Object.values(fact.value.sections).reduce((total, section) => total + (section.status === "unknown" ? 0 : undecidedCount(section.value)), 0),
@@ -1936,7 +1936,7 @@ function dependencyGap(decision: Decision): boolean {
 }
 
 /** The gaps under their kind, the ones that block first: a summary counts the dependency coordinates a form cannot answer. */
-function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): string[] {
+function decisionsBlock(decisions: readonly Decision[], detail: RenderDetail): string[] {
   const groups = groupedByRank(decisions, (decision) => decision.kind, DECISION_ORDER);
   const literal = groups.flatMap(([kind, ofKind]) => {
     const listed = detail === "details" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
@@ -1982,7 +1982,7 @@ function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): s
   return size(compact) < size(literal) ? compact : literal;
 }
 
-export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode = "summary"): string {
+export function renderDecisions(fact: Fact<DecisionValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended; value.undecidedBase lists the names written only after an undecided base, which raise no decision. Match evidence repositories to value.repositories snapshots.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
@@ -1999,7 +1999,7 @@ export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode 
 const CONSEQUENCES_FULL_GUIDE = "Match value.answers by index (the order asked, or sorted by operation and property for a change) and check each answer's status, reason and cuts; findings[].value.chain and verdict.witness hold the chains and witnesses, and an unknown finding carries its reason and places. A change's value.change.derivation holds every classified difference (rule, level, operation, property, places) and the derivation frontiers; answers[].derivedFrom.rules names the rules a derived answer follows; value.repositorySnapshots names the snapshot of every repository read.";
 
 /** The counted text when it is no longer than listing what it counts, the listing otherwise; a tie keeps the count (RFC-0017 section 1). Details always lists. */
-function elided(counts: readonly string[], listing: readonly string[], detail: ResponseMode): string[] {
+function elided(counts: readonly string[], listing: readonly string[], detail: RenderDetail): string[] {
   return detail === "details" || size(listing) < size(counts) ? [...listing] : [...counts];
 }
 
@@ -2022,7 +2022,7 @@ const accessPathText = (path: string): string => (path === "" ? ROOT_PATH_TEXT :
 /** The places of a finding, the first ones listed and the rest counted with the mode that lists every one. */
 function findingPlaces(evidence: readonly RepositoryEvidence[]): string {
   const left = evidence.length - LISTED_ITEMS;
-  return `${evidence.slice(0, LISTED_ITEMS).map(repositoryEvidenceText).join(", ")}${left > 0 ? `, and ${left} more places (mode: "full" lists every one)` : ""}`;
+  return `${evidence.slice(0, LISTED_ITEMS).map(repositoryEvidenceText).join(", ")}${left > 0 ? `, and ${left} more places (answer.json lists every one)` : ""}`;
 }
 
 function findingLine(finding: ConsequenceFinding<UseConsequence | ProducerConsequence>): string {
@@ -2049,13 +2049,13 @@ function findingListed(finding: ConsequenceFinding<UseConsequence | ProducerCons
   return size([pointer]) < size([line]) ? pointer : line;
 }
 
-function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMode, seen: Map<string, string>): string[] {
+function answerLines(answer: HypothesisAnswer, index: number, detail: RenderDetail, seen: Map<string, string>): string[] {
   const head = `  ${index + 1}. ${hypothesisText(answer.hypothesis)}`;
   if (answer.status === "unknown") return [`${head}: unknown (${answer.reason}): ${answer.detail}`];
   const status = answer.status === "partial" ? `partial (cuts: ${cutCounts(answer.cuts)})` : completeText(undecidedOf(answer.findings));
   const open = `${head}: ${status}${answer.silent === undefined ? "" : `; ${answer.silent} silent uses`}`;
   const listing = [open, ...(answer.findings.length === 0 ? ["    (no findings)"] : answer.findings.map((finding, at) => findingListed(finding, `answer ${index + 1}, finding ${at + 1}`, seen)))];
-  const counts = [`${open}; ${answer.findings.length === 0 ? "no findings" : `${answer.findings.length} findings: ${countedBy(answer.findings.map(findingKind))}`}${answer.findings.length === 0 ? "" : `; ${categoryRecovery({ details: "lists each with its place", full: "retains the chains and witnesses" })}`}`];
+  const counts = [`${open}; ${answer.findings.length === 0 ? "no findings" : `${answer.findings.length} findings: ${countedBy(answer.findings.map(findingKind))}`}${answer.findings.length === 0 ? "" : `; ${categoryRecovery({ details: "lists each with its place", answerJson: "retains the chains and witnesses" })}`}`];
   return elided(counts, listing, detail);
 }
 
@@ -2070,7 +2070,7 @@ function differenceLine({ level, rule, operation, property, subject, base, head,
   return `    - ${level} ${rule} ${operation}${property ? ` ${property}` : ""}${about} at ${repositoryEvidenceText((places.head ?? places.base)!)}`;
 }
 
-function derivationLines(value: NonNullable<ConsequencesValue["change"]>, detail: ResponseMode): string[] {
+function derivationLines(value: NonNullable<ConsequencesValue["change"]>, detail: RenderDetail): string[] {
   const { derivation } = value;
   const lines = [`change: ${value.base} -> ${value.head} (commits ${value.snapshots.base} -> ${value.snapshots.head})`, "derivation:", ...statusLines(derivation, "  ")];
   if (derivation.status === "unknown") return lines;
@@ -2093,7 +2093,7 @@ function consequencesStatus(value: ConsequencesValue): StatusContext {
 }
 
 /** One composite answer: the hypotheses (or the change) of one workspace read, each with its verdicts and the places it could not follow. */
-export function renderContractConsequences(fact: Fact<ConsequencesValue>, detail: ResponseMode = "summary"): string {
+export function renderContractConsequences(fact: Fact<ConsequencesValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : CONSEQUENCES_FULL_GUIDE;
   const lines = headerLines(fact, fact.status === "unknown" ? {} : consequencesStatus(fact.value));
   if (fact.status === "unknown") return lines.join("\n");

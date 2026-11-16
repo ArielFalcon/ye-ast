@@ -1,4 +1,5 @@
 import { resultFields } from "../mcp/test-session.testing.ts";
+import { fullReplyFromDisk } from "../mcp/answer-files.testing.ts";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -132,9 +133,9 @@ test("workspace queries preserve real evidence across execution orders and coord
   const repos = [{ path: frontend, id: "shop-web", revision: member }];
   const gateways = [{ prefix: "shop-api", repo: "shop-service" }];
   const call = async (name: string, args: object): Promise<any> => {
-    const result = (await request("tools/call", { name: `ye_ast_${name}`, arguments: { ...args, mode: "full" } })).result as any;
+    const result = (await request("tools/call", { name: `ye_ast_${name}`, arguments: args })).result as any;
     assert.notEqual(result.isError, true, JSON.stringify(result));
-    return resultFields(result);
+    return resultFields(fullReplyFromDisk(result));
   };
   const ws = { revision: head, repos, gateways, offline: true };
   const workspace = () => call("workspace", ws);

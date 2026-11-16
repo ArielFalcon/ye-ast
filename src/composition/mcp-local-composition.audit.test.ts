@@ -9,6 +9,7 @@ import { createMcpServer } from '../mcp/server.ts';
 import { createEvidenceComposition } from '../core/application/composition/evidence-composition.ts';
 import { createSha256Digest } from '../core/adapters/crypto/sha256-digest.adapter.ts';
 import { openSession, resultFields } from '../mcp/test-session.testing.ts';
+import { answeredFromFiles, fullReply, memoryAnswerFiles } from '../mcp/answer-files.testing.ts';
 
 const everyDeclaration = (declarations: readonly any[]): any[] => declarations.flatMap((item) => [item, ...everyDeclaration(item.children ?? [])]);
 
@@ -41,7 +42,8 @@ class OrderController {
   git('commit', '-qm', 'change');
   const head = git('rev-parse', 'HEAD');
   const q = composeQueries({ scratchRoot: root, indexCache: join(root, 'index'), trustDirectory: join(root, 'trust'), cacheDirectory: join(root, 'cache') });
-  const session = await openSession(createMcpServer({ ...q, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), repository: { path: repo, repoId: 'shop' } }));
+  const answers = memoryAnswerFiles();
+  const session = answeredFromFiles(await openSession(createMcpServer({ ...q, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), repository: { path: repo, repoId: 'shop' }, answerFiles: answers.files })), (result) => fullReply(result, answers.folders));
   try {
     const requests: Record<string, object> = {
       entrypoints: { revision: head },

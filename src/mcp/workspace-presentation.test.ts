@@ -235,7 +235,7 @@ test("a summary lists the unresolved sites that show a request and counts the re
   const listed = block.split("\n").filter((line) => /^ {8}\d+ Symbol/.test(line));
   assert.deepEqual(listed.map((line) => line.trim().split(" ")[0]), ["8", "7", "9", "5"]);
   assert.match(block, /destination-undecidable \(4\):\n {4}alpha:\n {6}src\/linked\.ts/);
-  assert.match(block, /not listed: 1 in 1 file \(alpha 1\); mode "details" lists them; mode: "full" retains all recorded sites/);
+  assert.match(block, /not listed: 1 in 1 file \(alpha 1\); mode "details" lists them; answer\.json retains all recorded sites/);
   assert.match(block, /not listed: 12 in 2 files \(alpha 12\)/);
   assert.match(block, /not listed: 13 in 2 files \(alpha 12, beta 1\)/);
   assert.match(block, /unknown-extra \(1\):\n {2} {2}not listed: 1 in 1 file \(beta 1\)/);

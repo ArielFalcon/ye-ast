@@ -70,7 +70,7 @@ these files back: they are a delivery artifact, and the key is proven complete b
    signal (RFC-0002 rule 8): never a field of the fact, so the fact keeps its bytes. `answer.json` is compact JSON whose
    first field is `guide`, the text the `full` reply prints before its result JSON: the file documents itself, and no
    legend is a new artifact. `summary.txt` and `details.txt` are the text of those two modes.
-8. **`mode: "full"`, `select` and `page` are unchanged.** Their bytes and fields stay as ADR-0109 left them; only the
+8. **`mode: "full"`, `select` and `page` are unchanged.** *(`full` removed by [ADR-0113](0113-the-mcp-offers-no-full-mode-the-full-answer-is-the-answer-file.md), which supersedes this decision for it.)* Their bytes and fields stay as ADR-0109 left them; only the
    `_meta` sibling is added to a `full` reply, and a `select`/`page` reply and a composed answer write no folder. Removing
    `full` is decided later by the evaluation, once it shows agents read the files.
 9. **Retention has its own budget.** `answers/` is swept once per written answer, after the write, by the rule the live

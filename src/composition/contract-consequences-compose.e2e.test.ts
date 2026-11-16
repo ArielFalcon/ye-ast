@@ -14,6 +14,7 @@ import { createEvidenceComposition } from "../core/application/composition/evide
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { openSession, resultFields, type Session, type ToolResult } from "../mcp/test-session.testing.ts";
+import { fullReply, memoryAnswerFiles } from "../mcp/answer-files.testing.ts";
 import { composeOutput } from "../mcp/composition-schema.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
 import type { ComposeFull } from "../mcp/composition-contract.ts";
@@ -108,6 +109,7 @@ let trust: string;
 let api: Repository;
 let web: Repository;
 let deps: McpDeps;
+const answers = memoryAnswerFiles();
 let session: Session;
 
 function repository(id: string, files: Record<string, string>, change: Record<string, string> = {}): Repository {
@@ -137,7 +139,7 @@ before(async () => {
   const state = join(root, "state");
   mkdirSync(join(state, "scratch"), { recursive: true });
   const queries = composeQueries({ scratchRoot: join(state, "scratch"), indexCache: join(state, "index"), cacheDirectory: join(state, "cache"), trustDirectory: trust });
-  deps = { ...queries, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), repository: { path: api.root, repoId: api.id }, repositories: [{ path: web.root, repoId: web.id }] };
+  deps = { ...queries, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), repository: { path: api.root, repoId: api.id }, repositories: [{ path: web.root, repoId: web.id }], answerFiles: answers.files };
   session = await openSession(createMcpServer(deps));
 });
 
@@ -158,7 +160,7 @@ function composed(result: ToolResult): ComposeFull {
   assert.equal(COMPOSE_OUTPUT.safeParse(value).success, true);
   return value;
 }
-const compose = async (queries: ComposeQuery[]) => composed(await session.callTool("ye_ast_compose", { queries, mode: "full" }));
+const compose = async (queries: ComposeQuery[]) => composed(fullReply(await session.callTool("ye_ast_compose", { queries }), answers.folders));
 const parts = <K extends PartKind>(graph: CompositionGraph, kind: K): PartOf<K>[] => graph.parts.filter((part): part is PartOf<K> => part.kind === kind);
 const entityOf = (graph: CompositionGraph, anchor: AnchorId): EntityId => {
   const binding = graph.bindings.find((item) => item.anchor === anchor)?.binding;

@@ -15,9 +15,25 @@ export interface AnswerContent {
   details: string;
 }
 
-/** An answer a wall-clock deadline cut, or one that could not read its index, is outside the determinism promise and is never written (RFC-0002 rule 3). */
-export function isWritable(fact: Fact<unknown>): boolean {
-  return !hasDeadline(fact) && !hasUnavailableIndex(fact);
+/** Why an answer is outside the determinism promise and is never written (RFC-0002 rule 3): a wall-clock deadline cut it, or it could not read its index. */
+export function unwrittenReason(fact: Fact<unknown>): string | undefined {
+  if (hasDeadline(fact)) return "the answer was cut by a deadline";
+  return hasUnavailableIndex(fact) ? "the index was unavailable" : undefined;
+}
+
+/** Why a reply names no folder besides the answer being outside the determinism promise. */
+export const WITHHELD = {
+  noCacheDirectory: "this server has no cache directory",
+  notValid: "the full answer does not match its output schema",
+  notWritten: "the folder could not be written",
+} as const;
+
+/** What closes a reply: the line naming its folder, or the line saying why none was written. */
+export type Delivery = { folder?: string; line: string };
+
+/** The delivery of a reply no folder was written for: the reply is `details` at most, and says why. */
+export function withheld(reason: string): Delivery {
+  return { line: `no answer file written: ${reason}` };
 }
 
 /** What decides the bytes of an answer's files: the question, the snapshot and the digests of every input of the fact. */
@@ -26,7 +42,7 @@ export function answerInputs(query: SemanticQuery, fact: Fact<unknown>): object 
   return { query, schema: fact.schema, producer: fact.producer, snapshot: fact.snapshot, inputs: { trust, scope, content, config, engines, buildOutputs } };
 }
 
-export function keepAnswer(files: AnswerFiles, tool: QueryFamily, inputs: object, { guide, fields, summary, details }: AnswerContent): Promise<string | null> {
+export function keepAnswer(files: AnswerFiles, tool: QueryFamily | "compose", inputs: object, { guide, fields, summary, details }: AnswerContent): Promise<string | null> {
   return files.keep({ tool, inputs, files: { "answer.json": JSON.stringify({ guide, ...fields }), "summary.txt": summary, "details.txt": details } });
 }
 
@@ -44,8 +60,8 @@ function sections(fields: Json): string[] {
   return counted;
 }
 
-/** The last line of a summary or details reply: where the files are and which lists `answer.json` holds. */
+/** The last line of a summary or details reply: where the files are, that `answer.json` is the full result, and which lists it holds. */
 export function answerFilesLine(folder: string, fields: Json): string {
   const lists = sections(fields);
-  return `answer files: ${folder} — answer.json${lists.length === 0 ? "" : `: ${lists.join(", ")}`}; summary.txt, details.txt`;
+  return `answer files: ${folder} — answer.json (the full result, queryable with jq)${lists.length === 0 ? "" : `: ${lists.join(", ")}`}; summary.txt, details.txt`;
 }

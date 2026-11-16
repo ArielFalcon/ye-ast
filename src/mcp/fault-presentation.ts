@@ -219,11 +219,11 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
     case "invalid-cursor":
       return "Pass page.nextCursor from the previous page with the same query, select, page.limit and expect, or restart without page.cursor.";
     case "selection-not-found":
-      return "Copy select's coordinates and owner from a details or full answer of this same query; indices are zero-based.";
+      return "Copy select's coordinates and owner from a details answer of this same query; indices are zero-based.";
     case "invalid-answer-bytes":
       return "Pass your client limit as answerBytes, at least 1, or omit it to leave the text unbounded; mode summary is the smallest presentation.";
     case "ambiguous-selection":
-      return "Add the owner or coordinates that tell the matching records apart, as a details or full answer of this query prints them.";
+      return "Add the owner or coordinates that tell the matching records apart, as a details answer of this query prints them.";
     case "invalid-hypothesis": {
       const resend = `Correct hypotheses[${fault.index}] and resend them all: nothing is answered while one is refused.`;
       switch (fault.refusal.kind) {
@@ -267,7 +267,7 @@ function unverifiable(reason: UnavailableReason, query: FaultQueryContext | unde
   if (query?.select) {
     return reason === "deadline"
       ? `select and page cannot recover a source cut by a deadline. ${cause}`
-      : `select and page need a verifiable identity. ${cause} A new query without select and page${query.expect ? ", and without the expect it cannot verify," : ""} in mode full returns the data this analysis records; it cannot restore analysis or history that was never captured.`;
+      : `select and page need a verifiable identity. ${cause} A new query without select and page${query.expect ? ", and without the expect it cannot verify," : ""} returns the data this analysis records, in its answer.json; it cannot restore analysis or history that was never captured.`;
   }
   return `expect cannot be checked. ${cause} Omitting expect accepts an unverified result; that is the caller's decision.`;
 }

@@ -35,7 +35,8 @@ test("every family has one semantic and one tool schema with the same fields apa
 test("semantic queries reject presentation and recovery controls", () => {
   for (const family of FAMILIES) {
     for (const control of [{ mode: "full" }, { answerBytes: 0 }]) assert.equal(accepts(family, { ...MINIMAL[family], ...control }), false, `${family} ${Object.keys(control)[0]}`);
-    assert.ok(accepts(family, { ...MINIMAL[family], mode: "full" }, TOOL_INPUTS), `${family} tool keeps mode`);
+    assert.ok(accepts(family, { ...MINIMAL[family], mode: "details" }, TOOL_INPUTS), `${family} tool keeps mode`);
+    assert.equal(accepts(family, { ...MINIMAL[family], mode: "full" }, TOOL_INPUTS), false, `${family} tool has no full mode`);
   }
   const select = { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 };
   for (const family of RECOVERABLE) {

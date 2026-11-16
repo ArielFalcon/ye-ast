@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { categoryRecovery, literalSelection } from "./presentation-guidance.ts";
 
-test("category recovery separates recorded full facts from investigation evidence", () => {
-  assert.equal(categoryRecovery({ full: "includes every origin" }), 'mode: "full" includes every origin');
-  assert.equal(categoryRecovery({ details: "lists paths", full: "retains all recorded names" }), 'mode "details" lists paths; mode: "full" retains all recorded names');
+test("category recovery separates the answer file from investigation evidence", () => {
+  assert.equal(categoryRecovery({ answerJson: "includes every origin" }), "answer.json includes every origin");
+  assert.equal(categoryRecovery({ details: "lists paths", answerJson: "retains all recorded names" }), 'mode "details" lists paths; answer.json retains all recorded names');
 });
 test("literal selectors retain escaped coordinates and owner namespaces", () => {
   const select = {kind:"cut-places",owner:{kind:"section",repo:'a"b'},cutIndex:3} as const;

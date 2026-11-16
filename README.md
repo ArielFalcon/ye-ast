@@ -308,7 +308,7 @@ How the arguments behave:
 | `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. `include` selects the content the answer is about, and the configuration that interprets it (a `package.json`, a `tsconfig`, a build file, a Spring `application` file, an OpenAPI document) remains available under `include`; an explicit `exclude` can remove it. A path outside the scope is **not answered about**, so callers and entrypoints through it are not known; the answer names its scope under its status. When every `include` glob selects no held path, the query returns `unknown-scope-path`; if only some miss, the answer names them and counts the selected files. A stopped or unavailable listing cannot establish a miss. Workspace queries count paths per repository. Use it to keep one service or package apart, not to shorten an answer. |
 | `changed` | On `impact`, globs over the changed paths the scope leaves: only the change's paths they select seed the walk. Callers outside that selection remain eligible within the declared scope, subject to recorded cuts; `changed` does not itself narrow consequence coverage. Use it on a large change to answer one area at a time. A glob that selects no changed path is an error, never an empty answer. A file the index could not read stays a cut even when the selection leaves it out: its blindness belongs to the whole walk. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. Limits traversal work, not response length. `depth` counts incoming dependency levels, not hops between services. A bound that stops a walk is reported as a cut, never as a silent truncation. |
-| `mode` | `"summary"` (default) identifies findings and limits; `"details"` adds recorded explanatory evidence and locations; `"full"` returns the full redacted public fact on the final `result JSON:` line of the text, after a contextual guide. Choose any mode directly. None changes coverage, traversal or snapshots. |
+| `mode` | `"summary"` (default) identifies findings and limits; `"details"` adds recorded explanatory evidence and locations; the full redacted public fact is `answer.json` in the folder named by the `answer files:` line that ends every reply (queryable with `jq`; the file opens with a contextual guide). Choose either mode directly. None changes coverage, traversal or snapshots. |
 
 ### Select recorded evidence
 
@@ -331,8 +331,7 @@ use its exact `query.name` and `query.arguments` and add these controls (the han
   "select": { "kind": "handler-origins", "owner": { "kind": "local" },
     "handler": { "path": "src/controller.ts", "symbol": "Controller.run", "line": 12 } },
   "page": { "limit": 1 },
-  "expect": "<recovery.resultIdentity>",
-  "mode": "full"
+  "expect": "<recovery.resultIdentity>"
 }
 ```
 
@@ -367,8 +366,8 @@ dependency. The default summary counts categories when that is shorter than list
 for paths and memberships.
 Recorded `places` are distinct `(file, line)` pairs ordered by file then line; the field is absent when no line was recorded.
 
-With `mode: "full"`, the original overlapping `importers`, `users` and `unresolvedNamers` arrays and all cuts remain in
-the `result JSON:` line; text acknowledges the status and guides navigation. These presentation choices preserve coverage,
+In `answer.json` (the full result the reply's answer files line names), the original overlapping `importers`, `users` and
+`unresolvedNamers` arrays and all cuts remain; the reply text acknowledges the status and names the file. These presentation choices preserve coverage,
 snapshots and completeness. For a committed read, pin `revision` to the returned SHA when requesting another
 presentation. A live `head` and `stateId` identify working-tree content that cannot be pinned or retrieved by
 `revision`; another live call may observe different content. Do not combine `live` with `revision`.
@@ -391,7 +390,7 @@ remain distinct. Impact/callers text names the declaration place of a reached UI
 it or claiming a complete call chain. Its symbol evidence covers the nearest recorded consequence depth and the
 reached handlers; other symbols are counted, with a literal listing when shorter. Change origins supplying that
 evidence remain localizable. Cut details keep anchors and limits while counting repeated reference places.
-Unserved names can be counted in either text level. Use `mode: "full"` for exhaustive symbols, seeds, associations,
+Unserved names can be counted in either text level. Use `answer.json` for exhaustive symbols, seeds, associations,
 reference places and names. Counted omissions concern presentation, while `partial` and cuts describe missing
 analysis coverage. Related `outline`, `callers` or `importers` queries do not filter the original impact fact.
 
@@ -458,7 +457,7 @@ How to read it by mode:
 | `mode` | Returns |
 |---|---|
 | `summary`, `details` | Presentation text explaining findings, source states and every material limit, then a `result JSON:` line with a `composition-receipt`: version, mode, verification and the complete safe repeat queries. `S1` in the text names `requests[0]`, and so on. Connections come right after the sources, and a subject reference carries its name beside its label. `summary` opens with a `Joined:` line (connections per rule, the sources in no connection) and what each source holds. When a query declares a subject (`targets`, `files` or `changed`), `summary` counts, instead of listing, what only queries without one (`entrypoints`, `workspace` map) hold and no listed connection cites; unknown findings stay listed and `details` lists everything. |
-| `full` | `kind: "composition"` with normalized tables under `graph`, source states and issues under `coverage`, and repeat queries under `requests`. Every producer, engine, read and support is retained. |
+| `answer.json` (the answer folder) | `kind: "composition"` with normalized tables under `graph`, source states and issues under `coverage`, and repeat queries under `requests`. Every producer, engine, read and support is retained. |
 
 There is no `select` or pagination on compose: for more evidence about one source, run the original tool with its
 `select`/`page`. For a recoverable source (`entrypoints`, `callers`, `impact`) the repeat request is `pinned-replay`
@@ -484,7 +483,7 @@ producer   ye-ast name and version
 inputs     trust mode, declared scope, change selection, budget, declared build outputs read
 evidence   [{ path, line, endLine? }] that support the value
 status     complete | partial | unknown
-value      the fact itself (in MCP structured content when mode is "full" and status is known)
+value      the fact itself (in the MCP, the answer.json of the answer folder, when status is known)
 ```
 
 | `status` | Means | What you report |
@@ -529,17 +528,17 @@ Also:
 
 - Quote the `snapshot` when you report a fact, so the user knows which revision it describes.
 - Unselected MCP summary/details return a strict receipt: `{ mode, status, snapshot }`, plus `reason` exactly when status is
-  unknown. They do not include the fact body, cuts or sidecar arrays. Full returns the redacted fact plus `mode` and
-  applicable `repositoryRoots`, `freshness`, `resolution`, `live` and `workspaceLive` siblings; `_meta["ye-ast/live"]` also carries a
+  unknown. They do not include the fact body, cuts or sidecar arrays. `answer.json` (the folder every reply names) holds
+  the redacted fact plus `mode: "full"` and applicable `repositoryRoots`, `freshness`, `resolution`, `live` and `workspaceLive` siblings; `_meta["ye-ast/live"]` also carries a
   stale notice. Full known facts require a value, partial facts require cuts, and unknown facts require a reason and no
   value. The published output schemas validate the common envelope, snapshot identity and principal family containers
   and coordinates, not every domain leaf. Full payloads permit additive public fields; receipts are strict.
-- The migration is breaking: replace `detail: "summary"` with `mode: "summary"`, `detail: "full"` with
-  `mode: "details"`, and `full: true` with `mode: "full"`. The old arguments are rejected, including `full: false`;
+- The MCP has no `full` mode: `mode` is `summary` or `details`, and `detail`, `full` and `mode: "full"` are rejected;
   there are no compatibility aliases. A client may expose both text and structured content to a model; do not assume
-  either channel is hidden. Full text guides the structured result instead of repeating the family listing.
+  either channel is hidden. The guide at the top of `answer.json` navigates the result instead of repeating the family
+  listing.
 - Coverage exclusions, traversal cuts and presentation omissions are different: scope excludes analysis, cuts record
-  bounded or unresolved analysis, and omissions count recorded items hidden from text and recoverable in full.
+  bounded or unresolved analysis, and omissions count recorded items hidden from text and recoverable in `answer.json`.
 - For foreign evidence, choose its declared owner with `repo` and its recorded SHA with `revision` for a related
   `outline` or `callers` query. Base-side modules use the recorded merge-base SHA. Symbol names may match multiple
   declarations. An undeclared owner needs an updated host registration or an instance bound to that clone. A live

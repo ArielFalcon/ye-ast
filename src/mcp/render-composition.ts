@@ -13,7 +13,7 @@ import { cutLabel } from "./presentation-context.ts";
 import type { Cut, Evidence } from "../core/domain/shared/fact.ts";
 import { callbackName } from "../core/domain/entrypoints/entrypoint.ts";
 import type { BasePath, BasePathKeys } from "../core/domain/entrypoints/http-route.ts";
-import type { ResponseMode } from "./presentation.ts";
+import type { RenderDetail } from "./presentation.ts";
 import { shareExactContext } from "./presentation-sharing.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { ComposeFull, ComposeReceipt, CompositionResult } from "./composition-contract.ts";
@@ -34,7 +34,7 @@ export function composeFull(result: CompositionResult): ComposeFull {
   };
 }
 
-export function renderComposition(result: CompositionResult, mode: ResponseMode): string {
+export function renderComposition(result: CompositionResult, mode: RenderDetail): string {
   return mode === "full" ? renderFull(result) : new CompactView(result, mode === "details").render().join("\n");
 }
 

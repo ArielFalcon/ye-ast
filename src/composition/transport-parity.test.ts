@@ -23,6 +23,7 @@ import { createMcpServer, RESULT_JSON_LABEL } from "../mcp/server.ts";
 import { openSession, type ToolResult } from "../mcp/test-session.testing.ts";
 import { serveQueries } from "../protocol/query-server.ts";
 import { expandFull } from "../mcp/full-projection.testing.ts";
+import { fullReply, memoryAnswerFiles } from "../mcp/answer-files.testing.ts";
 
 const REPO = "/work/shop";
 
@@ -365,14 +366,15 @@ async function consequencesThroughProtocol(subject: Subject, fact: Fact<Conseque
 
 async function consequencesThroughMcp(subject: Subject, fact: Fact<ConsequencesValue>): Promise<Outcome> {
   const requests: Outcome["requests"] = [];
+  const answers = memoryAnswerFiles();
   const session = await openSession(createMcpServer({
     digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries,
-    workspaceImpact: {} as unknown as WorkspaceImpactQueries, decisions: {} as unknown as DecisionQueries, contractConsequences: consequencesPort(fact, requests), redaction, repository: { path: REPO, repoId: "shop" },
+    workspaceImpact: {} as unknown as WorkspaceImpactQueries, decisions: {} as unknown as DecisionQueries, contractConsequences: consequencesPort(fact, requests), redaction, repository: { path: REPO, repoId: "shop" }, answerFiles: answers.files,
   }));
   try {
-    const result = await session.callTool("ye_ast_contract_consequences", { ...subject, mode: "full" }) as ToolResult;
+    const result = await session.callTool("ye_ast_contract_consequences", subject) as ToolResult;
     if (result.isError === true) return { accepted: false, requests };
-    const text = (result.content as { text: string }[])[0]!.text;
+    const text = (fullReply(result, answers.folders).content as { text: string }[])[0]!.text;
     return { accepted: true, requests, fact: expandFull("contract_consequences", JSON.parse(text.slice(text.lastIndexOf(`\n${RESULT_JSON_LABEL}`) + 1 + RESULT_JSON_LABEL.length))) };
   } finally {
     await session.close();

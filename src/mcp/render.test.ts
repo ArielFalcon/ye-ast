@@ -328,7 +328,7 @@ test("a trace summary counts template and receiver cuts by cause when that is sh
 
 test("a trace summary that groups unresolved calls ends the cut block by naming the modes that list each place", () => {
   const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle"] }]));
-  assert.ok(text.endsWith('\n    Call places omitted; mode "details" lists them, mode "full" gives the structured fact.'), text);
+  assert.ok(text.endsWith('\n    Call places omitted; mode "details" lists them, answer.json gives the structured fact.'), text);
 });
 
 test("an unresolved trace call keeps its whole place when the path and the spelling hold spaces", () => {
@@ -381,7 +381,7 @@ test("a finding two answers share is listed once and the later answer says which
   assert.match(details, /src\/own\.ts:5/);
   assert.match(details, new RegExp(`src/auth/use-${LISTED_ITEMS - 1}\\.ts:${LISTED_ITEMS}`));
   assert.equal(details.includes(`src/auth/use-${LISTED_ITEMS}.ts`), false, "a place beyond the listed ones is not printed");
-  assert.match(details, /and 30 more places \(mode: "full" lists every one\)/);
+  assert.match(details, /and 30 more places \(answer\.json lists every one\)/);
 });
 
 test("a contract consequences summary counts each answer's verdicts and keeps its unknown reasons, derivation cuts and frontier counts, while details lists every finding with its place", () => {

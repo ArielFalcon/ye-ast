@@ -2,11 +2,11 @@ import { validRecoveryControls } from "./evidence-schema.ts";
 import type { EvidenceSelection } from "./select-evidence.ts";
 import type { Recovery } from "./recovery.ts";
 
-/** Families decide category membership and what each mode can recover. */
-export function categoryRecovery(input: { details?: string; full?: string }): string {
+/** Families decide category membership and what `details` and `answer.json` can recover. */
+export function categoryRecovery(input: { details?: string; answerJson?: string }): string {
   return [
     ...(input.details === undefined ? [] : [`mode "details" ${input.details}`]),
-    ...(input.full === undefined ? [] : [`mode: "full" ${input.full}`]),
+    ...(input.answerJson === undefined ? [] : [`answer.json ${input.answerJson}`]),
   ].join("; ");
 }
 

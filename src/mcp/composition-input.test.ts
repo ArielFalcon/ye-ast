@@ -35,7 +35,8 @@ test("accepts the closed union of the eight query families and defaults mode to 
   const parsed = COMPOSE_INPUT.parse({ queries });
   assert.equal(parsed.mode, "summary");
   assert.deepEqual(parsed.queries, queries);
-  assert.equal(COMPOSE_INPUT.parse({ queries, mode: "full", expect: C1, deadlineMs: 1 }).mode, "full");
+  assert.equal(COMPOSE_INPUT.parse({ queries, mode: "details", expect: C1, deadlineMs: 1 }).mode, "details");
+  rejects({ queries, mode: "full" });
 });
 
 test("query count is 1..16 before deduplication", () => {

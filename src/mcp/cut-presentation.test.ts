@@ -34,7 +34,7 @@ test("detailed cut rows bind original indices, anchors, limits and reasons witho
   assert.doesNotMatch(associations[2]!.metadata, /reason-0/);
   assert.match(text, /cutIndex 12;.*base:same\.ts::f.*limit 2/);
   assert.match(text, /cutIndex 13;.*head:same\.ts::f.*limit 300/);
-  assert.match(text, /reference places counted; mode: "full" includes every place/);
+  assert.match(text, /reference places counted; answer\.json includes every place/);
   assert.deepEqual(fact, before);
 });
 

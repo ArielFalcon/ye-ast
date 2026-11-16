@@ -18,6 +18,7 @@ import { composeCli, composeQueries, mcpCommandFor } from "./compose.ts";
 import { installedVersion } from "./installed-versions.ts";
 import { createMcpServer, RESULT_JSON_LABEL } from "../mcp/server.ts";
 import { openSession } from "../mcp/test-session.testing.ts";
+import { fullReply, memoryAnswerFiles } from "../mcp/answer-files.testing.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -442,9 +443,10 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   assert.equal(read.repositorySources?.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
 
   const { version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
-  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), redaction, repository: { path: repo, repoId: "shop-service" } }));
+  const answers = memoryAnswerFiles();
+  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), redaction, repository: { path: repo, repoId: "shop-service" }, answerFiles: answers.files }));
   try {
-    const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {}, mode: "full" });
+    const answer = fullReply(await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {} }), answers.folders);
     assert.notEqual(answer.isError, true);
     assert.equal(answer.structuredContent, undefined);
     const content = answer.content.map(block => block.text).join("\n");

@@ -9,6 +9,7 @@ import { composeCli } from "./compose.ts";
 import { CONTROLLER, CONTROLLER_PATH, GATEWAYS, GIT_ENV, PAGE_PATH, SERVICE_PATH, SHOP, WEB, createCompositionFixture, type CompositionFixture } from "./mcp-evidence-fixture.testing.ts";
 import { createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { openSession, resultFields, type Session, type ToolResult } from "../mcp/test-session.testing.ts";
+import { answeredFromFiles, asFull, fullReply, fullReplyFromDisk, memoryAnswerFiles } from "../mcp/answer-files.testing.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { composeOutput } from "../mcp/composition-schema.ts";
@@ -131,7 +132,7 @@ async function startStdio(fixture: CompositionFixture): Promise<Stdio> {
   await request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
   send({ method: "notifications/initialized" });
   return {
-    call: async (name, args) => (await request("tools/call", { name, arguments: args })).result as ToolResult,
+    call: (name, args) => asFull(name, args, async (called, calledArgs) => (await request("tools/call", { name: called, arguments: calledArgs })).result as ToolResult, fullReplyFromDisk),
     start: (name, args) => start("tools/call", { name, arguments: args }),
     request,
     send,
@@ -143,7 +144,10 @@ async function startStdio(fixture: CompositionFixture): Promise<Stdio> {
   };
 }
 
-const sessionOf = async (deps: McpDeps): Promise<Session> => openSession(createMcpServer(deps));
+const sessionOf = async (deps: McpDeps): Promise<Session> => {
+  const answers = memoryAnswerFiles();
+  return answeredFromFiles(await openSession(createMcpServer({ ...deps, answerFiles: answers.files })), (result) => fullReply(result, answers.folders));
+};
 
 let fixture: CompositionFixture;
 let stdio: Stdio;

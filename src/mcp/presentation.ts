@@ -7,13 +7,15 @@ import type { Recovery } from "./recovery.ts";
 import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 
 export const responseModeSchema = z
-  .enum(["summary", "details", "full"])
+  .enum(["summary", "details"])
   .default("summary")
-  .describe("Presentation: summary=findings, details=evidence, full=result JSON+navigation. Coverage unchanged.");
+  .describe("Presentation: summary=findings, details=evidence. The full result is answer.json in the folder the reply names. Coverage unchanged.");
 
 export type ResponseMode = z.infer<typeof responseModeSchema>;
+/** What a renderer produces: the two presentations a caller asks for, and the guide `answer.json` opens with. */
+export type RenderDetail = ResponseMode | "full";
 export type RenderContext = { tool: QueryFamily; recovery?: Recovery; answerBytes?: number };
-export type ResponseRenderer<T> = (fact: Fact<T>, mode: ResponseMode, context?: RenderContext) => string;
+export type ResponseRenderer<T> = (fact: Fact<T>, mode: RenderDetail, context?: RenderContext) => string;
 
 export function unresolvedLabel(site: Pick<UnresolvedCallSite, "reason" | "diagnostic">): string {
   const labels = { "source-not-read": "missing", "request-not-found": "read", "dispatch-disagreement": "conflict", recursive: "cycle", "destination-undecidable": "target" } as const;

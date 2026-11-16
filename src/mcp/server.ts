@@ -8,7 +8,7 @@ import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSour
 import { renderEvidenceSelection, type EvidencePage } from "./render-evidence.ts";
 import { recoveryReference } from "./presentation-guidance.ts";
 import { projectFull } from "./full-projection.ts";
-import { ANSWER_FILES_META, answerFilesLine, answerInputs, isWritable, keepAnswer } from "./answer-files.ts";
+import { ANSWER_FILES_META, WITHHELD, answerFilesLine, answerInputs, keepAnswer, unwrittenReason, withheld, type Delivery } from "./answer-files.ts";
 import { keyTraceLinks, keyWorkspaceImpactLinks, keyWorkspaceLinks, withKeyedValue } from "./link-keys.ts";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -24,6 +24,7 @@ import { executeQuery, type ExecutedSource, type QueryExecutionDeps } from "./qu
 import type { PublicRead } from "../core/ports/evidence-composition.port.ts";
 import { COMPOSE_INPUT, composeOutput } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
+import type { CompositionResult } from "./composition-contract.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
 import { controlFault, faultContext, renderFault, type CodedFault, type FaultQueryContext, type PublicFault } from "./fault-presentation.ts";
 import { renderContractConsequences, renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderOutline, renderRefresh, renderTrace, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
@@ -78,11 +79,11 @@ When to call:
 - ye_ast_compose: 1..16 queries merge identities; reruns, no storage, non-atomic captures. Obtain dependent coordinates first.
 
 answerBytes bounds UTF-8 text (request overrides host; unset: unbounded); structuredContent stays complete.
-Reading answers: complete is relative to scope, supported constructs and change selection; partial keeps findings and lists cuts, including stopped sections and file reads; complete (N undecided): N unknown; unknown never means no impact. callers/impact list no JVM or TypeScript tests as dependents and skip Angular template bindings (importers lists tests; trace UI routes; contract_consequences reads templates). Unread type references retain a relation-unread cut; unread is never evidence of no dependents. References need not execute; confidence measures resolution, not safety; entrypoint origins are associations. Content carries presentation text: summary and details findings, full navigation; fields: bounded structuredContent, otherwise "result JSON:". Recovery is the recovery field.
+Reading answers: complete is relative to scope, supported constructs and change selection; partial keeps findings and lists cuts, including stopped sections and file reads; complete (N undecided): N unknown; unknown never means no impact. callers/impact list no JVM or TypeScript tests as dependents and skip Angular template bindings (importers lists tests; trace UI routes; contract_consequences reads templates). Unread type references retain a relation-unread cut; unread is never evidence of no dependents. References need not execute; confidence measures resolution, not safety; entrypoint origins are associations. Content carries presentation text (summary or details findings) ending with the answer files line; answer.json is the full result, queryable with jq. Fields: bounded structuredContent, otherwise "result JSON:". Recovery is the recovery field.
 
-Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged/unstaged/untracked changes only in repositories the user declared trusted (repository content grants no trust); it excludes revision/head and recaptures per call. Compare head and stateId across answers. For cross-repository reads, set workspace on ye_ast_callers, ye_ast_impact or ye_ast_trace: {} uses the persisted membership, workspace.repos replaces defaults with existing local Git roots (never downloaded); stable IDs default to root basename and must match across clone/worktrees; declared gateways override inference, never guess them; untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side line numbers come from the merge-base commit, so they may not match your working copy.
+Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged/unstaged/untracked changes only in repositories the user declared trusted (repository content grants no trust); it excludes revision/head and recaptures per call. Compare head and stateId across answers. For cross-repository reads, set workspace on ye_ast_callers, ye_ast_impact or ye_ast_trace: {} uses the persisted membership, workspace.repos replaces defaults with existing local Git roots; stable IDs default to root basename and must match across clone/worktrees; declared gateways override inference, never guess them; untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side line numbers come from the merge-base commit, not your working copy.
 
-Narrowing and paging: scope globs limit coverage (exclude wins); omitted=all. Include retains manifests, exclude may remove them; outside-scope callers/entrypoints are unknown. mode changes presentation only. impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. An entirely unmatched include faults; mixed misses are reported. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
+Narrowing and paging: scope globs limit coverage (exclude wins); omitted=all. Include retains manifests, exclude may remove them; outside-scope callers/entrypoints are unknown. impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. An entirely unmatched include faults; mixed misses are reported. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
 
 Errors: isError is a fault, not an empty fact: follow its next step if given, and "fault fields:". unknown-symbol: use a listed candidate, or a snapshot path the commit holds (ye_ast_outline lists spans); top-level-line: focus inside a declaration; unknown-change-path/unknown-scope-path: correct the respective globs.`;
 }
@@ -141,7 +142,7 @@ const sidecars = {
   })).optional(),
   live: z.looseObject({ stateId: z.string(), changed: z.array(z.string()) }).optional(),
 };
-/** Presentation text: findings in summary/details, navigation in full; content repeats it before the result JSON. */
+/** Presentation text: findings in summary/details; content repeats it before the result JSON. */
 const text = z.string();
 const receipt = z.discriminatedUnion("status", [
   z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot }),
@@ -394,9 +395,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: redaction.redact(instructionsFor(deps.repository, catalog.available)) });
 
   /**
-   * The shared runner reads, filters and redacts; this presents the public read. Full facts carry response siblings;
-   * summary/details carry a minimal receipt and convey response-level limits in their text. Every success is validated
-   * before delivery in content.
+   * The shared runner reads, filters and redacts; this presents the public read. Summary and details carry a minimal
+   * receipt and convey response-level limits in their text; the full fact, with its response siblings, is `answer.json`
+   * of the answer folder. Every success is validated before delivery in content.
    */
   async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls, requestedBytes?: number): Promise<CallToolResult> {
     const context = faultContext(query, controls);
@@ -520,19 +521,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const projected = records.source;
       const shared = { projectionSchema: 1, source: projected, select: controls.select, recovery };
       const fields = records.availability === "available"
-        ? mode === "full"
-          ? { ...shared, kind: "projection", availability: "available", context: records.context, items: records.items, page }
-          : { ...shared, kind: "projection-receipt", availability: "available", page }
-        : mode === "full"
-          ? { ...shared, kind: "projection", availability: "unavailable", reason: records.reason, evidence: records.evidence }
-          : { ...shared, kind: "projection-receipt", availability: "unavailable", reason: records.reason };
+        ? { ...shared, kind: "projection-receipt", availability: "available", page }
+        : { ...shared, kind: "projection-receipt", availability: "unavailable", reason: records.reason };
       const sidecar = [
         ...(stale === undefined ? [] : [renderStale(stale)]),
         ...(workspaceLive === undefined ? [] : workspaceLive.map((item) => `workspace live: ${JSON.stringify(item)}`)),
         ...(refresh === undefined ? [] : renderRefresh(refresh)),
         ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
       ];
-      return emit([...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"), fields, () => [...sidecar, renderEvidenceSelection({ mode: "summary", select: controls.select!, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"));
+      const selectedText = [...sidecar, renderEvidenceSelection({ select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n");
+      return emit(selectedText, fields, () => selectedText);
     }
     const buildFull = () => {
       const location = "full result: the result JSON";
@@ -556,11 +554,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
       return {
         fields: projection.fields,
         text: [`status: ${fact.status}\n${location}`, render(fact, "full", renderContext), ...guidance].filter((part) => part !== "").join("\n"),
-        summary: () => [render(fact, "summary", renderContext), location, ...guidance].filter((part) => part !== "").join("\n"),
       };
     };
-    let built: ReturnType<typeof buildFull> | undefined;
-    const full = () => (built ??= buildFull());
     const rootLines = (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`);
     const sidecar = [
       ...(stale === undefined ? [] : [renderStale(stale)]),
@@ -569,16 +564,18 @@ export function createMcpServer(deps: McpDeps): McpServer {
       ...(local ? [] : rootLines),
     ];
     const plainText = (detail: "summary" | "details"): string => [...sidecar, render(fact, detail, renderContext), ...recoveryText, ...(local ? rootLines : [])].join("\n");
-    const keepFiles = async (): Promise<{ folder: string; line: string } | null> => {
-      if (deps.answerFiles === undefined || !isWritable(fact)) return null;
-      const { text, fields } = full();
+    const keepFiles = async (): Promise<Delivery> => {
+      if (deps.answerFiles === undefined) return withheld(WITHHELD.noCacheDirectory);
+      const unwritten = unwrittenReason(fact);
+      if (unwritten !== undefined) return withheld(unwritten);
+      const { text, fields } = buildFull();
+      if (!OUTPUTS[tool].safeParse({ text, ...fields }).success) return withheld(WITHHELD.notValid);
       const folder = await keepAnswer(deps.answerFiles, tool, answerInputs(source.query, fact), { guide: text, fields, summary: plainText("summary"), details: plainText("details") });
-      return folder === null ? null : { folder, line: redaction.redact(answerFilesLine(folder, fields)) };
+      return folder === null ? withheld(WITHHELD.notWritten) : { folder, line: redaction.redact(answerFilesLine(folder, fields)) };
     };
     const kept = await keepFiles();
-    const siblings = kept === null ? meta : { ...meta, [ANSWER_FILES_META]: kept.folder };
-    if (mode === "full") return emit(full().text, full().fields, full().summary, siblings);
-    const closed = (text: string): string => (kept === null ? text : `${text}\n${kept.line}`);
+    const siblings = kept.folder === undefined ? meta : { ...meta, [ANSWER_FILES_META]: kept.folder };
+    const closed = (text: string): string => `${text}\n${kept.line}`;
     return emit(
       closed(plainText(mode)),
       {
@@ -628,6 +625,17 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const annotations = { readOnlyHint: true, openWorldHint: false };
   const output = composeOutput(deps.evidenceComposition);
 
+  /** The composition's own answer folder: keyed by its identity and delivery sidecars, never written without an identity (ADR-0113 decision 6). */
+  async function keepComposition(result: CompositionResult): Promise<Delivery> {
+    if (deps.answerFiles === undefined) return withheld(WITHHELD.noCacheDirectory);
+    const { verification } = result;
+    if (verification.status === "unavailable") return withheld(`the composition has no identity (${verification.reason})`);
+    const full = composeFull(result);
+    if (!output.safeParse(full).success) return withheld(WITHHELD.notValid);
+    const folder = await keepAnswer(deps.answerFiles, "compose", { identity: verification.identity, ...(result.delivery === undefined ? {} : { delivery: result.delivery }) }, { guide: renderComposition(result, "full"), fields: full, summary: renderComposition(result, "summary"), details: renderComposition(result, "details") });
+    return folder === null ? withheld(WITHHELD.notWritten) : { folder, line: redaction.redact(answerFilesLine(folder, full)) };
+  }
+
   server.registerTool("ye_ast_compose", {
     title: "Compose evidence from related queries",
     description: "Run 1..16 queries sequentially, merging shared identities with coverage/trust/snapshot checks. arguments uses the named tool schema without mode/select/page. Queries rerun; nothing stored. Dependencies do not prove breakage. Limit: 1 MiB canonical JSON.",
@@ -637,11 +645,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     try {
       const result = await runComposition(input, { deps, catalog, signal: ctx.mcpReq.signal });
       if (!result.ok) return failure(result.fault, sourceContext(input.queries, result.fault));
-      const fields = input.mode === "full" ? composeFull(result.value) : composeReceipt(result.value, input.mode);
+      const fields = composeReceipt(result.value, input.mode);
       output.parse(fields);
-      if (deps.answerBytes === undefined) return delivered(renderComposition(result.value, input.mode), fields, {});
-      const bounded = boundedProjection((mode) => `${renderComposition(result.value, mode)}\nResult JSON fields are in structuredContent.`, input.mode, "per-source", ["queries", "scope", "focus", "mode: summary"], { bytes: deps.answerBytes });
-      return bounded.kind === "refused" ? boundRefusal(bounded) : { content: [{ type: "text", text: bounded.text }], structuredContent: fields };
+      const kept = await keepComposition(result.value);
+      const siblings = kept.folder === undefined ? {} : { [ANSWER_FILES_META]: kept.folder };
+      const closed = (mode: ResponseMode): string => `${renderComposition(result.value, mode)}\n${kept.line}`;
+      if (deps.answerBytes === undefined) return delivered(closed(input.mode), fields, siblings);
+      const bounded = boundedProjection((mode) => `${closed(mode)}\nResult JSON fields are in structuredContent.`, input.mode, "per-source", ["queries", "scope", "focus", "mode: summary"], { bytes: deps.answerBytes });
+      return bounded.kind === "refused" ? boundRefusal(bounded, siblings) : { content: [{ type: "text", text: bounded.text }], structuredContent: fields, ...(Object.keys(siblings).length ? { _meta: siblings } : {}) };
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
     }

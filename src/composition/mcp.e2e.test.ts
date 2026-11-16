@@ -10,6 +10,8 @@ import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/
 import { composeCli } from "./compose.ts";
 import { RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT } from "../mcp/server.ts";
 import { expandFull } from "../mcp/full-projection.testing.ts";
+import { asFull, fullReplyFromDisk } from "../mcp/answer-files.testing.ts";
+import type { ToolResult } from "../mcp/test-session.testing.ts";
 
 function resultFields(result: any): any {
   const text = result.content?.[0]?.text;
@@ -85,12 +87,21 @@ let id = 0;
 type Reply = { id?: number; result?: unknown; error?: unknown };
 const replies = new Map<number, (message: Reply) => void>();
 
-function request(method: string, params?: unknown): Promise<Reply> {
+function send(method: string, params?: unknown): Promise<Reply> {
   id += 1;
   return new Promise((resolve) => {
     replies.set(id, resolve);
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, ...(params !== undefined && { params }) })}\n`);
   });
+}
+
+/** A `tools/call` that asks for `mode: "full"` here wants the answer.json of the folder its summary reply names. */
+async function request(method: string, params?: unknown): Promise<Reply> {
+  if (method !== "tools/call") return send(method, params);
+  const { name, arguments: args } = params as { name: string; arguments: unknown };
+  let reply: Reply | undefined;
+  const result = await asFull(name, args, async (called, calledArgs) => (reply = await send(method, { name: called, arguments: calledArgs })).result as ToolResult, fullReplyFromDisk);
+  return { ...reply, result };
 }
 
 before(async () => {
@@ -432,24 +443,25 @@ test("selected callers pages replay real pinned origins and reject a changed liv
   const [, rowPath, rowLine, rowSymbol] = rowText.match(/ -> (.+):(\d+)(?:-\d+)? (\S+) \(depth/)!;
   const handler = { path: rowPath!, symbol: rowSymbol!, line: Number(rowLine) };
   const select = { kind: example.kind, owner: example.owner, handler };
-  const args = { ...recovery.query.arguments, mode: "full", select, page: { limit: 1 }, expect: recovery.resultIdentity };
+  const args = { ...recovery.query.arguments, select, page: { limit: 1 }, expect: recovery.resultIdentity };
   const first = await call(args);
   assert.notEqual(first.isError, true, JSON.stringify(first));
-  assert.equal(resultFields(first)!.kind, "projection");
+  assert.equal(resultFields(first)!.kind, "projection-receipt");
   assert.equal(resultFields(first)!.recovery.resultIdentity, recovery.resultIdentity);
   assert.ok(resultFields(first)!.page.nextCursor);
   const selectedText = first.content?.find((part) => part.type === "text")?.text ?? "";
-  assert.match(presentation(selectedText), /context, items and page/);
-  assert.doesNotMatch(presentation(selectedText), /Records:/);
+  assert.match(presentation(selectedText), /Records:/);
+  assert.equal(resultFields(first)!.items, undefined);
   assert.deepEqual(resultFields((await call(args))), resultFields(first));
-  const items = [...resultFields(first)!.items];
+  const recordsOf = (result: any): unknown[] => JSON.parse(presentation(result.content[0].text).split("\n").find((row) => row.startsWith("Records: "))!.slice("Records: ".length));
+  const items = [...recordsOf(first)];
   let cursor = resultFields(first)!.page.nextCursor;
   const firstCursor = cursor;
   while (cursor) {
     const next = await call({ ...args, page: { limit: 1, cursor } });
     assert.notEqual(next.isError, true, JSON.stringify(next));
     assert.equal(resultFields(next)!.recovery.resultIdentity, recovery.resultIdentity);
-    items.push(...resultFields(next)!.items);
+    items.push(...recordsOf(next));
     cursor = resultFields(next)!.page.nextCursor;
   }
   assert.deepEqual(items, indexes.map((seedIndex) => ({ seedIndex, seed: value.seeds[seedIndex] })));

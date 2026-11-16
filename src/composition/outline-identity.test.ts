@@ -5,6 +5,7 @@ import { SCHEMA } from "../core/domain/shared/fact.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
 import { createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { openSession, resultFields } from "../mcp/test-session.testing.ts";
+import { fullReply, memoryAnswerFiles } from "../mcp/answer-files.testing.ts";
 
 const file = "src/main/java/example/OwnerRestControllerV1.java";
 const imported = "src/main/java/example/AnotherServiceVersion2.java";
@@ -28,10 +29,12 @@ test("outline preserves versioned source identities and redacts secrets through 
     } }) },
     entrypoints: {}, impact: {}, workspace: {}, workspaceImpact: {}, decisions: {},
   } as unknown as McpDeps;
-  const session = await openSession(createMcpServer(deps));
+  const answers = memoryAnswerFiles();
+  const session = await openSession(createMcpServer({ ...deps, answerFiles: answers.files }));
   try {
     for (const mode of ["summary", "details", "full"] as const) {
-      const result = await session.callTool("ye_ast_outline", { files: [file], mode });
+      const called = await session.callTool("ye_ast_outline", { files: [file], mode: mode === "full" ? "summary" : mode });
+      const result = mode === "full" ? fullReply(called, answers.folders) : called;
       assert.equal(result.isError, undefined);
       const all = JSON.stringify(result);
       assert.ok(all.includes(file), mode);

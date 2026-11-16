@@ -56,10 +56,10 @@ test("both workspace text levels count unserved names when shorter", () => {
   const workspaceFact: Fact<WorkspaceImpactValue> = { ...base, status: "complete", value };
   const summary = renderWorkspaceImpact(workspaceFact);
   const full = renderWorkspaceImpact(workspaceFact, "details");
-  assert.match(summary, /20.*mode: "full"/);
+  assert.match(summary, /20.*answer\.json/);
   assert.doesNotMatch(summary, /unserved-service-0/);
   assert.doesNotMatch(full, /unserved-service-0/);
-  assert.match(full, /20.*mode: "full"/);
+  assert.match(full, /20.*answer\.json/);
 });
 
 test("detail shares consecutive identical dependencies without losing symbol locations or order", () => {
@@ -139,7 +139,7 @@ test("detailed impact retains the nearest dependency frontier and reached handle
   assert.match(output, /via first\.ts:first at 15 \(reference\)/);
   assert.match(output, /9 handler[^\n]*via consumer\.ts:direct at 11/);
   assert.doesNotMatch(output, /22 deeper/);
-  assert.match(output, /3 other symbols[^\n]*mode: "full"/);
+  assert.match(output, /3 other symbols[^\n]*answer\.json/);
   const summary = renderImpact({ ...fact, value });
   assert.match(summary, /consumer\.ts\n {4}12-18 direct \[function\]/);
   assert.match(summary, /22 deeper/);
@@ -161,7 +161,7 @@ test("detailed evidence of a member target shows its nearest dependent, never on
   };
   const evidence = renderImpact({ ...base, status: "complete", value }, "details").split("impacted symbols")[1]!.split("seeds (")[0]!;
   assert.match(evidence, /src\/owners\/owner-list\.component\.ts\n {4}9-90 OwnerListComponent \[class\] \(depth 1, via OwnerListComponent\.findOwners \(contains\)\)\n {4}44-47 OwnerListComponent\.findOwners \[method\][^\n]*via src\/owners\/owner\.service\.ts:OwnerService\.searchOwners at 48/);
-  assert.match(evidence, /2 other symbol[^\n]*mode: "full"/);
+  assert.match(evidence, /2 other symbol[^\n]*answer\.json/);
   assert.doesNotMatch(evidence, /OwnerService \[class\]|VisitService\.book/);
 });
 
@@ -199,7 +199,7 @@ test("a top-level function target keeps its nearest dependent level in detailed 
   };
   const evidence = renderImpact({ ...base, status: "complete", value }, "details").split("impacted symbols")[1]!.split("seeds (")[0]!;
   assert.match(evidence, /12-19 renderInvoice \[function\][^\n]*via src\/lib\/format\.ts:formatAmount at 14/);
-  assert.match(evidence, /1 other symbol[^\n]*mode: "full"/);
+  assert.match(evidence, /1 other symbol[^\n]*answer\.json/);
   assert.doesNotMatch(evidence, /renderReport/);
 });
 
@@ -235,7 +235,7 @@ test("detailed evidence states that a target reaches only containment", () => {
     cost: { expansionsUsed: 0 },
   };
   const text = renderImpact({ ...base, status: "complete", value }, "details");
-  assert.match(text, /evidence view: no dependent recorded; 1 containment or dispatch row[^\n]*mode: "full"/);
+  assert.match(text, /evidence view: no dependent recorded; 1 containment or dispatch row[^\n]*answer\.json/);
   assert.doesNotMatch(text, /OwnerService \[class\]/);
 });
 
@@ -253,7 +253,7 @@ test("impact detail localizes cut anchors and limits while counting their refere
   assert.match(detail, /2 reference places/);
   assert.match(detail, /route\.ts::handler[^\n]*limit 4/);
   assert.doesNotMatch(detail, /consumer-a\.ts|consumer-b\.ts/);
-  assert.match(detail, /mode: "full"/);
+  assert.match(detail, /answer\.json/);
 });
 
 test("impact detail says where the property a reassignable cut's calls run may have been replaced, in both layouts", () => {
@@ -274,15 +274,15 @@ test("summary counts omitted origin associations per entrypoint rather than coun
   assert.match(summary, /origin associations \(3\)/);
   assert.match(summary, /GET \/x[^\n]*\b2 origins\)/);
   assert.match(summary, /GET \/y[^\n]*\b1 origin\)/);
-  assert.match(summary, /mode "details"[^\n]*mode: "full"/);
+  assert.match(summary, /mode "details"[^\n]*answer\.json/);
 });
 
 test("impact guidance explains contextual full lookups and the origin-index join", () => {
   const value: ImpactValue = { ...impact, symbols: [{ file: "caller.ts", symbol: "use", kind: "function", line: 12, depth: 1, confidence: 1, fanIn: 0, via: { file: "first.ts", symbol: "first", lines: [15], basis: "reference" } }] };
   for (const detail of ["summary", "details"] as const) {
     const [body, guide = ""] = renderImpact({ ...fact, value }, detail).split("Investigation guide:");
-    assert.match(body!, /mode: "full" (includes|has) all/);
-    assert.doesNotMatch(guide, /mode: "full"/);
+    assert.match(body!, /answer\.json (includes|has) all/);
+    assert.doesNotMatch(guide, /answer\.json/);
     assert.doesNotMatch(guide, /value\.entrypoints|value\.symbols|value\.seeds/);
   }
   {
@@ -320,7 +320,7 @@ test("unknown and verified-empty impact guidance distinguishes missing analysis 
     const unknown = renderImpact(unknownFact, detail);
     assert.match(unknown, /status: unknown \(no-extractor\)\n {2}evidence: src\/legacy\.cob:3/);
     assert.doesNotMatch(unknown, /result JSON|value\.[a-z]|no recorded consequences|budget|narrower/);
-    assert.doesNotMatch(unknown, /mode "details" (locates|shows|lists)|mode: "full" (includes|lists|returns)/);
+    assert.doesNotMatch(unknown, /mode "details" (locates|shows|lists)|answer\.json (includes|lists|returns)/);
   }
   const unknownFull = renderImpact(unknownFact, "full");
   assert.match(unknownFull, /reason and evidence in the result JSON/);
@@ -348,7 +348,7 @@ test("module-only details compact repeated origin associations and keep the near
   assert.match(output, /module dependencies \(2/);
   assert.match(output, /at line 7 in this module/);
   assert.match(output, /16.*origin/);
-  assert.match(output, /mode: "full"/);
+  assert.match(output, /answer\.json/);
   assert.doesNotMatch(output, /origins 0, 1, 2, 3, 4, 5/);
   assert.doesNotMatch(output, /no recorded consequences or walk origins/);
 });
@@ -458,7 +458,7 @@ test("text base guides keep the literal coordinate and never point at JSON the a
   }
 });
 
-test("text base guides stay bounded as base modules grow and name the full-mode recovery", () => {
+test("text base guides stay bounded as base modules grow and name the answer file recovery", () => {
   const guideFor = (count: number, mode: "summary" | "details"): string => {
     const modules = Array.from({ length: count }, (_, i) => ({ file: `src/base-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] }));
     const local: ImpactValue = { ...impact, mergeBase: "base-a", modules: { origins: [], modules, cost: { expansionsUsed: 0 } } };
@@ -469,7 +469,7 @@ test("text base guides stay bounded as base modules grow and name the full-mode 
     const large = guideFor(400, mode);
     assert.equal(large.split("\n").length, small.split("\n").length);
     assert.match(large, /Base modules \(400\): repo "a", revision "base-a"/);
-    assert.match(large, /mode: "full" lists every one/);
+    assert.match(large, /answer\.json lists every one/);
     assert.doesNotMatch(large, /Base module: /);
     assert.doesNotMatch(large, /value\.modules/);
   }
@@ -558,7 +558,7 @@ test("callers guidance uses revision without unrelated impact base advice", () =
 test("compact handler rows carry path, span and symbol once and scope origin recovery to the category", () => {
   const value = { ...impact, entrypoints: Array.from({ length: 8 }, (_, index) => ({ ...impact.entrypoints[0]!, name: `GET /${index}`, handler: { path: `route ${index}:file.ts`, symbol: "handler", line: 9, endLine: 14 } })) };
   const text = renderImpact({ ...base, status: "complete", value }, "details");
-  assert.doesNotMatch(text, /origin association above|; mode: "full" includes all/);
+  assert.doesNotMatch(text, /origin association above|; answer\.json includes all/);
   assert.match(text, /next 8/);
   for (let index = 0; index < 8; index++) {
     assert.match(text, new RegExp(`^  - http-route GET /${index} -> route ${index}:file\\.ts:9-14 handler \\(depth`, "m"));
@@ -576,15 +576,15 @@ test("a handler symbol with whitespace keeps a complete literal selector on ever
 test("singleton categories keep recovery help shorter than the old repeated layout", () => {
   const singleton: ImpactValue = { seeds: [{ file: "a.ts", symbol: "a", line: 1, basis: "lines" }, { file: "b.ts", symbol: "b", line: 1, basis: "lines" }], symbols: [], entrypoints: [{ kind: "http-route", name: "GET /x", handler: { path: "r.ts", symbol: "h", line: 1 }, depth: 1, confidence: 1, seeds: [0, 1] }], cost: { expansionsUsed: 0 } };
   const reached = renderImpact({ ...base, status: "complete", value: singleton }, "details").split("reached entrypoints (1):\n")[1]!.split("impacted symbols")[0]!;
-  const oldReached = '  A recorded origin is an association, not a complete call chain.\n  - http-route GET /x -> r.ts:1 h (depth 1); lookup example: {"kind":"handler-origins","owner":{"kind":"local"},"handler":{"path":"r.ts","symbol":"h","line":1}}\n    one verified origin: a.ts:1 a (lines); 1 other origin; mode: "full" includes all\n';
+  const oldReached = '  A recorded origin is an association, not a complete call chain.\n  - http-route GET /x -> r.ts:1 h (depth 1); lookup example: {"kind":"handler-origins","owner":{"kind":"local"},"handler":{"path":"r.ts","symbol":"h","line":1}}\n    one verified origin: a.ts:1 a (lines); 1 other origin; answer.json includes all\n';
   assert.ok(Buffer.byteLength(reached) <= Buffer.byteLength(oldReached), reached);
-  assert.match(reached, /full.*all origin/);
+  assert.match(reached, /answer\.json.*all origin/);
 
   const modules: ImpactValue = { seeds: [], symbols: [], entrypoints: [], modules: { origins: [{ file: "o.ts", change: "modified" }], modules: [{ file: "c.ts", snapshot: "head", depth: 1, origins: [0] }], cost: { expansionsUsed: 1 } }, cost: { expansionsUsed: 0 } };
   const moduleRows = renderImpact({ ...base, status: "complete", value: modules }, "summary").split("module dependencies (1, not symbol or entrypoint impact):\n")[1]!.split("module expansions")[0]!;
-  const oldModules = '  head c.ts [lookup example: {"kind":"module-origins","owner":{"kind":"local"},"module":{"file":"c.ts","snapshot":"head"}}] (depth 1, 1 origin association; mode: "full" includes all)\n';
+  const oldModules = '  head c.ts [lookup example: {"kind":"module-origins","owner":{"kind":"local"},"module":{"file":"c.ts","snapshot":"head"}}] (depth 1, 1 origin association; answer.json includes all)\n';
   assert.ok(Buffer.byteLength(moduleRows) <= Buffer.byteLength(oldModules), moduleRows);
-  assert.match(moduleRows, /full.*all origin/);
+  assert.match(moduleRows, /answer\.json.*all origin/);
 });
 
 test("a dependence a provider substitution qualifies carries one marker and one legend naming the substitute and its site", () => {

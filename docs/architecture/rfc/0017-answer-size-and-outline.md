@@ -27,8 +27,9 @@ would notice.
 ## 1. The rule: a counted elision is never longer than listing what it hides
 
 The examples and measurements below retain the historical selector labels and projection. The current MCP contract
-uses `mode: "summary"`, `mode: "details"` and `mode: "full"`: details is explanatory text; full delivers the
-complete public fact and a navigation guide. The counted-elision rule compares an elision with the literal listing
+uses `mode: "summary"` and `mode: "details"`: details is explanatory text; the complete public fact and a navigation
+guide are `answer.json` of the answer folder every reply names
+([ADR-0113](../adr/0113-the-mcp-offers-no-full-mode-the-full-answer-is-the-answer-file.md)). The counted-elision rule compares an elision with the literal listing
 it replaces within the same text projection. It does not guarantee that summary is smaller than details or full JSON,
 and does not require expanding all associations into text. See [RFC-0005](0005-transports.md).
 
@@ -79,9 +80,9 @@ fixture.
 (destination-undecidable, recursive, dispatch-disagreement, source-not-read, request-not-found, then any other cause or
 reason sorted) in one header line. Under each cause it lists a site when its code states the request or when its file is
 the `from` file of a link or of a call site the join reached without a link; it counts the others with their files and
-repositories and names the recovery (`details` lists them, `full` retains all recorded sites). The request-site guide
+repositories and names the recovery (`details` lists them, `answer.json` retains all recorded sites). The request-site guide
 prints once at the end. The grouped form is used only when it is shorter than the literal per-repository listing,
-which `details` and `full` keep unchanged. Measured on a six-repository workspace with 412 undecided sites, the
+which `details` and `answer.json` keep unchanged. Measured on a six-repository workspace with 412 undecided sites, the
 unresolved block drops from 39206 to 11694 bytes and the summary from 45191 to 17125.
 
 ## 2. The outline: the shape of a file, with coordinates
@@ -183,7 +184,7 @@ repository, revision and requests produce the same bytes twice. Timing stays whe
 
 **Measured** on the baseline the earlier RFCs use — name-webapp at `e8699653`, trust `trusted`, this branch's working
 tree, counting text and structured content separately. The table's historical `summary` and `full` labels refer to
-text detail levels under the old selector, not current `mode: "full"`:
+text detail levels under the old selector, not a current `mode`:
 
 | Call | summary text | full text | saving | envelope |
 |---|---|---|---|---|
@@ -242,8 +243,7 @@ fills (`sharedLookup`); every row prints only its own coordinate in the block's 
 
 The section 1 rule still chooses between the literal and the shared block: the shorter text wins and a tie keeps the
 literal one, so a single row keeps its complete selector. A row that cannot be selected (`canSelect` false) prints the
-same compact coordinate with no selector. `details` and `full` follow the same rule because the cause is the same:
-`details` lists more rows of the same blocks, and `full` text uses the same renderers.
+same compact coordinate with no selector. `details` follows the same rule because the cause is the same: it lists more rows of the same blocks.
 
 **Exactness.** A compact handler coordinate decodes exactly when the symbol is its last word and the line is the number
 after the last `:` before it, which holds for any path, including one with spaces or colons. A symbol with whitespace

@@ -30,10 +30,10 @@ import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import { inRepository } from "../core/domain/topology/repository-identity.ts";
 import type { EvidenceComposition } from "../core/ports/evidence-composition.port.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
-import type { AnswerFiles } from "../core/ports/answer-files.port.ts";
+import type { AnswerFiles, AnswerFolder } from "../core/ports/answer-files.port.ts";
 import type { QueryExecutionDeps } from "./query-runner.ts";
 import { ANSWER_FILES_META } from "./answer-files.ts";
-import { memoryAnswerFiles } from "./answer-files.testing.ts";
+import { fullReply, memoryAnswerFiles } from "./answer-files.testing.ts";
 import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
 import { partSchema } from "./composition-schema-parts.ts";
 import { expandFull } from "./full-projection.testing.ts";
@@ -69,7 +69,7 @@ test("an outline focus without a proven path is delivered by span through MCP", 
   const value: OutlineValue = { unheld: [], focus: [{ file: "src/store.ts", selector: "4", ancestors: [], declaration: { kind: "method", name: "m", line: 3, endLine: 5 }, omitted: 0, uses: [] }] };
   const { session } = await setup({ outline: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
   try {
-    const result = await session.callTool("ye_ast_outline", { focus: [{ file: "src/store.ts", line: 4 }], mode: "full" });
+    const result = await session.callFull("ye_ast_outline", { focus: [{ file: "src/store.ts", line: 4 }] });
     assert.notEqual(result.isError, true);
     const full = resultFields(result);
     assert.equal(full.value.focus[0].path, undefined);
@@ -90,7 +90,7 @@ test("impact and callers expose reached unknown causes and source evidence in te
       const summary = textOf(await session.callTool(tool, args));
       assert.match(summary, /unresolved.*src\/handler\.ts:5/);
       assert.match(summary, /no-extractor.*src\/handler\.ts:7/);
-      const full = resultFields(await session.callTool(tool, { ...args, mode: "full" }));
+      const full = resultFields(await session.callFull(tool, { ...args }));
       assert.deepEqual(full.value.entrypoints[0].observations, reached.observations);
       const validate = validatorOf(schema["~standard"].jsonSchema.output({ target: "draft-07" }));
       for (const invalid of [undefined, []]) {
@@ -112,7 +112,7 @@ test("outline identifies unplaced declarations in text and preserves placement i
   const { session } = await setup({ outline: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
   try {
     assert.match(textOf(await session.callTool("ye_ast_outline", { files: ["src/store.ts"] })), /unplaced: unresolved-container at 4:9/);
-    const full = resultFields(await session.callTool("ye_ast_outline", { files: ["src/store.ts"], mode: "full" }));
+    const full = resultFields(await session.callFull("ye_ast_outline", { files: ["src/store.ts"] }));
     assert.deepEqual(full.value.files[0].declarations[0].placement, placement);
     assert.equal(OUTLINE_OUTPUT.safeParse(full).success, true);
   } finally { await session.close(); }
@@ -329,7 +329,7 @@ interface Answers {
   consequences: (request: HypothesesRequest | ChangeRequest) => Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>>;
 }
 
-async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh, repositories?: readonly { path: string; repoId: string }[], repository = REPOSITORY, redaction: Redaction = fakeRedaction, answerBytes?: number, answerFiles?: AnswerFiles): Promise<{ session: Session; calls: Calls }> {
+async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh, repositories?: readonly { path: string; repoId: string }[], repository = REPOSITORY, redaction: Redaction = fakeRedaction, answerBytes?: number, answerFiles?: AnswerFiles | null): Promise<{ session: Session & { callFull: Session["callTool"] }; calls: Calls }> {
   const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], outline: [], trace: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [], hypotheses: [], changes: [] };
   /** A fact with the sidecar a read that refreshed something carries, and without one when it refreshed nothing. */
   const read = <T>(fact: Fact<T>): FactRead<T> => (refresh === undefined ? { fact } : { fact, refresh });
@@ -393,8 +393,10 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
     ofHypotheses: (request) => (calls.hypotheses.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
     ofChange: (request) => (calls.changes.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, evidenceComposition: {} as EvidenceComposition, redaction, repository, ...(answerBytes === undefined ? {} : { answerBytes }), ...(answerFiles === undefined ? {} : { answerFiles }), ...(repositories === undefined ? {} : { repositories }) });
-  return { session: await openSession(server), calls };
+  const files = answerFiles === null ? undefined : answerFiles === undefined ? memoryAnswerFiles() : { files: answerFiles, folders: new Map<string, AnswerFolder["files"]>() };
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, evidenceComposition: {} as EvidenceComposition, redaction, repository, ...(answerBytes === undefined ? {} : { answerBytes }), ...(files === undefined ? {} : { answerFiles: files.files }), ...(repositories === undefined ? {} : { repositories }) });
+  const session = await openSession(server);
+  return { session: { ...session, callFull: async (name, args) => fullReply(await session.callTool(name, args), files!.folders) }, calls };
 }
 
 
@@ -408,10 +410,17 @@ function fieldsOf(value: unknown): Record<string, unknown> {
   return rest;
 }
 
+type Presented = Session & { callFull: Session["callTool"] };
+/** A call in a mode a caller asks for, or in `full`: the answer file the same call writes, read back as the full reply it stands for. */
+const callPresented = (session: Presented, name: string, args: Record<string, unknown>, mode: "summary" | "details" | "full"): Promise<ToolResult> =>
+  mode === "full" ? session.callFull(name, args) : session.callTool(name, { ...args, mode });
+/** The JSON a selected reply prints after `label`, one line of its text. */
+const printed = (result: ToolResult, label: string): unknown => JSON.parse(textOf(result).split("\n").find((line) => line.startsWith(label))!.slice(label.length));
+
 test("MCP refuses redacted selection coordinates before querying or reflecting an unavailable source", async () => {
   const { session, calls } = await setup({ callers: async () => ({ ok: true, value: { ...base(), status: "unknown", reason: "unresolved" } }) });
   try {
-    for (const mode of ["summary", "details", "full"]) {
+    for (const mode of ["summary", "details"]) {
       const result = await session.callTool("ye_ast_callers", {
         targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }],
         mode,
@@ -435,15 +444,13 @@ test("entrypoint evidence selection returns the selected finding's evidence thro
   const { session, calls } = await setup();
   try {
     const result = await session.callTool("ye_ast_entrypoints", {
-      mode: "full",
       select: { kind: "entrypoint-evidence", findingIndex: 0 },
       page: { limit: 1 },
     });
     assert.equal(result.isError, undefined);
-    const projection = resultFields(result) as { kind: string; items: unknown[]; page: { total: number } };
-    assert.equal(projection.kind, "projection");
-    assert.deepEqual(projection.items, [{ evidenceIndex: 0, evidence: { path: "src/OrderController.java", line: 17 } }]);
-    assert.equal(projection.page.total, 1);
+    assert.equal((resultFields(result) as { kind: string }).kind, "projection-receipt");
+    assert.deepEqual(printed(result, "Records: "), [{ evidenceIndex: 0, evidence: { path: "src/OrderController.java", line: 17 } }]);
+    assert.equal((printed(result, "Page: ") as { total: number }).total, 1);
     assert.equal(calls.map.length, 1);
   } finally {
     await session.close();
@@ -453,7 +460,7 @@ test("entrypoint evidence selection returns the selected finding's evidence thro
 test("entrypoints exposes a pinned recovery recipe across response modes", async () => {
   const { session } = await setup();
   try {
-    const results = await Promise.all((["summary", "details", "full"] as const).map((mode) => session.callTool("ye_ast_entrypoints", { mode })));
+    const results = await Promise.all((["summary", "details", "full"] as const).map((mode) => callPresented(session, "ye_ast_entrypoints", {}, mode)));
     const recovery = results.map((result) => (resultFields(result) as Record<string, unknown>).recovery);
     assert.deepEqual(recovery[0], {
       version: 1,
@@ -533,7 +540,7 @@ test("entrypoint recovery ignores reference labels and clone location while pinn
   const two = await setup({}, undefined, [{ repoId: selected, path: "/clones/two" }]);
   try {
     const a = await one.session.callTool("ye_ast_entrypoints", { repo: selected, revision: "main", mode: "summary" });
-    const b = await two.session.callTool("ye_ast_entrypoints", { repo: selected, revision: "release", mode: "full" });
+    const b = await two.session.callFull("ye_ast_entrypoints", { repo: selected, revision: "release" });
     const recovery = (resultFields(a) as { recovery: { query: { arguments: unknown } } }).recovery;
     assert.deepEqual((resultFields(b) as { recovery: unknown }).recovery, recovery);
     assert.deepEqual(recovery.query.arguments, { repo: selected, revision: "a".repeat(40) });
@@ -594,8 +601,8 @@ test("entrypoint recovery refuses redacted semantic IDs and scopes without leaki
   try {
     for (const mode of ["summary", "details", "full"] as const) {
       for (const result of [
-        await scoped.session.callTool("ye_ast_entrypoints", { scope: { include: [`src/${SECRET}/**`] }, mode }),
-        await selected.session.callTool("ye_ast_entrypoints", { repo: SECRET, mode }),
+        await callPresented(scoped.session, "ye_ast_entrypoints", { scope: { include: [`src/${SECRET}/**`] } }, mode),
+        await callPresented(selected.session, "ye_ast_entrypoints", { repo: SECRET }, mode),
       ]) {
         assert.equal(result.isError, undefined);
         assert.deepEqual((resultFields(result) as { recovery: unknown }).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
@@ -717,7 +724,7 @@ test("every tool delivers mode receipts and a full fact", async () => {
         }
       }
       assert.deepEqual(await session.callTool(name, args), await session.callTool(name, { ...args, mode: "summary" }), name);
-      const whole = await session.callTool(name, { ...args, mode: "full" });
+      const whole = await session.callFull(name, { ...args });
       const full = resultFields(whole) as Record<string, unknown>;
       assert.equal(full["mode"], "full", name);
       assert.equal("value" in full, true, name);
@@ -753,11 +760,10 @@ test("every consumer route receives findings, status, snapshot, provenance, reco
   const cases: [string, Record<string, unknown>, string[]][] = [
     ["ye_ast_entrypoints", { mode: "summary" }, ["GET /orders/{id}"]],
     ["ye_ast_callers", { targets, mode: "details" }, ["OrderController.one"]],
-    ["ye_ast_impact", { base: "main", mode: "full" }, ["OrderController.create"]],
+    ["ye_ast_impact", { base: "main", mode: "details" }, ["OrderController.create"]],
     ["ye_ast_importers", { files: ["src/a.ts"], mode: "summary" }, []],
     ["ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "Partial" }], mode: "summary" }, ["partial", "depth"]],
     ["ye_ast_entrypoints", { mode: "summary", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }, ["src/EvidenceA.java"]],
-    ["ye_ast_entrypoints", { mode: "full", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }, ["src/EvidenceA.java"]],
     ["ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "Gone" }], mode: "details", select: handlerOrigins, page: { limit: 1 } }, ["unresolved"]],
     ["ye_ast_workspace", { mode: "summary" }, ["/clones/frontend"]],
     ["ye_ast_callers", { targets, workspace: {}, mode: "summary" }, ["src/web-change.ts", "shop-web"]],
@@ -805,7 +811,7 @@ test("workspace repository roots accompany the answer without entering the fact"
   const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact, repositoryRoots } }) });
 
   for (const mode of ["summary", "details", "full"] as const) {
-    const result = await session.callTool("ye_ast_workspace", { mode });
+    const result = await callPresented(session, "ye_ast_workspace", {}, mode);
     const structured = resultFields(result) as Record<string, unknown>;
     if (mode === "full") {
       assert.deepEqual(structured["repositoryRoots"], repositoryRoots);
@@ -826,7 +832,7 @@ test("workspace repository roots accompany the answer without entering the fact"
   await session.close();
   const plain = await setup();
   try {
-    const result = await plain.session.callTool("ye_ast_workspace", { mode: "full" });
+    const result = await plain.session.callFull("ye_ast_workspace", {});
     assert.equal("repositoryRoots" in (resultFields(result) as Record<string, unknown>), false);
     assert.doesNotMatch(textOf(result), /Repository locations:/);
   } finally { await plain.session.close(); }
@@ -837,7 +843,7 @@ test("full preserves the partial fact and presentation does not enter the query"
   const partial = impactFact({ status: "partial", cuts } as Partial<Fact<ImpactValue>>);
   const { session, calls } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
   try {
-    const whole = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+    const whole = await session.callFull("ye_ast_impact", { base: "main" });
     assert.notEqual(whole.isError, true);
     const { mode, repositoryRoots, recovery: _recovery, ...fact } = fieldsOf(resultFields(whole));
     assert.deepEqual(repositoryRoots, [{ repo: "shop", path: REPOSITORY.path }]);
@@ -879,7 +885,7 @@ test("the outline lists each declaration with its span and the files it imports,
 test("the outline output schema takes imports as bound module statements and rejects bare paths", async () => {
   const { session } = await setup();
   try {
-    const full = resultFields(await session.callTool("ye_ast_outline", { files: ["src/Order.java"], mode: "full" })) as { value: { files: { imports: unknown[] }[] } };
+    const full = resultFields(await session.callFull("ye_ast_outline", { files: ["src/Order.java"] })) as { value: { files: { imports: unknown[] }[] } };
     assert.equal(OUTLINE_OUTPUT.safeParse(full).success, true);
     const paths = structuredClone(full);
     paths.value.files[0]!.imports = ["src/Money.java"];
@@ -1001,7 +1007,7 @@ test("the server instructions tell the agent when to call every tool", async () 
   const { session } = await setup();
   const tools = await session.listTools();
   for (const tool of tools) assert.ok(session.instructions?.includes(tool.name), tool.name);
-  assert.match(session.instructions ?? "", /Content carries presentation text[^\n]*findings[^\n]*navigation[^\n]*result JSON/);
+  assert.match(session.instructions ?? "", /Content carries presentation text[^\n]*answer files line[^\n]*answer\.json[^\n]*jq[^\n]*result JSON/);
   assert.match(session.instructions ?? "", /Recovery is the recovery field/);
   await session.close();
 });
@@ -1114,10 +1120,10 @@ test("cut lookup categories share context while every coordinate reconstructs a 
       const selectors = [...text.matchAll(/^\s+cutIndex (\d+)/gm)].map(match => ({ ...context, cutIndex: Number(match[1]) }));
       assert.deepEqual(selectors, cuts.map((_, cutIndex) => ({ kind: "cut-places", owner: { kind: "fact" }, cutIndex })));
       const schema = validatorOf(tools.find(tool => tool.name === name)!.inputSchema);
-      for (const select of selectors) assert.equal(schema({ ...args, select, page: { limit: 1 }, mode: "full" }).valid, true);
-      const selected = await session.callTool(name, { ...args, select: selectors.at(-1), page: { limit: 1 }, mode: "full" });
+      for (const select of selectors) assert.equal(schema({ ...args, select, page: { limit: 1 } }).valid, true);
+      const selected = await session.callTool(name, { ...args, select: selectors.at(-1), page: { limit: 1 } });
       assert.notEqual(selected.isError, true);
-      assert.deepEqual((resultFields(selected) as { items: unknown[] }).items, [{ atIndex: 1, place: cuts.at(-1)!.at[1] }]);
+      assert.deepEqual(printed(selected, "Records: "), [{ atIndex: 1, place: cuts.at(-1)!.at[1] }]);
     }
   } finally { await session.close(); }
 });
@@ -1143,10 +1149,10 @@ test("handler and module rows print one compact coordinate each that rebuilds a 
       assert.deepEqual(listed, modules.map(({ file, snapshot }) => ({ file, snapshot })), mode);
       for (const handler of handlers) assert.equal(schema({ base: "main", select: { ...handlerExample, handler }, page: { limit: 1 } }).valid, true, mode);
       for (const module of listed) assert.equal(schema({ base: "main", select: { ...moduleExample, module }, page: { limit: 1 } }).valid, true, mode);
-      const byHandler = await session.callTool("ye_ast_impact", { base: "main", select: { ...handlerExample, handler: handlers.at(-1) }, page: { limit: 5 }, mode: "full" });
-      assert.deepEqual((resultFields(byHandler) as { items: unknown[] }).items, [{ seedIndex: 0, seed: IMPACT.seeds[0] }], mode);
-      const byModule = await session.callTool("ye_ast_impact", { base: "main", select: { ...moduleExample, module: listed.at(-1) }, page: { limit: 5 }, mode: "full" });
-      assert.deepEqual((resultFields(byModule) as { items: unknown[] }).items, [{ originIndex: 0, origin }], mode);
+      const byHandler = await session.callTool("ye_ast_impact", { base: "main", select: { ...handlerExample, handler: handlers.at(-1) }, page: { limit: 5 } });
+      assert.deepEqual(printed(byHandler, "Records: "), [{ seedIndex: 0, seed: IMPACT.seeds[0] }], mode);
+      const byModule = await session.callTool("ye_ast_impact", { base: "main", select: { ...moduleExample, module: listed.at(-1) }, page: { limit: 5 } });
+      assert.deepEqual(printed(byModule, "Records: "), [{ originIndex: 0, origin }], mode);
     }
   } finally { await session.close(); }
 });
@@ -1155,7 +1161,7 @@ test("malformed success is rejected by server runtime validation", async () => {
   const fact = { ...mapFact(), snapshot: { ...base().snapshot, sha: 42 } } as unknown as EntrypointMapFact;
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   try {
-    const result = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+    const result = await session.callTool("ye_ast_entrypoints", {});
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent, undefined);
     assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, "internal-fault");
@@ -1179,7 +1185,7 @@ test("output schemas validate real receipts and family payloads and reject broke
         assert.equal(validate(payload).valid, valid, `${name}: full JSON schema`);
       };
       const receipt = resultFields((await session.callTool(name, args))) as Record<string, unknown>;
-      const full = resultFields((await session.callTool(name, { ...args, mode: "full" }))) as Record<string, unknown>;
+      const full = resultFields((await session.callFull(name, { ...args }))) as Record<string, unknown>;
       check(receipt, true);
       check(full, true);
       check({ ...receipt, reason: "unexpected" }, false);
@@ -1194,7 +1200,7 @@ test("output schemas validate real receipts and family payloads and reject broke
 });
 
 test("runtime and full JSON impact schemas preserve unknown, partial and live identity", async () => {
-  const unknown: Fact<ImpactValue> = { ...base(), status: "unknown", reason: "index-unavailable" };
+  const unknown: Fact<ImpactValue> = { ...base(), status: "unknown", reason: "unresolved" };
   const partial = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/a.ts::f"], limit: 1, reason: "depth", reach: { kind: "anything" } }] } as Partial<Fact<ImpactValue>>);
   for (const fact of [unknown, partial]) {
     const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
@@ -1206,7 +1212,7 @@ test("runtime and full JSON impact schemas preserve unknown, partial and live id
         assert.equal(validate(value).valid, expected, "full JSON schema");
       };
       const receipt = resultFields((await session.callTool("ye_ast_impact", { base: "main" }))) as Record<string, unknown>;
-      const full = resultFields((await session.callTool("ye_ast_impact", { base: "main", mode: "full" }))) as Record<string, unknown>;
+      const full = resultFields((await session.callFull("ye_ast_impact", { base: "main" }))) as Record<string, unknown>;
       check(receipt, true); check(full, true);
       if (fact.status === "unknown") {
         const withoutReason = { ...receipt }; delete withoutReason.reason; check(withoutReason, false);
@@ -1229,15 +1235,15 @@ test("workspace impact full accepts nested unknowns and rejects incomplete contr
   if (original.status === "unknown") return;
   const value = { ...original.value, sections: {
     ...original.value.sections,
-    missing: { ...base(), status: "unknown" as const, reason: "index-unavailable" as const },
-    shop: { ...base(), status: "complete" as const, value: { reads: [{ kind: "trigger" as const, fact: { ...base(), status: "unknown" as const, reason: "index-unavailable" as const } }], callSites: [], unmatched: [], external: [], unresolved: [] } },
+    missing: { ...base(), status: "unknown" as const, reason: "unresolved" as const },
+    shop: { ...base(), status: "complete" as const, value: { reads: [{ kind: "trigger" as const, fact: { ...base(), status: "unknown" as const, reason: "unresolved" as const } }], callSites: [], unmatched: [], external: [], unresolved: [] } },
   } };
   const fact: Fact<WorkspaceImpactValue> = { ...original, value };
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   try {
     const schema = IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
     const validate = validatorOf(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
-    const result = await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: "full" });
+    const result = await session.callFull("ye_ast_impact", { base: "main", workspace: WORKSPACE });
     assert.notEqual(result.isError, true);
     const content = resultFields(result) as Record<string, unknown>;
     assert.equal(IMPACT_OUTPUT.safeParse(content).success, true);
@@ -1254,7 +1260,7 @@ test("workspace impact full accepts nested unknowns and rejects incomplete contr
 });
 
 test("entrypoint full accepts an unknown nested section and finding", async () => {
-  const sectionUnknown = { ...base(), status: "unknown" as const, reason: "index-unavailable" as const };
+  const sectionUnknown = { ...base(), status: "unknown" as const, reason: "unresolved" as const };
   const itemUnknown = { status: "unknown" as const, reason: "unresolved" as const, evidence: [{ path: "src/route.ts", line: 2 }] };
   const sectionKnown = { ...base(), status: "complete" as const, value: [itemUnknown] };
   for (const entrypoints of [sectionUnknown, sectionKnown]) {
@@ -1263,7 +1269,7 @@ test("entrypoint full accepts an unknown nested section and finding", async () =
     try {
       const schema = ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = validatorOf(schema);
-      const result = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+      const result = await session.callFull("ye_ast_entrypoints", {});
       assert.notEqual(result.isError, true);
       assert.equal(ENTRYPOINTS_OUTPUT.safeParse(resultFields(result)).success, true);
       assert.equal(validate(resultFields(result)).valid, true);
@@ -1277,7 +1283,7 @@ for (const validation of ["runtime", "full JSON"] as const) {
     try {
       const schema = ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = validatorOf(ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
-      const result = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+      const result = await session.callFull("ye_ast_entrypoints", {});
       assert.notEqual(result.isError, true);
       const content = resultFields(result) as Record<string, unknown>;
       const check = (value: unknown, expected: boolean) => assert.equal(validation === "runtime" ? ENTRYPOINTS_OUTPUT.safeParse(value).success : validate(value).valid, expected);
@@ -1297,7 +1303,7 @@ for (const validation of ["runtime", "full JSON"] as const) {
     try {
       const schema = IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = validatorOf(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
-      const result = await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: "full" });
+      const result = await session.callFull("ye_ast_impact", { base: "main", workspace: WORKSPACE });
       assert.notEqual(result.isError, true);
       const content = resultFields(result) as Record<string, unknown>;
       const check = (value: unknown, expected: boolean) => assert.equal(validation === "runtime" ? IMPACT_OUTPUT.safeParse(value).success : validate(value).valid, expected);
@@ -1351,7 +1357,7 @@ test("full schemas accept UI component and unknown and additive workspace target
     for (const [name, args, runtime] of cases) {
       const schema = (name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = validatorOf((name === "ye_ast_entrypoints" ? ENTRYPOINTS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
-      const result = await session.callTool(name, { ...args, mode: "full" });
+      const result = await session.callFull(name, { ...args });
       assert.notEqual(result.isError, true, name);
       assert.equal(runtime.safeParse(resultFields(result)).success, true, name);
       assert.equal(validate(resultFields(result)).valid, true, name);
@@ -1387,7 +1393,7 @@ test("full schemas accept UI component and unknown and additive workspace target
 test("direct full impact provides navigation without rendering the family listing", async () => {
   const { session } = await setup();
   try {
-    const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+    const result = await session.callFull("ye_ast_impact", { base: "main" });
     assert.notEqual(result.isError, true);
     const text = textOf(result);
     assert.match(text, /value\.entrypoints/);
@@ -1399,9 +1405,10 @@ test("direct full impact provides navigation without rendering the family listin
 test("removed presentation inputs fail without executing a query", async () => {
   const { session, calls } = await setup();
   try {
-    for (const args of [{ detail: "full" }, { full: true }, { full: false }, { mode: "invalid" }, { format: "json" }, { focus: "x" }]) {
+    for (const args of [{ detail: "full" }, { full: true }, { full: false }, { mode: "full" }, { mode: "invalid" }, { format: "json" }, { focus: "x" }]) {
       const result = await session.callTool("ye_ast_impact", { base: "main", ...args });
       assert.equal(result.isError, true);
+      if ("mode" in args && args.mode === "full") assert.match(textOf(result), /summary.*details/s);
     }
     assert.equal(calls.ofChange.length, 0);
   } finally { await session.close(); }
@@ -1453,7 +1460,7 @@ test("module dependencies have separate provenance and summary never masquerades
     assert.match(summary, /module dependencies/);
     assert.match(summary, /not symbol or entrypoint impact/);
     assert.doesNotMatch(summary, /src\/consumer-9.ts/);
-    const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+    const result = await session.callFull("ye_ast_impact", { base: "main" });
     assert.deepEqual(((resultFields(result) as { value: ImpactValue }).value).modules, value.modules);
     assert.match(textOf(result), /value\.modules/);
     assert.doesNotMatch(textOf(result), /src\/consumer-9.ts/);
@@ -1574,7 +1581,7 @@ test("importers summary counts every category without double-counting distinct f
   assert.match(text, new RegExp(`unresolved name matches \\(${LISTED_ITEMS}\\)`));
   for (const path of paths) assert.equal(text.includes(path), false, path);
   assert.match(text, /mode: "details"/);
-  assert.match(text, /mode: "full"/);
+  assert.match(text, /answer\.json/);
   const detail = textOf(await session.callTool("ye_ast_importers", { files: ["src/auth.service.ts"], mode: "details" }));
   assert.ok(Buffer.byteLength(text) <= Buffer.byteLength(detail));
   await session.close();
@@ -1584,7 +1591,7 @@ test("importers full keeps the original overlapping fact and cuts without repeat
   const fact: Fact<ImportersValue> = { ...base(), status: "partial", value: OVERLAPPING_IMPORTERS, cuts: [{ kind: "no-extractor", at: ["src/Unread.java"], reason: "not-indexed", reach: { kind: "anything" } }] };
   const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
   for (const mode of ["full"] as const) {
-    const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], mode });
+    const result = await callPresented(session, "ye_ast_importers", { files: ["src/OrderService.java"] }, mode);
     assert.deepEqual(fieldsOf(resultFields(result)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
     const text = textOf(result);
     assert.match(text, /status: partial/);
@@ -1607,17 +1614,17 @@ test("importers summary keeps a shorter listing rather than a longer counted omi
 
 test("importers distinguishes a complete empty result from an unknown result in every presentation", async () => {
   const empty: Fact<ImportersValue> = { ...base(), status: "complete", value: { files: [{ file: "a.ts", importers: [], users: [], unresolvedNamers: [] }] } };
-  const unknown: Fact<ImportersValue> = { ...base(), status: "unknown", reason: "index-unavailable" };
+  const unknown: Fact<ImportersValue> = { ...base(), status: "unknown", reason: "unresolved" };
   for (const fact of [empty, unknown]) {
     const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
-    for (const presentation of [{}, { mode: "details" }, { mode: "full" }]) {
-      const result = await session.callTool("ye_ast_importers", { files: ["a.ts"], ...presentation });
+    for (const mode of ["summary", "details", "full"] as const) {
+      const result = await callPresented(session, "ye_ast_importers", { files: ["a.ts"] }, mode);
       assert.equal((resultFields(result) as Fact<ImportersValue>).status, fact.status);
       const text = textOf(result);
       if (fact.status === "unknown") {
-        if (!("mode" in presentation) || presentation.mode !== "full") assert.match(text, /index-unavailable/);
+        if (mode !== "full") assert.match(text, /unresolved/);
         assert.equal(text.includes("related files"), false);
-      } else if (!("mode" in presentation) || presentation.mode !== "full") {
+      } else if (mode !== "full") {
         assert.match(text, /related files \(0 distinct\)/);
         assert.equal(text.includes("omitted"), false);
       }
@@ -1703,7 +1710,7 @@ test("impact detail localizes every cut anchor while full JSON retains every ref
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
-  const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+  const result = await session.callFull("ye_ast_impact", { base: "main" });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
   assert.deepEqual(withoutRecovery(resultFields(result)), { ...deep, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.match(text, /anchor "src\/b\.ts::B\.user":\n\s+cutIndex 0; hidden-caller; 2 reference places/);
@@ -1862,9 +1869,9 @@ test("both impact text levels count unselected change origins while full JSON pr
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, new RegExp(`^seeds \\(${LISTED_ITEMS + 1}\\):\\n {2}change origins: ${LISTED_ITEMS + 1} declarations across ${LISTED_ITEMS + 1} files \\(lines ${(LISTED_ITEMS + 1) / 2}, top-level ${(LISTED_ITEMS + 1) / 2}\\); mode: "full" includes every seed$`, "m"));
+  assert.match(summary, new RegExp(`^seeds \\(${LISTED_ITEMS + 1}\\):\\n {2}change origins: ${LISTED_ITEMS + 1} declarations across ${LISTED_ITEMS + 1} files \\(lines ${(LISTED_ITEMS + 1) / 2}, top-level ${(LISTED_ITEMS + 1) / 2}\\); answer\\.json includes every seed$`, "m"));
   assert.doesNotMatch(summary, /src\/feature-/);
-  const full = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+  const full = await session.callFull("ye_ast_impact", { base: "main" });
   assert.deepEqual(withoutRecovery(resultFields(full)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.doesNotMatch(textOf(full), /src\/feature-/);
   assert.match(textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" })), new RegExp(`change origins: ${LISTED_ITEMS + 1} declarations across ${LISTED_ITEMS + 1} files`));
@@ -1887,7 +1894,7 @@ test("a summary lists the seeds a caller asked for and counts the change seeds b
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, new RegExp(`^seeds \\(${LISTED_ITEMS + 2}\\):\\n {2}src/a\\.ts \\(requested\\)\\n {4}1 asked\\n {2}change origins: ${LISTED_ITEMS + 1} declarations across 1 file \\(lines ${LISTED_ITEMS + 1}\\); mode: "full" includes every seed$`, "m"));
+  assert.match(summary, new RegExp(`^seeds \\(${LISTED_ITEMS + 2}\\):\\n {2}src/a\\.ts \\(requested\\)\\n {4}1 asked\\n {2}change origins: ${LISTED_ITEMS + 1} declarations across 1 file \\(lines ${LISTED_ITEMS + 1}\\); answer\\.json includes every seed$`, "m"));
   await session.close();
 });
 
@@ -1994,7 +2001,7 @@ test("callers summary counts dependency depths and detail identifies the nearest
   assert.deepEqual(receipt, envelopeOf(deep));
   const full = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }], mode: "details" }));
   assert.match(full, /4 A\.other/);
-  assert.match(full, new RegExp(`${8 + LISTED_ITEMS} other symbols; mode: "full"`));
+  assert.match(full, new RegExp(`${8 + LISTED_ITEMS} other symbols; answer\\.json`));
   assert.doesNotMatch(full, /B\.user|C\.top/);
   await session.close();
 });
@@ -2054,24 +2061,24 @@ test("entrypoints closes with the cut list of the map and of its section", async
   const lines = text.split("\n");
   assert.equal(lines[0], "status: partial (cuts: 1 section section-partial: entrypoints)");
   assert.match(text, / {2}status: partial \(cuts: 1 no-extractor not-indexed\)/);
-  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+Recovery recipe and resultIdentity: recovery in the result JSON\.\nrepository root: shop -> \/work\/shop$/);
+  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+Recovery recipe and resultIdentity: recovery in the result JSON\.\nrepository root: shop -> \/work\/shop\nanswer files: [^\n]+$/);
   await session.close();
 });
 
 test("an unknown answer says unknown with its reason and its evidence, never an empty list", async () => {
-  const unknown = { ...base({ evidence: [{ path: "src/Broken.java", line: 4 }] }), status: "unknown", reason: "index-unavailable" } as Fact<ImpactValue>;
+  const unknown = { ...base({ evidence: [{ path: "src/Broken.java", line: 4 }] }), status: "unknown", reason: "unresolved" } as Fact<ImpactValue>;
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: unknown }) });
   const result = await session.callTool("ye_ast_impact", { base: "main" });
   const text = textOf(result);
-  assert.match(text, /status: unknown \(index-unavailable\)/);
+  assert.match(text, /status: unknown \(unresolved\)/);
   assert.match(text, /src\/Broken\.java:4/);
   assert.deepEqual(withoutRecovery(resultFields(result)), envelopeOf(unknown));
   assert.doesNotMatch(text, /\(none\)/);
   const details = await session.callTool("ye_ast_impact", { base: "main", mode: "details" });
   assert.deepEqual(withoutRecovery(resultFields(details)), envelopeOf(unknown, "details"));
-  assert.match(textOf(details), /index-unavailable/);
+  assert.match(textOf(details), /unresolved/);
   assert.match(textOf(details), /src\/Broken\.java:4/);
-  const full = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+  const full = await session.callFull("ye_ast_impact", { base: "main" });
   assert.deepEqual(withoutRecovery(resultFields(full)), { ...unknown, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.equal("value" in (resultFields(full) as Record<string, unknown>), false);
   await session.close();
@@ -2088,7 +2095,7 @@ test("an unknown entrypoint item is rendered unknown next to the routes found", 
 });
 
 test("a verified-empty complete answer counts its empty lists instead of spelling none", async () => {
-  const empty = impactFact({ value: { seeds: [], symbols: [], entrypoints: [] } } as Partial<Fact<ImpactValue>>);
+  const empty = impactFact({ value: { ...IMPACT, seeds: [], symbols: [], entrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: empty }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /status: complete/);
@@ -2335,7 +2342,7 @@ test("a query that throws is a tool error with a redacted message", async () => 
 test("redaction is applied to the structured content and so to the text rendered from it", async () => {
   const leaking = impactFact({ value: { ...IMPACT, seeds: [{ file: `src/${SECRET}.java`, symbol: "S.f", line: 1, basis: "requested" }] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: leaking }) });
-  const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+  const result = await session.callFull("ye_ast_impact", { base: "main" });
   assert.doesNotMatch(JSON.stringify(resultFields(result)), new RegExp(SECRET));
   assert.match(JSON.stringify(resultFields(result)), new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
   assert.doesNotMatch(textOf(result), new RegExp(SECRET));
@@ -2432,7 +2439,7 @@ test("live on each tool asks for the working tree with no revision, and the fact
   assert.deepEqual(withoutRecovery(resultFields(results[0])), envelopeOf(liveFact));
   const details = await session.callTool("ye_ast_entrypoints", { live: true, mode: "details" });
   assert.deepEqual(withoutRecovery(resultFields(details)), envelopeOf(liveFact, "details"));
-  assert.equal(results.every((result) => result._meta === undefined && !textOf(result).startsWith("stale:")), true);
+  assert.equal(results.every((result) => result._meta?.["ye-ast/live"] === undefined && !textOf(result).startsWith("stale:")), true);
   await session.close();
 });
 
@@ -2463,14 +2470,14 @@ test("an answer the working tree moved past opens its text with a stale line and
 
   const notice = { stateId: "s1", changed: ["src/A.java", `src/${REDACTED}.java`] };
   assert.match(textOf(result), /^stale: .*state s1: src\/A\.java, src\/\[REDACTED\]\.java\nstatus: complete/);
-  assert.deepEqual(result._meta, { "ye-ast/live": notice });
+  assert.deepEqual(result._meta?.["ye-ast/live"], notice);
   assert.deepEqual(withoutRecovery(resultFields(result)), envelopeOf(mapFact()));
   const details = await session.callTool("ye_ast_entrypoints", { live: true, mode: "details" });
   assert.match(textOf(details), /^stale: .*state s1: src\/A\.java, src\/\[REDACTED\]\.java\nstatus: complete/);
-  assert.deepEqual(details._meta, { "ye-ast/live": notice });
+  assert.deepEqual(details._meta?.["ye-ast/live"], notice);
   assert.deepEqual(withoutRecovery(resultFields(details)), envelopeOf(mapFact(), "details"));
-  const full = await session.callTool("ye_ast_entrypoints", { live: true, mode: "full" });
-  assert.deepEqual(full._meta, { "ye-ast/live": notice });
+  const full = await session.callFull("ye_ast_entrypoints", { live: true });
+  assert.deepEqual(full._meta?.["ye-ast/live"], notice);
   assert.deepEqual(expandFull("entrypoints", withoutRecovery(resultFields(full))), { ...mapFact(), mode: "full", live: notice, repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.match(textOf(full), /live\.stateId and live\.changed/);
   await session.close();
@@ -2608,11 +2615,11 @@ test("a workspace link is named by its answer-local key in the text, the full JS
     assert.match(details, /\[linkId "1"\]/);
     assert.match(details, /\[linkId "2"\]/);
     assert.equal(details.includes(spelled), false);
-    const full = resultFields(await session.callTool("ye_ast_impact", { ...args, mode: "full" }));
+    const full = resultFields(await session.callFull("ye_ast_impact", { ...args }));
     assert.deepEqual(full.value.links.map((item: { link: { id: string } }) => item.link.id), ["1", "2"]);
     assert.deepEqual(full.value.links.map((item: { reach: string[] }) => item.reach), [["1"], ["1", "2", "an-id-no-link-holds"]]);
-    const selected = resultFields(await session.callTool("ye_ast_impact", { ...args, mode: "full", select: { kind: "workspace-link-evidence", linkId: "2" }, page: { limit: 3 } }));
-    assert.deepEqual(selected.items.map((item: { linkId: string; link?: { id: string } }) => [item.linkId, item.link?.id]), [["1", "1"], ["2", "2"], ["an-id-no-link-holds", undefined]]);
+    const selected = await session.callTool("ye_ast_impact", { ...args, select: { kind: "workspace-link-evidence", linkId: "2" }, page: { limit: 3 } });
+    assert.deepEqual((printed(selected, "Records: ") as { linkId: string; link?: { id: string } }[]).map((item) => [item.linkId, item.link?.id]), [["1", "1"], ["2", "2"], ["an-id-no-link-holds", undefined]]);
   } finally { await session.close(); }
 });
 
@@ -2624,10 +2631,10 @@ test("the workspace and trace tools name their links by answer-local keys too, i
   const traced = { ...base(), status: "complete" as const, value: { ...TRACE, links: [link("long-t", 7, "shop")] } };
   const { session } = await setup({ outwardNames: async () => ({ ok: true as const, value: { fact: withLinks } }), trace: async () => ({ ok: true as const, value: traced }) });
   try {
-    const mapped = resultFields(await session.callTool("ye_ast_workspace", { mode: "full" }));
+    const mapped = resultFields(await session.callFull("ye_ast_workspace", {}));
     assert.deepEqual(mapped.value.links.map((item: { id: string }) => item.id), ["1", "2"]);
     assert.deepEqual(mapped.value.internalLinks.map((item: { id: string }) => item.id), ["3"]);
-    const walked = resultFields(await session.callTool("ye_ast_trace", { targets: [{ file: "src/Order.java", symbol: "total" }], mode: "full" }));
+    const walked = resultFields(await session.callFull("ye_ast_trace", { targets: [{ file: "src/Order.java", symbol: "total" }] }));
     assert.deepEqual(walked.value.links.map((item: { id: string }) => item.id), ["1"]);
   } finally { await session.close(); }
 });
@@ -2640,7 +2647,7 @@ test("contract consequences full states a finding several answers share once, va
   const fact = { ...base(), status: "complete" as const, value } as unknown as Fact<ConsequencesValue>;
   const { session } = await setup({ consequences: async () => ({ ok: true as const, value: fact }) });
   try {
-    const result = await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS], mode: "full" });
+    const result = await session.callFull("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS] });
     const full = resultFields(result);
     assert.deepEqual(full.value.sharedFindings, [shared]);
     assert.deepEqual(full.value.answers.map((answer: { findings: unknown[] }) => answer.findings), [[{ sharedFinding: 0 }], [{ sharedFinding: 0 }]]);
@@ -2678,7 +2685,7 @@ test("the workspace tool answers the outward names without the repositories it r
   const internalPath = "/internal/mirror/private";
   const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact(), repositorySources: [{ repo: "shop", path: internalPath }] } }) });
 
-  const result = await session.callTool("ye_ast_workspace", { mode: "full" });
+  const result = await session.callFull("ye_ast_workspace", {});
   assert.equal("repositorySources" in (resultFields(result) as Record<string, unknown>), false);
   assert.equal(JSON.stringify(result).includes(internalPath), false);
   const value = (resultFields(result) as { value: Record<string, unknown> }).value;
@@ -2772,7 +2779,7 @@ test("a workspace summary groups the outward names by kind and counts the depend
   const unservedLine = text.split("\n").find((line) => line.startsWith("no local repository serves (4):")) ?? "";
   for (const line of [namesLine, unservedLine]) {
     assert.match(line, /mode "details"/);
-    assert.match(line, /mode: "full"/);
+    assert.match(line, /answer\.json/);
   }
   assert.doesNotMatch(text, /- dependency @angular\/core/);
   await session.close();
@@ -2837,8 +2844,8 @@ test("every workspace-bearing tool carries the freshness and the resolution besi
   ];
 
   for (const [name, args] of tools) {
-    const before = resultFields((await plain.session.callTool(name, { ...args, mode: "full" }))) as Record<string, unknown>;
-    const after = resultFields((await refreshed.session.callTool(name, { ...args, mode: "full" }))) as Record<string, unknown>;
+    const before = resultFields((await plain.session.callFull(name, { ...args }))) as Record<string, unknown>;
+    const after = resultFields((await refreshed.session.callFull(name, { ...args }))) as Record<string, unknown>;
     assert.equal("freshness" in before, false, `${name}: a read that refreshed nothing carries no freshness`);
     assert.equal("resolution" in before, false, `${name}: a read that refreshed nothing carries no resolution`);
     assert.deepEqual(after["freshness"], REFRESH.freshness, name);
@@ -2892,7 +2899,7 @@ test("the sidecar is redacted with the composed redaction like every other value
     value: { fact: workspaceFact(), refresh: leaking, repositoryRoots: [{ repo: "orders", path: `/clones/${SECRET}` }] },
   }) });
 
-  const result = await session.callTool("ye_ast_workspace", { mode: "full" });
+  const result = await session.callFull("ye_ast_workspace", {});
 
   const structured = JSON.stringify(resultFields(result));
   assert.doesNotMatch(structured, new RegExp(SECRET));
@@ -2950,7 +2957,7 @@ test("decision text and structured full retain each evidence repository", async 
   const evidence = [{ repo: "caller", path: "src/app.ts", line: 7 }, { repo: "server", path: "src/app.ts", line: 7 }];
   const decision = { ...DECISIONS.decisions[0]!, evidence, options: [{ value: "server", evidence, recommended: true }] };
   const { session } = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact({ ...DECISIONS, decisions: [decision] }) } }) });
-  const result = await session.callTool("ye_ast_decisions", { mode: "full" });
+  const result = await session.callFull("ye_ast_decisions", {});
   const text = textOf(await session.callTool("ye_ast_decisions", { mode: "details" }));
   assert.match(text, /caller:src\/app\.ts:7/);
   assert.match(text, /server:src\/app\.ts:7/);
@@ -3051,12 +3058,12 @@ test("impact detail retains a selected origin association while both text modes 
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = await session.callTool("ye_ast_impact", { base: "main" });
   const full = await session.callTool("ye_ast_impact", { base: "main", mode: "details" });
-  const structured = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+  const structured = await session.callFull("ye_ast_impact", { base: "main" });
   assert.deepEqual(withoutRecovery(resultFields(structured)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.doesNotMatch(textOf(summary), /one verified origin/);
   assert.match(textOf(full), /one verified origin: src\/pages\/checkout\.component\.ts:30-45 Checkout \(resource\)/);
   assert.match(textOf(full), /1 other origin/);
-  assert.match(textOf(full), /mode: "full" (?:includes|has) all.*origin/);
+  assert.match(textOf(full), /answer\.json (?:includes|has) all.*origin/);
   assert.doesNotMatch(textOf(summary), /src\/unrelated\/unrelated\.service\.ts/);
   assert.doesNotMatch(textOf(full), /src\/unrelated\/unrelated\.service\.ts/);
   await session.close();
@@ -3097,12 +3104,12 @@ test("full family guides locate recorded data without repeating listings", async
       ["ye_ast_decisions", {}, [/value\.decisions/, /subject/, /options/, /evidence/], /geo\.example\.com/],
     ];
     for (const [name, args, expected, listing] of cases) {
-      const result = await session.callTool(name, { ...args, mode: "full" });
+      const result = await session.callFull(name, { ...args });
       assert.notEqual(result.isError, true, name);
       const text = textOf(result);
       for (const pattern of expected) assert.match(text, pattern, name);
       assert.doesNotMatch(text, listing, name);
-      assert.doesNotMatch(text, /request.*mode: "full"/i, name);
+      assert.doesNotMatch(text, /request.*answer\.json/i, name);
     }
   } finally { await session.close(); }
 });
@@ -3220,7 +3227,7 @@ test("entrypoint modes expose unknown base path and retain recorded context for 
     const detail = textOf(await session.callTool("ye_ast_entrypoints", { mode: "details" }));
     assert.match(summary, /base path.*unknown/i);
     assert.match(detail, /base path.*unknown.*unresolved/i);
-    const full = textOf(await session.callTool("ye_ast_entrypoints", { mode: "full" }));
+    const full = textOf(await session.callFull("ye_ast_entrypoints", {}));
     assert.match(full, /basePath/);
   } finally { await session.close(); }
 });
@@ -3251,7 +3258,7 @@ test("callers direct details and full retain requested target and explain depend
     const detail = textOf(await session.callTool("ye_ast_callers", { ...args, mode: "details" }));
     assert.match(detail, /OrderService\.find/);
     assert.match(detail, /OrderController\.one[^\n]*via.*OrderService\.find at 44/);
-    const full = await session.callTool("ye_ast_callers", { ...args, mode: "full" });
+    const full = await session.callFull("ye_ast_callers", { ...args });
     assert.match(textOf(full), /value\.symbols/);
     assert.match(textOf(full), /via\.lines/);
     assert.doesNotMatch(textOf(full), /impacted symbols \(1\):/);
@@ -3275,7 +3282,7 @@ test("UI route guard details preserve each route's own guards and summary offers
   try {
     const summary = textOf(await session.callTool("ye_ast_entrypoints", {}));
     assert.match(summary, /3 (?:own |declared )?guards/i);
-    assert.match(summary, /mode: "full"/);
+    assert.match(summary, /answer\.json/);
     assert.match(summary, /value\.entrypoints\.value\[\]\.value\.guards/);
     assert.match(summary, /kind.*name/i);
     assert.doesNotMatch(summary, /unguarded|unprotected/i);
@@ -3294,7 +3301,7 @@ test("UI route guard details preserve each route's own guards and summary offers
     assert.match(details, /component unknown/);
     assert.match(details, /inherited.*(?:not|unknown)/i);
     assert.doesNotMatch(details, /unguarded|unprotected/i);
-    const full = textOf(await session.callTool("ye_ast_entrypoints", { mode: "full" }));
+    const full = textOf(await session.callFull("ye_ast_entrypoints", {}));
     assert.match(full, /value\.entrypoints\.value\[\]\.value\.guards/);
     assert.match(full, /kind.*name/i);
   } finally { await session.close(); }
@@ -3304,7 +3311,7 @@ test("full impact guides changed-entrypoint-only result without declaring it emp
   const fact = impactFact({ value: { ...IMPACT, seeds: [], symbols: [], entrypoints: [], modules: undefined } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   try {
-    const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
+    const result = await session.callFull("ye_ast_impact", { base: "main" });
     assert.notEqual(result.isError, true);
     const value = (resultFields(result) as { value: ImpactValue }).value;
     assert.equal(value.changedEntrypoints?.length, 1);
@@ -3329,7 +3336,7 @@ test("declared selector routes each local and workspace branch and preserves rel
       ["ye_ast_decisions", {}], ["ye_ast_impact", { base: "main", workspace: {} }],
       ["ye_ast_callers", { targets: target, workspace: {} }],
     ] as [string, Record<string, unknown>][]) {
-      const result = await session.callTool(name, { ...args, repo: "foreign", mode: "full" });
+      const result = await session.callFull(name, { ...args, repo: "foreign" });
       assert.notEqual(result.isError, true, name);
       const content = resultFields(result) as { snapshot: { repo: string }; repositoryRoots?: unknown };
       assert.equal(content.snapshot.repo, "foreign", name);
@@ -3385,14 +3392,14 @@ test("selected local root is redacted and a mismatching primary snapshot fails",
   const foreign = { path: `/work/${SECRET}`, repoId: "foreign" };
   const { session } = await setup({}, undefined, [foreign, { path: "/work/other", repoId: "other" }]);
   try {
-    const result = await session.callTool("ye_ast_outline", { repo: "foreign", files: ["src/shared.ts"], mode: "full" });
+    const result = await session.callFull("ye_ast_outline", { repo: "foreign", files: ["src/shared.ts"] });
     assert.deepEqual((resultFields(result) as { repositoryRoots: unknown }).repositoryRoots, [{ repo: "foreign", path: `/work/${REDACTED}` }]);
     assert.equal(JSON.stringify(result).includes(SECRET), false);
     assert.equal(JSON.stringify(result).includes("/work/other"), false);
   } finally { await session.close(); }
   const bad = await setup({ map: async () => ({ ok: true, value: mapFact() }) }, undefined, [foreign]);
   try {
-    const result = await bad.session.callTool("ye_ast_entrypoints", { repo: "foreign", mode: "full" });
+    const result = await bad.session.callTool("ye_ast_entrypoints", { repo: "foreign" });
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent, undefined);
     assert.ok(result._meta?.["ye-ast/fault"]);
@@ -3467,7 +3474,7 @@ test("workspace follow-up guidance uses the destination owner and its recorded s
   const foreign = { ...fact, value: { ...fact.value, links: [{ ...link, link: { ...link.link, to: { ...link.link.to, repo: "foreign" } } }], repositorySnapshots: [{ repo: "foreign", snapshot: { repo: "foreign", kind: "sha" as const, sha: "c".repeat(40) } }] } };
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact: foreign } }) }, undefined, [{ path: "/foreign", repoId: "foreign" }]);
   try {
-    const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: {}, mode: "full" }));
+    const text = textOf(await session.callFull("ye_ast_impact", { base: "main", workspace: {} }));
     assert.match(text, /foreign[^\n]*c{40}[^\n]*src\/OrderController\.java/);
     assert.match(text, /revision/);
   } finally { await session.close(); }
@@ -3477,16 +3484,16 @@ test("base module and fresh live guidance retain their own identities", async ()
   const fact = impactFact({ value: { ...IMPACT, modules: { origins: [], modules: [{ file: "src/old.ts", snapshot: "base", depth: 0, origins: [] }], cost: { expansionsUsed: 0 } } } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   try {
-    const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "full" }));
+    const text = textOf(await session.callFull("ye_ast_impact", { base: "main" }));
     assert.match(text, /Base module: repo "shop", the base recorded below, file "src\/old\.ts"/);
     assert.match(text, /head "a{40}" and base "b{40}"/);
   } finally { await session.close(); }
   let stateId = "old-state";
   const second = await setup({ ofChange: async () => ({ ok: true, value: impactFact({ snapshot: { repo: "shop", kind: "live", head: "d".repeat(40), stateId } }) }) });
   try {
-    const previous = await second.session.callTool("ye_ast_impact", { base: "main", live: true, mode: "full" });
+    const previous = await second.session.callFull("ye_ast_impact", { base: "main", live: true });
     stateId = "new-state";
-    const fresh = await second.session.callTool("ye_ast_impact", { base: "main", live: true, mode: "full" });
+    const fresh = await second.session.callFull("ye_ast_impact", { base: "main", live: true });
     assert.equal((resultFields(previous) as { snapshot: { stateId: string } }).snapshot.stateId, "old-state");
     assert.equal((resultFields(fresh) as { snapshot: { stateId: string } }).snapshot.stateId, "new-state");
     const text = textOf(fresh);
@@ -3509,8 +3516,8 @@ test("workspace base modules navigate to the trigger merge base instead of head"
   fact.value.repositorySnapshots = [{ repo: "shop", snapshot: fact.snapshot }];
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   try {
-    for (const mode of ["summary", "details", "full"]) {
-      const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: {}, mode }));
+    for (const mode of ["summary", "details", "full"] as const) {
+      const text = textOf(await callPresented(session, "ye_ast_impact", { base: "main", workspace: {} }, mode));
       assert.match(text, /Base module: repo "shop", revision "b{40}", file "src\/removed\.ts"/);
       assert.doesNotMatch(text, /Base module:[^\n]*a{40}/);
     }
@@ -3522,8 +3529,8 @@ test("callers recovery returns a pinned recipe in every response mode", async ()
   const { session } = await setup({ callers: async () => ({ ok: true, value: impactFact({ inputs: { ...base().inputs, declaredConfig: { targets: ["src/A.java:A.f"] } } }) }) });
   try {
     const recoveries = [];
-    for (const mode of ["summary", "details", "full"]) {
-      const answer = await session.callTool("ye_ast_callers", { targets, mode });
+    for (const mode of ["summary", "details", "full"] as const) {
+      const answer = await callPresented(session, "ye_ast_callers", { targets }, mode);
       recoveries.push((resultFields(answer) as Record<string, unknown>).recovery);
     }
     assert.deepEqual(recoveries[0], recoveries[1]);
@@ -3547,7 +3554,7 @@ test("workspace callers recovery forwards actual replay and preserves omitted wo
     return { ok: true, value: { fact: recorded, workspaceReplay: replay, repositorySources: [{ repo: "shop-web", path: "/internal/mirror" }] } };
   } });
   try {
-    const response = await session.callTool("ye_ast_callers", { targets, workspace: {}, budget: { depth: 2 }, mode: "full" });
+    const response = await session.callFull("ye_ast_callers", { targets, workspace: {}, budget: { depth: 2 } });
     const recovery = (resultFields(response) as { recovery: { status: string; query: { name: string; arguments: Record<string, unknown> } } }).recovery;
     assert.equal(recovery.status, "available");
     assert.deepEqual(recovery.query.arguments, { repo: "shop", revision: "a".repeat(40), targets, budget: { depth: 2 }, workspace: {}, replay });
@@ -3611,8 +3618,8 @@ test("impact recovery pins the recorded merge base and head in every mode", asyn
   } });
   try {
     const results = [];
-    for (const mode of ["summary", "details", "full"]) {
-      const result = await session.callTool("ye_ast_impact", { base: "main", head: "topic", mode });
+    for (const mode of ["summary", "details", "full"] as const) {
+      const result = await callPresented(session, "ye_ast_impact", { base: "main", head: "topic" }, mode);
       results.push((resultFields(result) as Record<string, unknown>).recovery);
     }
     assert.deepEqual(results[0], results[1]);
@@ -3655,7 +3662,7 @@ test("workspace impact recovery forwards actual replay and preserves selectors a
     return { ok: true, value: { fact: recorded, workspaceReplay: replay, repositorySources: [{ repo: "shop-web", path: "/internal/mirror" }] } };
   } });
   try {
-    const first = await session.callTool("ye_ast_impact", { base: "main", workspace: {}, changed: ["src/**"], budget: { depth: 2 }, mode: "full" });
+    const first = await session.callFull("ye_ast_impact", { base: "main", workspace: {}, changed: ["src/**"], budget: { depth: 2 } });
     const recovery = (resultFields(first) as { recovery: { status: string; query: { name: string; arguments: Record<string, unknown> } }; value: WorkspaceImpactValue }).recovery;
     assert.equal(recovery.status, "available");
     assert.deepEqual(recovery.query.arguments, { repo: "shop", base: "b".repeat(40), head: "a".repeat(40), changed: ["src/**"], budget: { depth: 2 }, workspace: {}, replay });
@@ -3779,7 +3786,7 @@ test("workspace recovery identity includes declaration, vector and contributing 
   try {
     for (const name of ["ye_ast_callers", "ye_ast_impact"] as const) {
       const req = name === "ye_ast_callers" ? { workspace: {}, targets: [{ file: "src/A.java", symbol: "A.f" }] } : { workspace: {}, base: "main" };
-      const get = async (mode: string) => resultFields((await session.callTool(name, { ...req, mode }))) as { recovery: { status: string; resultIdentity: string; query: { arguments: Record<string, unknown> } } };
+      const get = async (mode: "summary" | "full") => resultFields((await callPresented(session, name, req, mode))) as { recovery: { status: string; resultIdentity: string; query: { arguments: Record<string, unknown> } } };
       read = { fact, workspaceReplay: replay, repositoryRoots: [{ repo: "shop-web", path: "/clones/one" }], repositorySources: [{ repo: "shop-web", path: "/mirror/one" }] };
       const baseline = await get("summary");
       assert.equal(baseline.recovery.status, "available");
@@ -3862,7 +3869,7 @@ test("recovery ignores moving aliases and selected root for identical recorded f
       const a = name === "ye_ast_callers" ? { targets: [{ file: "src/A.java", symbol: "A.f" }], revision: "main" } : { base: "main", head: "branch" };
       const b = name === "ye_ast_callers" ? { targets: [{ file: "src/A.java", symbol: "A.f" }], revision: "release" } : { base: "release", head: "tag" };
       const x = await first.session.callTool(name, { ...a, mode: "summary" });
-      const y = await second.session.callTool(name, { ...b, mode: "full" });
+      const y = await second.session.callFull(name, { ...b });
       assert.deepEqual((resultFields(x) as Record<string, unknown>).recovery, (resultFields(y) as Record<string, unknown>).recovery);
     }
   } finally { await first.session.close(); await second.session.close(); }
@@ -3885,8 +3892,8 @@ test("semantic recipe redaction disables recovery and leaks no secret", async ()
       ["ye_ast_impact", { base: "main", workspace: { gateways: [{ prefix: SECRET, repo: "shop" }] } }],
     ];
     const tools = await session.listTools();
-    for (const [name, args] of cases) for (const mode of ["summary", "details", "full"]) {
-      const result = await session.callTool(name, { ...args, mode });
+    for (const [name, args] of cases) for (const mode of ["summary", "details", "full"] as const) {
+      const result = await callPresented(session, name, { ...args }, mode);
       assert.equal(validatorOf((name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(result)).valid, true);
       assert.deepEqual((resultFields(result) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" }, `${name}: ${JSON.stringify(args)}`);
       assert.doesNotMatch(JSON.stringify(result), new RegExp(SECRET));
@@ -4115,8 +4122,8 @@ test("mixed recovery preserves live replay and redacts workspace notices in ever
     const validate = validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     let recipe: { name: string; arguments: Record<string, unknown> } | undefined;
     let identity: string | undefined;
-    for (const mode of ["summary", "details", "full"]) {
-      const response = await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: {}, live: true, mode });
+    for (const mode of ["summary", "details", "full"] as const) {
+      const response = await callPresented(session, "ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: {}, live: true }, mode);
       assert.equal(validate(resultFields(response)).valid, true);
       const recovery = (resultFields(response) as { recovery: { status: string; resultIdentity: string; query: typeof recipe } }).recovery;
       assert.equal(recovery.status, "available");
@@ -4178,19 +4185,19 @@ test("selected evidence pages replay the source and reject changed identities be
     const tool = (await session.listTools()).find((t) => t.name === "ye_ast_entrypoints")!;
     const validate = validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     const select = {kind:"entrypoint-evidence",findingIndex:0};
-    const request = {mode:"full",select,page:{limit:1}};
+    const request = {select,page:{limit:1}};
     const first = await session.callTool(tool.name, request);
     assert.equal(first.isError, undefined);
     assert.equal(validate(resultFields(first)).valid, true);
-    const a = resultFields(first) as {items: unknown[]; page:{nextCursor:string}; recovery:{resultIdentity:string}};
+    const a = resultFields(first) as {page:{nextCursor:string}; recovery:{resultIdentity:string}};
     const secondArgs = {...request,page:{limit:1,cursor:a.page.nextCursor}};
     const second = await session.callTool(tool.name, secondArgs);
     const repeated = await session.callTool(tool.name, secondArgs);
     assert.deepEqual(resultFields(second), resultFields(repeated));
-    const b = resultFields(second) as {items: unknown[]; page:{nextCursor:string}};
+    const b = resultFields(second) as {page:{nextCursor:string}};
     const third = await session.callTool(tool.name,{...request,page:{limit:1,cursor:b.page.nextCursor}});
-    const c = resultFields(third) as {items: unknown[]; page:{nextCursor?:string}};
-    assert.deepEqual([...a.items,...b.items,...c.items], [
+    const c = resultFields(third) as {page:{nextCursor?:string}};
+    assert.deepEqual([first,second,third].flatMap((page) => printed(page, "Records: ") as unknown[]), [
       {evidenceIndex:0,evidence:{path:"a",line:1}}, {evidenceIndex:1,evidence:{path:"b",line:2}}, {evidenceIndex:2,evidence:{path:"c",line:3}},
     ]);
     assert.equal(c.page.nextCursor, undefined);
@@ -4247,15 +4254,15 @@ test("selected SDK responses bind all categories and modes to actual public sche
       {name:"ye_ast_impact",args:{base:"main",workspace:{}},select:{kind:"module-origins",owner:{kind:"section",repo:"shop"},module:{file:"old",snapshot:"base"}},item:{originIndex:0,origin:{file:"old",change:"modified"}}},
       {name:"ye_ast_callers",args:{targets:[{file:"src/A.java",symbol:"A.f"}],workspace:{}},select:{kind:"workspace-link-evidence",linkId:"1"},item:{position:0,linkId:"1",link:{...ws.value.links[0]!.link,id:"1"}}},
     ];
-    for (const c of cases) for (const mode of ["full","summary","details"]) {
+    for (const c of cases) for (const mode of ["summary","details"]) {
       const tool = tools.find((t)=>t.name===c.name)!;
       const result = await session.callTool(c.name,{...c.args,select:c.select,page:{limit:1},mode});
       assert.equal(result.isError,undefined,JSON.stringify(result));
       assert.equal(validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(result)).valid,true,JSON.stringify(resultFields(result)));
       const response = resultFields(result) as {kind:string;items?:unknown[]};
-      assert.equal(response.kind,mode === "full" ? "projection" : "projection-receipt");
-      if (mode === "full") assert.deepEqual(response.items,[c.item]);
-      else { assert.equal(response.items,undefined); assert.match(textOf(result),/Records:/); }
+      assert.equal(response.kind,"projection-receipt");
+      assert.equal(response.items,undefined);
+      assert.deepEqual(printed(result,"Records: "),[c.item]);
     }
   } finally { await session.close(); }
 });
@@ -4295,13 +4302,13 @@ test("unknown selection owners retain evidence; deadline and redacted recipes fa
   const {session} = await setup({map:async()=>({ok:true,value:current})});
   try {
     const select = {kind:"entrypoint-evidence",findingIndex:0};
-    const args = {select,page:{limit:1},mode:"full"};
+    const args = {select,page:{limit:1}};
     const unknown = await session.callTool("ye_ast_entrypoints",args);
     assert.equal(unknown.isError,undefined);
-    const projection = resultFields(unknown) as {availability:string;reason:string;evidence:unknown[];page?:unknown};
+    const projection = resultFields(unknown) as {availability:string;reason:string;page?:unknown};
     assert.equal(projection.availability,"unavailable");
     assert.equal(projection.reason,"unresolved");
-    assert.deepEqual(projection.evidence,[{path:"hidden",line:4}]);
+    assert.deepEqual(printed(unknown,"Evidence: "),[{path:"hidden",line:4}]);
     assert.equal(projection.page,undefined);
     current = {...original,value:{...original.value,entrypoints:{...base(),status:"unknown",reason:"deadline"}}};
     const deadline = await session.callTool("ye_ast_entrypoints",args);
@@ -4324,11 +4331,10 @@ test("known empty selections stay available and missing subjects return typed fa
   try {
     const handler = {path:"src/OrderController.java",symbol:"OrderController.one",line:17};
     const select = {kind:"handler-origins",owner:{kind:"local"},handler};
-    const zero = await session.callTool("ye_ast_callers",{targets,select,page:{limit:5},mode:"full"});
+    const zero = await session.callTool("ye_ast_callers",{targets,select,page:{limit:5}});
     assert.equal(zero.isError,undefined);
-    const payload = resultFields(zero) as {items:unknown[];page:{total:number;returned:number;nextCursor?:string}};
-    assert.deepEqual(payload.items,[]);
-    assert.deepEqual(payload.page,{limit:5,offset:0,returned:0,total:0});
+    assert.deepEqual(printed(zero,"Records: "),[]);
+    assert.deepEqual((resultFields(zero) as {page:unknown}).page,{limit:5,offset:0,returned:0,total:0});
     const missing = await session.callTool("ye_ast_callers",{targets,select:{...select,handler:{...handler,line:18}},page:{limit:1}});
     assert.equal(missing.isError,true);
     assert.deepEqual(missing._meta?.["ye-ast/fault"], {kind: "selection-not-found", detail: "selection-not-found"});
@@ -4340,7 +4346,7 @@ test("continuation cannot invent a page for an unavailable evidence owner", asyn
   const fact: EntrypointMapFact = { ...original, value: { entrypoints: { ...base(), status: "unknown", reason: "unresolved" } } };
   const { session, calls } = await setup({ map: async () => ({ ok: true, value: fact }) });
   try {
-    const whole = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+    const whole = await session.callFull("ye_ast_entrypoints", {});
     const recovery = (resultFields(whole) as { recovery: { status: string; resultIdentity: string } }).recovery;
     assert.equal(recovery.status, "available");
     const select = { kind: "entrypoint-evidence", findingIndex: 0 };
@@ -4372,26 +4378,23 @@ test("selected UI evidence preserves known and unknown components through all pu
     const tool = (await session.listTools()).find(({ name }) => name === "ye_ast_entrypoints")!;
     const validate = validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     for (const [findingIndex, finding] of findings.entries()) {
-      for (const mode of ["summary", "details", "full"] as const) {
+      for (const mode of ["summary", "details"] as const) {
         const result = await session.callTool(tool.name, { mode, select: { kind: "entrypoint-evidence", findingIndex }, page: { limit: 2 } });
         assert.equal(result.isError, undefined, JSON.stringify(result));
         assert.equal(validate(resultFields(result)).valid, true);
-        const payload = resultFields(result) as { source: { analysis: { status: string } }; context?: { finding: Record<string, unknown> }; items?: unknown[] };
+        const payload = resultFields(result) as { source: { analysis: { status: string } }; items?: unknown[] };
         assert.equal(payload.source.analysis.status, "partial");
-        if (mode === "full") {
-          assert.deepEqual(payload.items, finding.evidence.map((evidence, evidenceIndex) => ({ evidenceIndex, evidence })));
-          if (finding.status === "unknown") assert.deepEqual(payload.context?.finding, { status: "unknown", reason: finding.reason });
-          else {
-            assert.equal(payload.context?.finding.status, "complete");
-            const identity = payload.context?.finding.identity as Record<string, unknown>;
-            assert.equal(identity.kind, "ui-route");
-            if (finding.value.kind !== "ui-route") throw new Error("fixture");
-            assert.deepEqual(identity.component, finding.value.component);
-            assert.equal("handler" in identity || "guards" in identity, false);
-          }
-        } else {
-          assert.equal(payload.items, undefined);
-          assert.match(textOf(result), /Records:/);
+        assert.equal(payload.items, undefined);
+        assert.deepEqual(printed(result, "Records: "), finding.evidence.map((evidence, evidenceIndex) => ({ evidenceIndex, evidence })));
+        const context = printed(result, "Context: ") as { finding: Record<string, unknown> };
+        if (finding.status === "unknown") assert.deepEqual(context.finding, { status: "unknown", reason: finding.reason });
+        else {
+          assert.equal(context.finding.status, "complete");
+          const identity = context.finding.identity as Record<string, unknown>;
+          assert.equal(identity.kind, "ui-route");
+          if (finding.value.kind !== "ui-route") throw new Error("fixture");
+          assert.deepEqual(identity.component, finding.value.component);
+          assert.equal("handler" in identity || "guards" in identity, false);
         }
       }
     }
@@ -4405,14 +4408,13 @@ test("selected evidence is redacted before page rendering in every public mode",
   const fact: EntrypointMapFact = { ...original, value: { entrypoints: { ...section, value: section.value.map((finding, index) => index === 0 ? { ...finding, evidence: [{ path: `src/${SECRET}.ts`, line: 7 }] } : finding) } } };
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   try {
-    for (const mode of ["summary", "details", "full"] as const) {
+    for (const mode of ["summary", "details"] as const) {
       const result = await session.callTool("ye_ast_entrypoints", { mode, select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
       assert.equal(result.isError, undefined);
       assert.equal(JSON.stringify(result).includes(SECRET), false);
-      const payload = resultFields(result) as { recovery: { status: string }; items?: unknown[] };
+      const payload = resultFields(result) as { recovery: { status: string } };
       assert.equal(payload.recovery.status, "available");
-      if (mode === "full") assert.deepEqual(payload.items, [{ evidenceIndex: 0, evidence: { path: `src/${REDACTED}.ts`, line: 7 } }]);
-      else assert.ok(textOf(result).includes(`src/${REDACTED}.ts`));
+      assert.deepEqual(printed(result, "Records: "), [{ evidenceIndex: 0, evidence: { path: `src/${REDACTED}.ts`, line: 7 } }]);
     }
   } finally { await session.close(); }
 });
@@ -4438,7 +4440,7 @@ test("a full answer with cuts prints a copyable cut selection", async () => {
   const { session } = await setup({ callers: async () => ({ ok: true, value: fact }), ofChange: async () => ({ ok: true, value: fact }) });
   try {
     for (const [name, args] of [["ye_ast_callers", { targets }], ["ye_ast_impact", { base: "main" }]] as const) {
-      const example = textOf(await session.callTool(name, { ...args, mode: "full" })).match(/\{"kind":"cut-places"[^\n]*\}/)?.[0];
+      const example = textOf(await session.callFull(name, { ...args })).match(/\{"kind":"cut-places"[^\n]*\}/)?.[0];
       assert.ok(example, name);
       assert.notEqual((await session.callTool(name, { ...args, select: JSON.parse(example), page: { limit: 1 } })).isError, true, name);
     }
@@ -4457,7 +4459,7 @@ test("recovery recipes appear once in content across ordinary and selected respo
   try {
     for (const { name, args, select } of cases) {
       let original: unknown;
-      for (const mode of ["summary", "details", "full"]) {
+      for (const mode of ["summary", "details"]) {
         for (const controls of [{}, { select, page: { limit: 1 } }]) {
           const result = await session.callTool(name, { ...args, mode, ...controls });
           assert.notEqual(result.isError, true);
@@ -4614,7 +4616,7 @@ test("contract consequences full mode delivers every answer with its chains and 
   const fact = { ...base(), status: "partial", cuts: [{ kind: "section", at: ["answers.1"], reason: "section-partial", reach: { kind: "anything" } }], value } as unknown as Fact<ConsequencesValue>;
   const { session } = await setup({ consequences: async () => ({ ok: true, value: fact }) });
   try {
-    const full = resultFields(await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS], mode: "full" }));
+    const full = resultFields(await session.callFull("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS] }));
     assert.deepEqual(full.value, JSON.parse(JSON.stringify(value)));
     assert.equal(full.status, "partial");
     const summary = resultFields(await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS] }));
@@ -4627,7 +4629,7 @@ test("bounded responses identify their structured output location across deliver
   const { session } = await setup();
   try {
     const selection = { select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } };
-    for (const args of [{ mode: "full" }, { mode: "summary" }, { mode: "details" }, { mode: "full", ...selection }, { mode: "summary", ...selection }]) {
+    for (const args of [{ mode: "summary" }, { mode: "details" }, { mode: "summary", ...selection }]) {
       const result = await session.callTool("ye_ast_entrypoints", { ...args, answerBytes: 100000 });
       assert.notEqual(result.isError, true, textOf(result));
       assert.ok(result.structuredContent);
@@ -4636,7 +4638,7 @@ test("bounded responses identify their structured output location across deliver
   } finally { await session.close(); }
 });
 
-test("a full fallback retains context guidance or explicitly refuses", async () => {
+test("a details fallback retains its context lines or explicitly refuses", async () => {
   const live = { repo: "shop-web", kind: "live" as const, head: "c".repeat(40), stateId: "web-state" };
   const { session } = await setup({
     map: async (request) => {
@@ -4647,38 +4649,38 @@ test("a full fallback retains context guidance or explicitly refuses", async () 
   });
   try {
     const cases: [string, Record<string, unknown>, string[]][] = [
-      ["ye_ast_entrypoints", { live: true }, ["live", "repositoryRoots", "recovery"]],
-      ["ye_ast_callers", { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: {} }, ["freshness", "workspaceLive", "repositoryRoots", "recovery"]],
+      ["ye_ast_entrypoints", { live: true }, ["stale:", "repository root:", "Recovery"]],
+      ["ye_ast_callers", { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: {} }, ["workspace live:", "repository root:", "Recovery"]],
     ];
     for (const [tool, args, context] of cases) {
-      const full = await session.callTool(tool, { ...args, mode: "full", answerBytes: 100000 });
-      for (const key of context) assert.ok(key in (full.structuredContent as Record<string, unknown>));
-      const bound = Buffer.byteLength(textOf(full)) - 1;
-      const smaller = await session.callTool(tool, { ...args, mode: "full", answerBytes: bound });
+      const details = await session.callTool(tool, { ...args, mode: "details", answerBytes: 100000 });
+      for (const line of context) assert.ok(textOf(details).includes(line), line);
+      const bound = Buffer.byteLength(textOf(details)) - 1;
+      const smaller = await session.callTool(tool, { ...args, mode: "details", answerBytes: bound });
       assert.ok(Buffer.byteLength(textOf(smaller)) <= bound);
       if (smaller.isError) assert.equal(smaller._meta?.kind, "answer-over-bound");
-      else for (const key of context) assert.ok(textOf(smaller).includes(key), key);
+      else for (const line of context) assert.ok(textOf(smaller).includes(line), line);
     }
   } finally { await session.close(); }
 });
 
-test("answerBytes limits the MCP text and preserves full facts or refusal metadata", async () => {
+test("answerBytes limits the MCP text and preserves the receipt or refusal metadata", async () => {
   const { session } = await setup();
   try {
-    const original = await session.callTool("ye_ast_entrypoints", { mode: "full" });
-    const bounded = await session.callTool("ye_ast_entrypoints", { mode: "full", answerBytes: 100000 });
+    const { text: _text, ...original } = resultFields(await session.callTool("ye_ast_entrypoints", {}));
+    const bounded = await session.callTool("ye_ast_entrypoints", { answerBytes: 100000 });
     assert.equal(bounded.isError, undefined);
     assert.equal(CallToolResultSchema.safeParse(bounded).success, true);
-    assert.deepEqual((bounded.structuredContent as Record<string, unknown>).value, resultFields(original).value);
+    assert.deepEqual(bounded.structuredContent, original);
     assert.ok(Buffer.byteLength(bounded.content[0]!.text) <= 100000);
-    for (const args of [{ mode: "details" }, { mode: "full", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }] as const) {
+    for (const args of [{ mode: "details" }, { mode: "summary", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }] as const) {
       const refused = await session.callTool("ye_ast_entrypoints", { ...args, answerBytes: 0 });
       assert.equal(refused.isError, true);
       assert.equal((refused._meta?.[FAULT_META] as { kind: string }).kind, "invalid-answer-bytes");
       assert.match(textOf(refused), /answerBytes/);
       assert.equal(CallToolResultSchema.safeParse(refused).success, true);
     }
-    const small = await session.callTool("ye_ast_entrypoints", { mode: "full", answerBytes: 150 });
+    const small = await session.callTool("ye_ast_entrypoints", { answerBytes: 150 });
     assert.equal(small.isError, true);
     assert.equal(small.content.length, 1);
     assert.ok(Buffer.byteLength(small.content[0]!.text) <= 150);
@@ -4712,7 +4714,7 @@ test("scope faults and partial scope notices reach MCP", async () => {
   try {
     const result = await session.callTool("ye_ast_entrypoints", { mode: "summary" });
     assert.match(textOf(result), /scope: include missing\/\*\* selected no path/);
-    const full = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+    const full = await session.callFull("ye_ast_entrypoints", {});
     assert.deepEqual((resultFields(full) as { scopeSelection: unknown }).scopeSelection, scoped.scopeSelection);
     const failed = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "f" }] });
     assert.equal(failed.isError, true);
@@ -4729,14 +4731,10 @@ test("a reply names the folder its answer was written to, and the folder holds t
   const { files, folders } = memoryAnswerFiles();
   const { session } = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
   try {
-    const [summary, details, full] = await Promise.all((["summary", "details", "full"] as const).map((mode) => session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode })));
+    const [summary, details] = await Promise.all((["summary", "details"] as const).map((mode) => session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode })));
     const folder = folderOf(summary!);
     assert.equal(folderOf(details!), folder);
-    assert.equal(folderOf(full!), folder);
-    assert.equal(lastLine(summary!).startsWith(`answer files: ${folder} — answer.json: `), true);
-    assert.match(lastLine(summary!), /value\.symbols 1.*; summary\.txt, details\.txt$/);
-    assert.match(lastLine(details!), /^answer files: /);
-    assert.equal(textOf(full!).includes("answer files:"), false);
+    for (const reply of [summary!, details!]) assert.match(lastLine(reply), new RegExp(`^answer files: ${folder} — answer\\.json \\(the full result, queryable with jq\\): .*value\\.symbols 1.*; summary\\.txt, details\\.txt$`));
     const { text: _receiptText, ...receiptFields } = resultFields(summary);
     assert.equal(JSON.stringify(receiptFields).includes(folder), false);
     const written = folders.get(folder)!;
@@ -4744,8 +4742,8 @@ test("a reply names the folder its answer was written to, and the folder holds t
     const { guide, ...projection } = stored;
     assert.equal(Object.keys(stored)[0], "guide");
     assert.equal(typeof guide, "string");
-    const { text: _fullText, ...fullFields } = resultFields(full);
-    assert.deepEqual(projection, fullFields);
+    assert.equal(projection["mode"], "full");
+    assert.deepEqual(projection["value"], (impactFact() as { value: unknown }).value);
     const without = (result: ToolResult): string => textOf(result).split("\n").slice(0, -1).join("\n");
     assert.equal(written["summary.txt"], without(summary!));
     assert.equal(written["details.txt"], without(details!));
@@ -4753,16 +4751,16 @@ test("a reply names the folder its answer was written to, and the folder holds t
   } finally { await session.close(); }
 });
 
-test("a reply without answer files is the reply with them minus that line, and its fields are the same", async () => {
-  const plain = await setup();
+test("a reply without answer files is the reply with them minus that line, plus one line that says none was written and why", async () => {
+  const plain = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, undefined, null);
   const kept = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, undefined, memoryAnswerFiles().files);
   try {
-    for (const mode of ["summary", "details", "full"] as const) {
+    for (const mode of ["summary", "details"] as const) {
       const before = await plain.session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode });
       const after = await kept.session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode });
       assert.equal(before._meta?.[ANSWER_FILES_META], undefined);
-      const expected = mode === "full" ? textOf(before) : `${textOf(before)}\n${lastLine(after)}`;
-      assert.equal(textOf(after), expected);
+      assert.match(lastLine(before), /^no answer file written: .*cache directory/);
+      assert.equal(textOf(before).split("\n").slice(0, -1).join("\n"), textOf(after).split("\n").slice(0, -1).join("\n"));
       assert.deepEqual(resultFields(after), { ...resultFields(before), text: resultFields(after).text });
     }
   } finally { await plain.session.close(); await kept.session.close(); }
@@ -4778,18 +4776,20 @@ test("the key follows the question: another target is another folder, and the mo
   } finally { await session.close(); }
 });
 
-test("an answer cut by a deadline, or one that could not read its index, writes no folder and names none", async () => {
+test("an answer cut by a deadline, or one that could not read its index, writes no folder, names none and says why", async () => {
   const { files, folders } = memoryAnswerFiles();
   const cut: Cut = { kind: "deadline", at: ["src/OrderService.java"], reason: "deadline", reach: { kind: "anything" } };
   const partial: Fact<ImpactValue> = { ...base(), status: "partial", value: IMPACT, cuts: [cut] };
   const noIndex: Fact<ImpactValue> = { ...base(), status: "unknown", reason: "index-unavailable" };
-  for (const fact of [partial, noIndex]) {
+  for (const [fact, reason] of [[partial, /deadline/], [noIndex, /index/]] as const) {
     const { session } = await setup({ callers: async () => ({ ok: true, value: fact }) }, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
     try {
       const result = await session.callTool("ye_ast_callers", CALLERS_ARGS);
       assert.equal(result.isError, undefined);
       assert.equal(result._meta?.[ANSWER_FILES_META], undefined);
       assert.equal(textOf(result).includes("answer files:"), false);
+      assert.match(lastLine(result), reason);
+      assert.match(lastLine(result), /^no answer file written: /);
     } finally { await session.close(); }
   }
   assert.equal(folders.size, 0);
@@ -4808,13 +4808,26 @@ test("the files hold what the reply holds: a secret the redaction replaces is in
   } finally { await session.close(); }
 });
 
-test("a folder that could not be written leaves the reply as it is without answer files", async () => {
-  const plain = await setup();
+test("an answer whose full projection does not match its output schema writes no folder and says so, and its summary is delivered", async () => {
+  const { files, folders } = memoryAnswerFiles();
+  const incomplete = impactFact({ value: { seeds: [], symbols: [], entrypoints: [] } } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ callers: async () => ({ ok: true, value: incomplete }) }, undefined, undefined, REPOSITORY, fakeRedaction, undefined, files);
+  try {
+    const result = await session.callTool("ye_ast_callers", CALLERS_ARGS);
+    assert.equal(result.isError, undefined);
+    assert.equal(result._meta?.[ANSWER_FILES_META], undefined);
+    assert.match(lastLine(result), /^no answer file written: the full answer does not match its output schema$/);
+    assert.equal(folders.size, 0);
+  } finally { await session.close(); }
+});
+
+test("a folder that could not be written says so in the line a folder would have taken", async () => {
   const { session } = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, undefined, { keep: async () => null });
   try {
     const result = await session.callTool("ye_ast_callers", CALLERS_ARGS);
-    assert.deepEqual(result, await plain.session.callTool("ye_ast_callers", CALLERS_ARGS));
-  } finally { await session.close(); await plain.session.close(); }
+    assert.equal(result._meta?.[ANSWER_FILES_META], undefined);
+    assert.match(lastLine(result), /^no answer file written: the folder could not be written$/);
+  } finally { await session.close(); }
 });
 
 test("a reply bounded by answerBytes carries the line in its text, and a select page writes no folder", async () => {
@@ -4824,7 +4837,7 @@ test("a reply bounded by answerBytes carries the line in its text, and a select 
     const bounded = await session.callTool("ye_ast_callers", CALLERS_ARGS);
     assert.match(bounded.content[0]!.text, /\nanswer files: .*\nResult JSON fields are in structuredContent\.$/);
     assert.equal(typeof folderOf(bounded), "string");
-    const page = await session.callTool("ye_ast_entrypoints", { mode: "full", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
+    const page = await session.callTool("ye_ast_entrypoints", { select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
     assert.equal(page.isError, undefined);
     assert.equal(page._meta?.[ANSWER_FILES_META], undefined);
     assert.equal(folders.size, 1);
