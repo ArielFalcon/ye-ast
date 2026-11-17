@@ -34,7 +34,7 @@ import { createIndexCache } from "../core/adapters/codegraph/cached-index.adapte
 import { createDerivedFactStore } from "../core/adapters/fs/derived-fact-store.adapter.ts";
 import { STORED_DERIVED_FACT_VERSIONS } from "../core/domain/snapshot/stored-derived-facts.ts";
 import type { DerivedFactRetentionPolicy } from "../core/ports/derived-fact-store.port.ts";
-import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
+import { createCodeGraph, defaultCodeGraphDeps, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createJdkLibrarySource } from "../core/adapters/jdk/jdk-library.adapter.ts";
@@ -97,6 +97,8 @@ const TEMPLATE_ENGINE = "@angular/compiler";
 const CODEGRAPH_PACKAGE = "@colbymchenry/codegraph";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SNAPSHOT_CACHE_BYTES = 32 * 1024 * 1024;
+/** The graph images of kept indexes a process holds (ADR-0122): eight of the largest corpus store's measured charge, about 32 MiB each. */
+const GRAPH_IMAGE_BYTES = 256 * 1024 * 1024;
 
 /** What a host keeps of the live tree unless it overrides it (RFC-0010 "Retention"): three scopes, 14 days, 512 MiB. */
 const LIVE_RETENTION: LiveRetentionPolicy = { keepScopes: 3, unusedForMs: 14 * DAY_MS, maxBytes: 512 * 1024 * 1024 };
@@ -124,6 +126,8 @@ export interface CompositionOptions {
   indexCache?: string;
   /** UTF-8 bytes retained as serialized snapshot entries, keys included; 32 MiB by default, zero disables retention. */
   snapshotCacheBytes?: number;
+  /** Bytes of graph images of kept indexes held in memory, charged by the text and numbers they hold; 256 MiB by default. */
+  graphImageBytes?: number;
   /** ye-ast's per-user cache directory; with it, a trusted repository's declared remote is refreshed into a mirror under it. */
   cacheDirectory?: string;
   /** The refresh the workspace read calls; built from `cacheDirectory` when absent, and absent leaves every read local. */
@@ -228,7 +232,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   };
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, holds, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, snapshotCache: snapshotCache.snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
-  const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
+  const keptGraph = createCodeGraph(defaultCodeGraphDeps, { imageBytes: options.graphImageBytes ?? GRAPH_IMAGE_BYTES });
+  const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph: measurement === undefined ? keptGraph : measuredGraph(keptGraph, measurement), digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= javaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });

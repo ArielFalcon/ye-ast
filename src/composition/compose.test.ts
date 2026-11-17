@@ -3,12 +3,14 @@ import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { EXIT_CODE } from "../cli/main.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
+import { defaultCodeGraphDeps } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createRemoteRefresh, defaultRemoteRefreshDeps } from "../core/adapters/git/remote-refresh.adapter.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
@@ -758,6 +760,49 @@ test("a repeated callers finds every derived fact it kept, and answers what a co
   assert.deepEqual(second, first);
   assert.deepEqual(await composeQueries({ scratchRoot, snapshotCacheBytes: 0 }).impact.callers(request), first);
 });
+
+test("a repeated callers over a kept index reads its graph once: the second opens no store and issues no SQL statement", async () => {
+  writeFileSync(join(repo, "src", "kept.ts"), ["export function kept(): number {", "  return 1;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "keeper.ts"), ["import { kept } from './kept';", "export function keeper(): number {", "  return kept();", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "kept");
+  const request = { repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/kept.ts", symbol: "kept" }] };
+  const { impact } = composeQueries({ scratchRoot, indexCache: join(workspace, "index-cache") });
+  const sdk = defaultCodeGraphDeps.loadSdk(defaultCodeGraphDeps.resolveBundle()!);
+  const counts = { opens: 0, statements: 0 };
+  const restore = [
+    countingCalls(sdk.CodeGraph, "openSync", () => (counts.opens += 1)),
+    countingCalls(sdk.DatabaseConnection, "open", () => (counts.opens += 1)),
+    countingCalls(DatabaseSync.prototype, "prepare", () => (counts.statements += 1)),
+    countingCalls(DatabaseSync.prototype, "exec", () => (counts.statements += 1)),
+  ];
+  try {
+    const first = await impact.callers(request);
+    const firstCounts = { ...counts };
+    const second = await impact.callers(request);
+
+    assert.ok(firstCounts.opens > 0 && firstCounts.statements > 0);
+    assert.deepEqual({ opens: counts.opens - firstCounts.opens, statements: counts.statements - firstCounts.statements }, { opens: 0, statements: 0 });
+    assert.ok(first.ok && JSON.stringify(first.value).includes("src/keeper.ts"), JSON.stringify(first));
+    assert.deepEqual(second, first);
+  } finally {
+    for (const undo of restore) undo();
+  }
+  assert.deepEqual(await composeQueries({ scratchRoot }).impact.callers(request), await impact.callers(request));
+});
+
+function countingCalls<T extends object>(owner: T, method: keyof T & string, count: () => void): () => void {
+  const original = owner[method] as (...args: unknown[]) => unknown;
+  Object.defineProperty(owner, method, {
+    configurable: true,
+    writable: true,
+    value: function (this: unknown, ...args: unknown[]) {
+      count();
+      return original.apply(this, args);
+    },
+  });
+  return () => Object.defineProperty(owner, method, { configurable: true, writable: true, value: original });
+}
 
 test("a trace over a real index leaves a library global's member call as a global leaf, and keeps it a cut where a local shadows the global", async () => {
   writeFileSync(join(repo, "src", "clamp.ts"), ["export function clamp(value: number): number {", "  return Math.max(value, 0);", "}", "export function max(value: number): number {", "  return value;", "}", ""].join("\n"));

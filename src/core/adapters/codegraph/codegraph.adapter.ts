@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { devNull } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { statSync } from "node:fs";
 import { readdir, realpath, rm } from "node:fs/promises";
 import type { CodeGraph as SdkGraph, Edge, Node } from "@colbymchenry/codegraph";
 import type { Result } from "../../domain/shared/result.ts";
@@ -11,7 +12,6 @@ import {
   type CodeGraph,
   type CodeGraphFault,
   type CodeGraphReader,
-  type GraphEdge,
   type GraphNodeId,
   type GraphSymbol,
   type GraphUnresolvedReference,
@@ -22,6 +22,7 @@ import {
 import { isEngineEntry } from "../../ports/staging-rules.ts";
 import { removeStaged, stageSnapshot } from "./stage-snapshot.ts";
 import { readStoredVersions, SUPPORTED_STORE, unsupportedVersions } from "./store-version.ts";
+import { compareEdges, compareOutgoingEdges, compareReferences, compareSymbols, compareText, edgeFrom, keptGraphImages, readGraphImage, unique, type GraphImage, type GraphImages, type StoreRows } from "./graph-image.ts";
 
 export { SUPPORTED_STORE };
 
@@ -88,7 +89,17 @@ function resolveBundle(): string | null {
   }
 }
 
-export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): CodeGraph {
+export interface CodeGraphOptions {
+  /**
+   * Opens every store as an image read once and kept while it fits these bytes, by the identity of its database file.
+   * Only for stores nothing writes after they are built, such as the kept indexes of the index cache.
+   */
+  imageBytes?: number;
+}
+
+export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, options: CodeGraphOptions = {}): CodeGraph {
+  const images = options.imageBytes === undefined ? undefined : keptGraphImages(options.imageBytes);
+
   function openGraph(store: string): Result<{ sdk: Sdk; graph: SdkGraph; versions: StoreVersions }, CodeGraphFault> {
     const bundle = deps.resolveBundle();
     if (bundle === null) return platformPackageMissing();
@@ -114,8 +125,35 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): Cod
   }
 
   function open(store: string): Result<CodeGraphReader, CodeGraphFault> {
+    if (images !== undefined) return openImage(store, images);
     const opened = openGraph(store);
     return opened.ok ? { ok: true, value: createReader(opened.value.graph, opened.value.versions) } : opened;
+  }
+
+  function openImage(store: string, images: GraphImages): Result<CodeGraphReader, CodeGraphFault> {
+    const bundle = deps.resolveBundle();
+    if (bundle === null) return platformPackageMissing();
+    try {
+      const sdk = deps.loadSdk(bundle);
+      const database = withEngineEnvironment(() => sdk.getDatabasePath(resolve(store)));
+      const load = (): GraphImage => {
+        const opened = openGraph(store);
+        if (!opened.ok) throw new UnopenedStoreError(opened.fault);
+        opened.value.graph.close();
+        const connection = sdk.DatabaseConnection.open(database, { readOnly: true });
+        try {
+          return readGraphImage(connection.getDb() as StoreRows, opened.value.versions);
+        } finally {
+          connection.close();
+        }
+      };
+      const file = statSync(database, { throwIfNoEntry: false });
+      const image = file === undefined ? load() : images.obtain([database, file.dev, file.ino, file.size, file.mtimeMs, file.ctimeMs].join("\0"), load);
+      return { ok: true, value: image.reader() };
+    } catch (error) {
+      if (error instanceof UnopenedStoreError) return { ok: false, fault: error.fault };
+      return fault("store-unreadable", errorDetail(error));
+    }
   }
 
   async function index(snapshot: string, store: string, signal?: AbortSignal): Promise<Result<IndexSummary, CodeGraphFault>> {
@@ -299,11 +337,11 @@ function createReader(graph: SdkGraph, versions: StoreVersions): CodeGraphReader
     declarationsNamed: (names) => unique(names).flatMap((name) => graph.getNodesByName(name)).map(toSymbol).sort(compareSymbols),
     incomingEdges: (targets, kinds) => {
       if (kinds?.length === 0) return [];
-      return graph.getIncomingEdgesTo(unique(targets), kinds as Edge["kind"][] | undefined).map(toEdge).sort(compareEdges);
+      return graph.getIncomingEdgesTo(unique(targets), kinds as Edge["kind"][] | undefined).map(edgeFrom).sort(compareEdges);
     },
     outgoingEdges: (sources, kinds) => {
       if (kinds?.length === 0) return [];
-      return graph.getOutgoingEdgesFrom(unique(sources), kinds as Edge["kind"][] | undefined).map(toEdge).sort(compareOutgoingEdges);
+      return graph.getOutgoingEdgesFrom(unique(sources), kinds as Edge["kind"][] | undefined).map(edgeFrom).sort(compareOutgoingEdges);
     },
     unresolvedReferences: (files): readonly GraphUnresolvedReference[] =>
       unique(files)
@@ -337,49 +375,10 @@ function toSymbol(node: Node): GraphSymbol {
   };
 }
 
-function toEdge(edge: Edge): GraphEdge {
-  const { confidence, synthesizedBy, refName, refKind } = edge.metadata ?? {};
-  return {
-    source: edge.source as GraphNodeId,
-    target: edge.target as GraphNodeId,
-    kind: edge.kind,
-    line: edge.line ?? null,
-    column: edge.column ?? null,
-    confidence: typeof confidence === "number" ? confidence : null,
-    provenance: edge.provenance ?? null,
-    synthesizedBy: typeof synthesizedBy === "string" ? synthesizedBy : null,
-    resolvedFrom: typeof refName === "string" && typeof refKind === "string" && refKind !== edge.kind ? { name: refName, kind: refKind } : null,
-  };
-}
-
-function compareSymbols(a: GraphSymbol, b: GraphSymbol): number {
-  return compareText(a.file, b.file) || a.startLine - b.startLine || a.endLine - b.endLine || compareText(a.qualifiedName, b.qualifiedName) || compareText(a.id, b.id);
-}
-
-function compareEdges(a: GraphEdge, b: GraphEdge): number {
-  return (
-    compareText(a.target, b.target) ||
-    compareText(a.kind, b.kind) ||
-    (a.line ?? -1) - (b.line ?? -1) ||
-    (a.column ?? -1) - (b.column ?? -1) ||
-    compareText(a.source, b.source)
-  );
-}
-
-function compareOutgoingEdges(a: GraphEdge, b: GraphEdge): number {
-  return compareText(a.source, b.source) || compareText(a.kind, b.kind) || (a.line ?? -1) - (b.line ?? -1) || (a.column ?? -1) - (b.column ?? -1) || compareText(a.target, b.target);
-}
-
-function compareReferences(a: GraphUnresolvedReference, b: GraphUnresolvedReference): number {
-  return compareText(a.file, b.file) || a.line - b.line || a.column - b.column || compareText(a.name, b.name) || compareText(a.kind, b.kind) || compareText(a.from, b.from);
-}
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function unique<T>(values: readonly T[]): T[] {
-  return [...new Set(values)];
+class UnopenedStoreError extends Error {
+  constructor(readonly fault: CodeGraphFault) {
+    super(fault.detail);
+  }
 }
 
 function platformPackageMissing(): Result<never, CodeGraphFault> {
