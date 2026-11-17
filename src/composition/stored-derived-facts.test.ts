@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { javaDeclarationIndex } from "../core/adapters/spring/java-declaration-index.ts";
 import { createJavaReceiverMethods } from "../core/adapters/spring/java-receiver-methods.ts";
+import { createJavaRelations } from "../core/adapters/spring/java-relations.adapter.ts";
+import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaMemberNames } from "../core/adapters/tree-sitter/java-member-names.adapter.ts";
-import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
+import { createJavaParser, createJavaTreeHolds } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createJavaTokens } from "../core/adapters/tree-sitter/java-tokens.adapter.ts";
 import { createTypeScriptMemberNames } from "../core/adapters/typescript/declared-member-names.adapter.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
@@ -17,6 +19,8 @@ import type { SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 
 const TS_FILE: SourceFile = { path: "src/a.ts", content: ["const fn = () => 1;", "export function run(list: Repo[]): void {", "  fn.call(undefined);", "  list.save();", "}", ""].join("\n") };
 const JAVA_FILE: SourceFile = { path: "src/A.java", content: ["class A {", "  void run() { B b = new B(); b.go(); Runnable r = () -> run(); }", "}", ""].join("\n") };
+const JAVA_TARGET: SourceFile = { path: "src/B.java", content: "class B { void go() {} }\n" };
+const JAVA_CONTROLLER: SourceFile = { path: "src/main/java/app/Orders.java", content: ["package app;", "import org.springframework.web.bind.annotation.*;", "@RestController class Orders { @GetMapping(\"/orders\") void list() {} }", ""].join("\n") };
 const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export function run(redact: () => void): void {", "  redact();", "}", ""].join("\n") };
 const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };
 const WRITER: SourceFile = { path: "src/writer.ts", content: ["export {};", "(Array.prototype as any).last = () => 1;", ""].join("\n") };
@@ -38,14 +42,15 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "ts-default-declaration": [1, "bb5c1e3feab5ef3908224d5f2c0eabde6442b0d5202265d2d7b2f4aee3b13de8"],
   "java-receiver-bindings": [1, "90990e5ddeb91598c35caee6778aaeb4bcfbeca882230eda67aed1a064c6760d"],
   "java-declarations": [1, "c071c93f19ce4e2529f88d5ec16c4e6d215754db03c734a36c5eca20db082d54"],
+  "java-relations": [1, "221b6879bddb6e16a111c689194adef99f797a77c344a2c133cacce1881a675e"],
+  "java-entrypoints": [1, "425d804467c74330239c51aebea7f5c18fd911ec3491b609ede1f82c0f1b2739"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
   "ts-module-resolutions": [1, "06babd9d9388578f4fac7b2d6655e24b5df82a7f5c1aa5b6d5dec0c70e1125c9"],
 };
 
-async function derivedBySlot(): Promise<Record<string, [number, string]>> {
-  const derived = new Map<string, unknown[]>();
-  const record = (slot: string, value: unknown): void => void derived.set(slot, [...(derived.get(slot) ?? []), value]);
-  const facts: DerivedFacts = {
+/** Facts that derive every value and tell `record` each one with the questions a derivation recorded. */
+function recordingFacts(record: (slot: string, value: unknown) => void): DerivedFacts {
+  return {
     ofFile(slot, _file, derive) {
       const value = derive();
       record(slot, value);
@@ -56,10 +61,21 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
       record(slot, value);
       return value;
     },
-    ofReads: (_slot, _subject, _answerNow, derive) => derive(() => undefined),
+    async ofReads(slot, _subject, _answerNow, derive) {
+      const reads: [string, string][] = [];
+      const value = await derive((question, answer) => void reads.push([question, answer]));
+      record(slot, { value, reads });
+      return value;
+    },
     fingerprint: (inputs) => JSON.stringify(inputs),
     drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };
+}
+
+async function derivedBySlot(): Promise<Record<string, [number, string]>> {
+  const derived = new Map<string, unknown[]>();
+  const record = (slot: string, value: unknown): void => void derived.set(slot, [...(derived.get(slot) ?? []), value]);
+  const facts = recordingFacts(record);
   await createTypeScriptMemberNames().memberNames(TS_FILE, facts);
   await createJavaMemberNames(createJavaParser).memberNames(JAVA_FILE, facts);
   const origins = createImportOrigins([PARAMETER, DYNAMIC, WRITER, SCRIPT], { facts });
@@ -68,6 +84,13 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   await createModuleDependenciesReader().extract([IMPORTER, LATER], { facts });
   await createJavaReceiverMethods(createJavaParser, [JAVA_FILE], [JAVA_FILE.path], facts)([{ file: JAVA_FILE.path, line: 2, column: 36, member: "go" }]);
   javaDeclarationIndex(facts, await createJavaParser(), [JAVA_FILE], { generatesInterfaces: false, unreadJvm: false });
+  const holds = createJavaTreeHolds();
+  const hold = holds.open();
+  const javaSources = [JAVA_FILE, JAVA_TARGET, JAVA_CONTROLLER];
+  const downstream = recordingFacts((slot, value) => slot === "java-declarations" || record(slot, value));
+  await createJavaRelations(() => createJavaParser(holds)).extract(hold.keep(javaSources), { hold, facts: downstream });
+  await createSpringRoutesExtractor(await createJavaParser(holds)).extract(hold.keep(javaSources), [], { hold, facts: downstream });
+  hold.release();
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));
   const digest = createSha256Digest();

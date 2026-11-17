@@ -49,21 +49,24 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     return JSON.parse(json);
   };
   const named = (answer: string): string => (answer.length > MAX_INLINE_ANSWER ? digest.of(answer) : answer);
-  const kept = ({ key, diskKey: diskKeyOf }: Address): unknown => {
-    const value = cache.getFact(key);
+  const storedJson = ({ diskKey: diskKeyOf }: Address): string | undefined => {
+    const diskKey = diskKeyOf();
+    return diskKey === undefined ? undefined : disk?.store.read(diskKey);
+  };
+  const kept = (address: Address): unknown => {
+    const value = cache.getFact(address.key);
     if (value !== undefined) {
       tally.hits++;
       return value;
     }
-    const diskKey = diskKeyOf();
-    const json = diskKey === undefined ? undefined : disk?.store.read(diskKey);
+    const json = storedJson(address);
     if (json === undefined) {
       tally.misses++;
       return undefined;
     }
     tally.hits++;
     tally.diskHits++;
-    return admit(key, json);
+    return admit(address.key, json);
   };
   const keep = <T>({ key, diskKey: diskKeyOf }: Address, value: T): T => {
     const json = JSON.stringify(value);
@@ -90,16 +93,22 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     },
     async ofReads(slot, subject, answerNow, derive) {
       const address = addressOf(slot, subject);
-      const entry = cache.getFact(address.key) as ReadsEntry | undefined;
-      if (entry !== undefined && entry.reads.every(([question, answer]) => named(answerNow(question)) === answer)) {
+      const stillHolds = (entry: ReadsEntry): boolean => entry.reads.every(([question, answer]) => named(answerNow(question)) === answer);
+      const inMemory = cache.getFact(address.key) as ReadsEntry | undefined;
+      const stored = inMemory === undefined ? storedJson(address) : undefined;
+      const entry = inMemory ?? (stored === undefined ? undefined : (JSON.parse(stored) as ReadsEntry));
+      if (entry !== undefined && stillHolds(entry)) {
         tally.hits++;
+        if (stored !== undefined) {
+          tally.diskHits++;
+          admit(address.key, stored);
+        }
         return entry.value as Awaited<ReturnType<typeof derive>>;
       }
       tally.misses++;
       const reads = new Map<string, string>();
       const value = await derive((question, answer) => void reads.set(question, named(answer)));
-      const json = JSON.stringify({ value, reads: [...reads] });
-      return json === undefined ? value : (admit(address.key, json) as ReadsEntry).value as typeof value;
+      return (keep(address, { value, reads: [...reads] }) as ReadsEntry).value as typeof value;
     },
     fingerprint: (inputs) => digest.of(canonicalJson(inputs)),
     drain() {

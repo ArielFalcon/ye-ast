@@ -67,7 +67,9 @@ Measured by CPU profile of `extractRoutes` over the 1,340-file backend (1,229 so
    memory tier misses and is used only when every recorded question, asked of the current snapshot, gives the recorded
    answer; otherwise the derivation runs again and replaces it. A reader version bump discards every entry of the slot.
    `java-relations` and `java-entrypoints` are stored at version 1.
-6. **Not moved here:** `receiver-methods` (RFC-0039 M4), parse on demand (M5), the callback walk per file, and the
+6. **The `map` family keeps the memory tier only.** `map` builds no index and never touches the cache directory; it reads
+   its entrypoints over the same held project and keeps what it derives in memory, as before.
+7. **Not moved here:** `receiver-methods` (RFC-0039 M4), parse on demand (M5), the callback walk per file, and the
    lookup of a configuration property as a recorded question: an edit to a configuration file derives every file.
 
 ## Consequences

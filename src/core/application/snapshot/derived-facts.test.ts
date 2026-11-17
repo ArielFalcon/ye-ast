@@ -227,3 +227,56 @@ test("a derivation that throws keeps nothing for ofReads", async () => {
   await facts.ofReads("slot", { path: "a" }, () => "1", async () => counted.derive());
   assert.equal(counted.derived(), 1);
 });
+
+function readsOver(disk: DerivedFactDisk, world: { answers: Record<string, string> }, slot = "slot", subject: object = { path: "a" }) {
+  const facts = viewOver(disk);
+  let derived = 0;
+  const answerNow = (question: string): string => world.answers[question] ?? "[]";
+  const read = () => facts.ofReads(slot, subject, answerNow, async (record) => {
+    derived++;
+    record("declaring|A", answerNow("declaring|A"));
+    return { derived };
+  });
+  return { facts, read, derived: () => derived };
+}
+
+test("a derivation stored on disk answers a new view while its recorded answers hold, and is replaced by the one derived when an answer differs", async () => {
+  const disk = { store: memoryStore(), versions: { slot: "1" } };
+  const world = { answers: { "declaring|A": '["a/A.java"]' } };
+  const first = readsOver(disk, world);
+  assert.deepEqual(await first.read(), { derived: 1 });
+  assert.equal(disk.store.entries.size, 1);
+
+  const warm = readsOver(disk, world);
+  assert.deepEqual(await warm.read(), { derived: 1 });
+  assert.equal(warm.derived(), 0);
+  const tally = warm.facts.drain();
+  assert.deepEqual([tally.hits, tally.misses, tally.diskHits], [1, 0, 1]);
+
+  const moved = { answers: { "declaring|A": '["a/A.java","b/A.java"]' } };
+  const changed = readsOver(disk, moved);
+  assert.deepEqual(await changed.read(), { derived: 1 });
+  assert.equal(changed.derived(), 1);
+  assert.equal(disk.store.entries.size, 1);
+  const after = readsOver(disk, moved);
+  await after.read();
+  assert.equal(after.derived(), 0);
+});
+
+test("a derivation stored on disk answers its reader version and its subject only", async () => {
+  const store = memoryStore();
+  const world = { answers: { "declaring|A": "[]" } };
+  await readsOver({ store, versions: { slot: "1" } }, world).read();
+  for (const [versions, subject] of [[{ slot: "2" }, { path: "a" }], [{ slot: "1" }, { path: "b" }]] as const) {
+    const other = readsOver({ store, versions }, world, "slot", subject);
+    await other.read();
+    assert.equal(other.derived(), 1, JSON.stringify([versions, subject]));
+  }
+});
+
+test("a derivation of a slot with no version, and one that throws, are never stored", async () => {
+  const disk = { store: memoryStore(), versions: { slot: "1" } };
+  await readsOver(disk, { answers: {} }, "unversioned").read();
+  await assert.rejects(viewOver(disk).ofReads("slot", { path: "a" }, () => "[]", async (record) => { record("q", "[]"); throw new Error("cut"); }));
+  assert.deepEqual([...disk.store.entries], []);
+});
