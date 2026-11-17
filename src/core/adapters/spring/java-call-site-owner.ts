@@ -14,8 +14,7 @@ import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { FieldLookup, Invocation } from "./java-invocations.ts";
 import { receiverOf } from "./java-invocations.ts";
 import { argumentsOf, descendants, typeNameOf } from "./java-members.ts";
-import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
-import { callKey, createResolver, provesBinding, type ReceiverSource } from "./java-receiver-methods.ts";
+import { createResolver, provesBinding, receiverBindingsOf, type ReceiverSource } from "./java-receiver-methods.ts";
 import { dispatchReadingOf, type DispatchReading } from "./java-dispatch-targets.ts";
 import type { UnparsedSource } from "./java-project.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
@@ -73,7 +72,7 @@ function readingOf(project: JavaProject): ProjectReading {
 function sourceOf(file: JavaFile, reading: ProjectReading): ReceiverSource {
   let source = reading.sources.get(file.path);
   if (source === undefined) {
-    source = { file, bindings: new Map(javaReceiverBindings(file.root, { declaredFields: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding])) };
+    source = { file, bindings: receiverBindingsOf(file, undefined) };
     reading.sources.set(file.path, source);
   }
   return source;

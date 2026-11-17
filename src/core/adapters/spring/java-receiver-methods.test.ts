@@ -342,6 +342,42 @@ test("given derived facts, a second reader over the same sources answers the sam
   assert.equal(parsed, afterFirst);
 });
 
+test("given derived facts, an edit of one file derives the receiver bindings of that file only, and the answers equal a read without facts", async () => {
+  const kept = new Map<string, string>();
+  const derivedFiles: string[] = [];
+  const facts: DerivedFacts = {
+    ofFile(slot, file, derive) {
+      const key = JSON.stringify([slot, file.path, file.content]);
+      if (!kept.has(key)) {
+        derivedFiles.push(file.path);
+        kept.set(key, JSON.stringify(derive()));
+      }
+      return JSON.parse(kept.get(key)!);
+    },
+    async ofInputs(_slot, _inputs, derive) {
+      return JSON.parse(JSON.stringify(await derive()));
+    },
+    fingerprint: (inputs) => JSON.stringify(inputs),
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  };
+  const caller = (path: string, body: string) => java(path, ["package app;", "", `class ${path.replace(".java", "")} {`, `  void run(Store store) { store.save("x"); ${body} }`, "}"]);
+  const siteIn = (source: SourceFile) => ({ file: source.path, line: 4, column: source.content.split("\n")[3]!.indexOf("store.save") + 1, member: "save" });
+  const first = caller("First.java", "");
+  const second = caller("Second.java", "");
+  const edited = caller("Second.java", "int kept = 1;");
+
+  const answersOf = (sources: readonly SourceFile[], held?: DerivedFacts) => createJavaNameBindings(createJavaParser, sources, undefined, held).receiverMethods([siteIn(sources[2]!), siteIn(sources[3]!)]);
+  const warm = await answersOf([STORE, JDBC, first, second], facts);
+  assert.deepEqual(derivedFiles.toSorted(), [first.path, second.path]);
+
+  derivedFiles.length = 0;
+  const again = await answersOf([STORE, JDBC, first, edited], facts);
+
+  assert.deepEqual(derivedFiles, [edited.path]);
+  assert.deepEqual(warm, [method(STORE, 4), method(STORE, 4)]);
+  assert.deepEqual(again, await answersOf([STORE, JDBC, first, edited]));
+});
+
 const OVERLOADED_PORT = java("Port.java", ["package app;", "public interface Port {", "  void save(String value);", "  void save(String value, int times);", "}"]);
 const OVERLOADING_IMPL = java("Impl.java", ["package app;", "public class Impl implements Port {", "  public void save(String value) {}", "  public void save(String value, int times) {}", "}"]);
 const GENERIC_BOX = java("Box.java", ["package app;", "public interface Box<T> {", "  void put(T value);", "}"]);

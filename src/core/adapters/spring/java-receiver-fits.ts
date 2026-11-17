@@ -1,14 +1,14 @@
 import type { Node } from "web-tree-sitter";
 import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { ImportOrigins, ReceiverFit, ReceiverFitSite } from "../../ports/import-origins.port.ts";
-import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { annotationAt, COMMENT_NODES, resolve, TYPE_NAMES } from "./java-declared-types.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
-import { callKey, invocationsOf, methodsByPlace, provesBinding } from "./java-receiver-methods.ts";
+import { invocationsOf, methodsByPlace, provesBinding, receiverBindingsOf, callKey } from "./java-receiver-methods.ts";
 import { createJavaProject, supertypeClauses, type JavaFile, type JavaProject, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverFit = { kind: "unknown" };
@@ -23,8 +23,9 @@ const DISJOINT: ReceiverFit = { kind: "disjoint" };
  * array, a name that binds nothing or several, a receiver that is no declared name, a type that reaches `T` through a
  * base class and a read that proves no binding are `unknown`.
  */
-export function createJavaReceiverFits(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["receiverFits"]> {
+export function createJavaReceiverFits(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["receiverFits"]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
+  const sourcesByPath = new Map(sources.map((source) => [source.path, source]));
   const analyze = (sites: readonly ReceiverFitSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ReceiverFit[] => {
     if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN);
     const byPath = new Map(files.map((file) => [file.path, file]));
@@ -33,7 +34,7 @@ export function createJavaReceiverFits(parser: () => Promise<JavaParser>, source
     const readOf = (file: JavaFile) => {
       let known = read.get(file.path);
       if (known === undefined) {
-        known = { invocations: invocationsOf(file.root), bindings: new Map(javaReceiverBindings(file.root, { declaredFields: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding])) };
+        known = { invocations: invocationsOf(file.root), bindings: receiverBindingsOf(file, sourcesByPath.get(file.path), facts) };
         read.set(file.path, known);
       }
       return known;

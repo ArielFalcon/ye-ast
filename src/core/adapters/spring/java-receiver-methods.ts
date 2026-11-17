@@ -17,6 +17,7 @@ import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, n
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 
 const SLOT = "java-receiver-methods";
+const BINDINGS_SLOT = "java-receiver-bindings";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
 /** What every call reads where the strict binding proves nothing over the sources (`provesBinding`). */
@@ -98,6 +99,7 @@ interface ReadFile extends ReceiverSource {
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some(isUncoveredJvmSource);
+  const sourcesByPath = new Map(sources.map((source) => [source.path, source]));
   let layout: string | undefined;
   const resolved = async (sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]> => {
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
@@ -110,7 +112,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         if (file === undefined) return undefined;
         let known = readFiles.get(path);
         if (known === undefined) {
-          known = { file, bindings: new Map(javaReceiverBindings(file.root, { declaredFields: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding])), invocations: invocationsOf(file.root) };
+          known = { file, bindings: receiverBindingsOf(file, sourcesByPath.get(path), facts), invocations: invocationsOf(file.root) };
           readFiles.set(path, known);
         }
         return known;
@@ -1286,6 +1288,16 @@ export function hasVarargs(method: MethodDecl): boolean {
 
 function sameReading(first: ReceiverMethod, second: ReceiverMethod): boolean {
   return JSON.stringify(first) === JSON.stringify(second);
+}
+
+/**
+ * The member calls of a file whose receiver one declaration types, by the call's place and member. They read the file's
+ * own syntax tree alone, so a derived fact keeps them by the file's content.
+ */
+export function receiverBindingsOf(file: JavaFile, source: SourceFile | undefined, facts?: DerivedFacts): ReadonlyMap<string, ReceiverBinding> {
+  const derive = (): ReceiverBinding[] => javaReceiverBindings(file.root, { declaredFields: true });
+  const bindings = facts === undefined || source === undefined ? derive() : facts.ofFile(BINDINGS_SLOT, source, derive);
+  return new Map(bindings.map((binding) => [callKey(binding.line, binding.column, binding.member), binding]));
 }
 
 export function callKey(line: number, column: number, member: string): string {
