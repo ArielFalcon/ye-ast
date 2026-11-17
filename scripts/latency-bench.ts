@@ -21,7 +21,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { loadavg, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { cloneAt, declareTrust, firstParentCommits, git, namedFiles, namedSourceFile, privateDirectory } from "./latency-clones.ts";
+import { cloneAt, declareTrust, firstParentCommits, git, namedFiles, namedSourceFiles, privateDirectory } from "./latency-clones.ts";
 import { atSnapshot, corpusRepositories, toolCallOf, type CorpusRepository, type Snapshot, type ToolCall } from "./latency-queries.ts";
 import { isolatedEnvironment, startMcp, type McpSession } from "./latency-session.ts";
 import { cellSummary, cellTable, sampleOf, slope, type CallSample, type CellSummary } from "./latency-stats.ts";
@@ -89,7 +89,7 @@ function familyCalls(repo: CorpusRepository, families: readonly string[]): ToolC
 
 /** The file the edit scenarios append to: the first file a call targets, else the first Java or TypeScript file tracked. */
 function editFile(clone: string, calls: readonly ToolCall[], env: NodeJS.ProcessEnv): string {
-  const named = namedSourceFile(calls);
+  const named = namedSourceFiles(calls)[0];
   if (named !== undefined) return named;
   const tracked = git(clone, ["ls-files"], env).split("\n").find((path) => /\.(java|ts)$/u.test(path));
   if (tracked === undefined) throw new Error(`${clone}: no Java or TypeScript file to edit`);

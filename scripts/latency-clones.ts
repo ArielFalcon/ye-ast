@@ -38,9 +38,10 @@ export function namedFiles(calls: readonly { args: Record<string, unknown> }[]):
   return [...new Set(files)];
 }
 
-/** The first Java or TypeScript file the tool calls name: the file a run's edits change. */
-export function namedSourceFile(calls: readonly { args: Record<string, unknown> }[]): string | undefined {
-  return namedFiles(calls).find((path) => /\.(java|ts)$/u.test(path));
+/** The first file the tool calls name in each of Java and TypeScript: the files a run's edits change. */
+export function namedSourceFiles(calls: readonly { args: Record<string, unknown> }[]): string[] {
+  const named = namedFiles(calls);
+  return [/\.java$/u, /\.ts$/u].flatMap((language) => named.find((path) => language.test(path)) ?? []);
 }
 
 /** Declares the trust mode of `repo` the way a user does, with the engine's own `init`, in the run-owned configuration. */

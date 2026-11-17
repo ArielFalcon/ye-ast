@@ -18,7 +18,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { cloneAt, declareTrust, firstParentCommits, git, namedSourceFile, privateDirectory } from "./latency-clones.ts";
+import { cloneAt, declareTrust, firstParentCommits, git, namedSourceFiles, privateDirectory } from "./latency-clones.ts";
 import { atSnapshot, corpusRepositories, toolCallOf, type CorpusRepository, type Snapshot, type ToolCall } from "./latency-queries.ts";
 import { isolatedEnvironment, startMcp, type McpLaunch, type McpSession } from "./latency-session.ts";
 import { slope } from "./latency-stats.ts";
@@ -180,51 +180,14 @@ async function liveReplay(run: Run, shas: readonly string[]): Promise<void> {
   const live: Snapshot = { kind: "live" };
   const liveQueries = run.calls.map(({ id, call }) => ({ id, call, snapshot: live }));
   const step = (name: string) => compareStep(run, warm, "live", name, liveQueries);
-  const file = (path: string) => join(clone, path);
   try {
     for (const [index, sha] of shas.entries()) {
       if (index > 0) git(clone, ["checkout", "--quiet", "--detach", sha], env);
       await step(`commit ${sha.slice(0, 12)}`);
     }
-    const target = namedSourceFile(run.calls.map(({ call }) => call));
-    if (target === undefined) {
-      skip(run, "live", "edits", "no query targets a Java or TypeScript file");
-    } else {
-      const original = readFileSync(file(target), "utf8");
-      const applied = async (name: string, text: string | undefined) => {
-        if (text === undefined) return skip(run, "live", name, `${target} has no line this edit changes`);
-        writeFileSync(file(target), text);
-        await step(`${name} applied`);
-        writeFileSync(file(target), original);
-        await step(`${name} reverted`);
-      };
-      await applied("body edit", bodyEdit(target, original));
-      await applied("signature edit", signatureEdit(target, original));
-      const added = addedFile(target, original);
-      writeFileSync(file(added.path), added.text);
-      await step("new file added");
-      rmSync(file(added.path));
-      await step("new file removed");
-      const sibling = siblingOf(clone, target, env);
-      if (sibling === undefined) {
-        skip(run, "live", "deletion and rename", `no other source file beside ${target}`);
-      } else {
-        const kept = readFileSync(file(sibling), "utf8");
-        rmSync(file(sibling));
-        await step("deletion applied");
-        writeFileSync(file(sibling), kept);
-        await step("deletion reverted");
-        const renamed = sibling.replace(/(\.[a-z]+)$/u, "Renamed$1");
-        renameSync(file(sibling), file(renamed));
-        await step("rename applied");
-        renameSync(file(renamed), file(sibling));
-        await step("rename reverted");
-      }
-      writeFileSync(file(target), unparsable(original));
-      await step("stops parsing");
-      writeFileSync(file(target), original);
-      await step("parses again");
-    }
+    const targets = namedSourceFiles(run.calls.map(({ call }) => call));
+    if (targets.length === 0) skip(run, "live", "edits", "no query targets a Java or TypeScript file");
+    for (const target of targets) await editSteps(run, clone, target, (name) => step(`${name} (${target})`));
     git(clone, ["commit", "--quiet", "--allow-empty", "-m", "ye-ast differential: no tree change"], env);
     await step("commit without a tree change");
     await synthesizedStep(run, clone, warm);
@@ -245,6 +208,45 @@ async function liveReplay(run: Run, shas: readonly string[]): Promise<void> {
   } finally {
     await session.close();
   }
+}
+
+/** Each single-file edit of `target`, applied and then reverted, with a step after each. */
+async function editSteps(run: Run, clone: string, target: string, step: (name: string) => Promise<void>): Promise<void> {
+  const file = (path: string) => join(clone, path);
+  const original = readFileSync(file(target), "utf8");
+  const applied = async (name: string, text: string | undefined) => {
+    if (text === undefined) return skip(run, "live", `${name} (${target})`, "the file has no line this edit changes");
+    writeFileSync(file(target), text);
+    await step(`${name} applied`);
+    writeFileSync(file(target), original);
+    await step(`${name} reverted`);
+  };
+  await applied("body edit", bodyEdit(target, original));
+  await applied("signature edit", signatureEdit(target, original));
+  const added = addedFile(target, original);
+  writeFileSync(file(added.path), added.text);
+  await step("new file added");
+  rmSync(file(added.path));
+  await step("new file removed");
+  const sibling = siblingOf(clone, target, run.env);
+  if (sibling === undefined) {
+    skip(run, "live", `deletion and rename (${target})`, "no other source file with its extension");
+  } else {
+    const kept = readFileSync(file(sibling), "utf8");
+    rmSync(file(sibling));
+    await step("deletion applied");
+    writeFileSync(file(sibling), kept);
+    await step("deletion reverted");
+    const renamed = sibling.replace(/(\.[a-z]+)$/u, "Renamed$1");
+    renameSync(file(sibling), file(renamed));
+    await step("rename applied");
+    renameSync(file(renamed), file(sibling));
+    await step("rename reverted");
+  }
+  writeFileSync(file(target), unparsable(original));
+  await step("stops parsing");
+  writeFileSync(file(target), original);
+  await step("parses again");
 }
 
 /** Another source file in the target's directory, else anywhere, with the same extension. */
