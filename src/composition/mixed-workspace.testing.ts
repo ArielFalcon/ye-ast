@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createDeclarationEvidenceReader } from "../core/adapters/typescript/declaration-evidence.adapter.ts";
 import type { ImpactQueriesDeps } from "../core/application/impact/impact-queries.ts";
 import type { WorkspaceQueriesDeps } from "../core/application/topology/workspace-queries.ts";
@@ -82,7 +83,7 @@ export function realWorkspaceFixture(scratchRoot: string, roots: readonly string
   };
   const live: LiveDeps = { workingTree: createGitWorkingTree(), mirror, graph, digest,
     versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: LIVE_STAGING_VERSION },
-    retention: { keepScopes: 3, unusedForMs: 14 * 24 * 60 * 60 * 1000, maxBytes: 512 * 1024 * 1024 }, now: () => 1 };
+    retention: { keepScopes: 3, unusedForMs: 14 * 24 * 60 * 60 * 1000, maxBytes: 512 * 1024 * 1024 }, now: () => 1, newStoreGeneration: () => randomUUID() };
   const trust: TrustRecordReader = { read: async (root) => ({ ok: true, value: roots.includes(root) ? "trusted" : undefined }) };
   const common = { vcs, scratch, reader, extractor, digest, matcher, graph, live, trust, producer: { name: "ye-ast", version }, engines };
   const moduleDependencies = createModuleDependenciesReader();

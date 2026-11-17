@@ -120,26 +120,33 @@ function imageOf(nodeRows: readonly NodeRow[], edgeRows: readonly EdgeRow[], ref
 
 /** The images a process keeps, by the identity of the store they were read from, least recently used first out. */
 export interface GraphImages {
-  /** The image kept under `key`, or the one `load` reads, kept when it fits the budget; a `load` that throws keeps nothing. */
-  obtain(key: string, load: () => GraphImage): GraphImage;
+  /**
+   * The image kept under `key`, or the one `load` reads, kept when it fits the budget; a `load` that throws keeps nothing.
+   * A `slot` holds one image: one obtained under another key drops the image the slot held, so a store written in place
+   * keeps only its last generation.
+   */
+  obtain(key: string, load: () => GraphImage, slot?: string): GraphImage;
 }
 
 export function keptGraphImages(maxBytes: number): GraphImages {
-  const kept = new Map<string, GraphImage>();
+  const kept = new Map<string, { key: string; image: GraphImage }>();
   let held = 0;
   return {
-    obtain(key, load) {
-      const found = kept.get(key);
+    obtain(key, load, slot = key) {
+      const found = kept.get(slot);
       if (found !== undefined) {
-        kept.delete(key);
-        kept.set(key, found);
-        return found;
+        kept.delete(slot);
+        if (found.key === key) {
+          kept.set(slot, found);
+          return found.image;
+        }
+        held -= found.image.bytes;
       }
       const image = load();
       if (image.bytes > maxBytes) return image;
-      kept.set(key, image);
+      kept.set(slot, { key, image });
       held += image.bytes;
-      for (const [oldest, { bytes }] of kept) {
+      for (const [oldest, { image: { bytes } }] of kept) {
         if (held <= maxBytes) break;
         kept.delete(oldest);
         held -= bytes;

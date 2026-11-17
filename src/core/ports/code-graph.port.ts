@@ -131,9 +131,19 @@ export interface CodeGraph {
    * over every file of `mirror`, and `filesFailed` lists the paths the update could not read. Runs in a child
    * process; an aborted `signal` stops it.
    */
-  syncMirror(mirror: string, paths: readonly string[], signal?: AbortSignal): Promise<Result<MirrorSyncSummary, CodeGraphFault>>;
-  /** Opens a store this adapter built, read-only, after checking it against the supported versions. */
-  open(store: string): Result<CodeGraphReader, CodeGraphFault>;
+  syncMirror(mirror: string, paths: readonly string[], signal?: AbortSignal, generations?: SyncGenerations): Promise<Result<MirrorSyncSummary, CodeGraphFault>>;
+  /**
+   * Opens a store this adapter built, read-only, after checking it against the supported versions. `generation` is the
+   * committed store generation of a mirror (`MirrorState.storeGeneration`), given only while no build or sync is under
+   * way: the store may then be answered from memory kept for that generation.
+   */
+  open(store: string, generation?: string): Result<CodeGraphReader, CodeGraphFault>;
+}
+
+/** The store generations around one mirror sync: the one committed before it (empty when none is), and the one it commits. */
+export interface SyncGenerations {
+  held: string;
+  next: string;
 }
 
 export interface MirrorSyncSummary extends IndexSummary {

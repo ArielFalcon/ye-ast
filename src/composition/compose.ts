@@ -7,6 +7,7 @@ import { createSnapshotDataCache } from "../core/application/snapshot/snapshot-d
 import type { ImpactQueriesDeps } from "../core/application/impact/impact-queries.ts";
 import type { HeadReaderDeps } from "../core/application/snapshot/head-reading.ts";
 import type { WorkspaceQueriesDeps } from "../core/application/topology/workspace-queries.ts";
+import { randomUUID } from "node:crypto";
 import { dirname, extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { takeCacheFlag } from "../cli/cache-flag.ts";
@@ -99,6 +100,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SNAPSHOT_CACHE_BYTES = 32 * 1024 * 1024;
 /** The graph images of kept indexes a process holds (ADR-0124): eight of the largest corpus store's measured charge, about 32 MiB each. */
 const GRAPH_IMAGE_BYTES = 256 * 1024 * 1024;
+/** The graph images of live mirrors a process holds, one per mirror (ADR-0125): four of the largest corpus store's measured charge. */
+const LIVE_GRAPH_IMAGE_BYTES = 128 * 1024 * 1024;
 
 /** What a host keeps of the live tree unless it overrides it (RFC-0010 "Retention"): three scopes, 14 days, 512 MiB. */
 const LIVE_RETENTION: LiveRetentionPolicy = { keepScopes: 3, unusedForMs: 14 * DAY_MS, maxBytes: 512 * 1024 * 1024 };
@@ -217,7 +220,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   };
   const budget = options.exportBudget && { budget: options.exportBudget };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };
-  const bareGraph = createCodeGraph(defaultCodeGraphDeps, { shutdown: options.signal });
+  const bareGraph = createCodeGraph(defaultCodeGraphDeps, { liveImageBytes: LIVE_GRAPH_IMAGE_BYTES, shutdown: options.signal });
   const graph = measurement === undefined ? bareGraph : measuredGraph(bareGraph, measurement);
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
   const bareLiveMirror = createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten });
@@ -230,6 +233,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: LIVE_STAGING_VERSION },
     retention: options.liveRetention ?? LIVE_RETENTION,
     now: () => Date.now(),
+    newStoreGeneration: () => randomUUID(),
   };
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, holds, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, snapshotCache: snapshotCache.snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);

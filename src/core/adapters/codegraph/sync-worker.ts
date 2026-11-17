@@ -1,7 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { statSync } from "node:fs";
-import { join } from "node:path";
-import { INDEX_STORE_DIRECTORY } from "../../ports/code-graph.port.ts";
+import type { SyncGenerations } from "../../ports/code-graph.port.ts";
 import type { StoredFiles } from "./mirror-files.ts";
 import type { StoredVersions } from "./store-version.ts";
 
@@ -28,7 +26,12 @@ export type SpawnWorker = (launch: WorkerLaunch) => ChildProcess;
 type Outcome<A> = A | "aborted" | null;
 
 export interface SyncWorkers {
-  sync(root: string, paths: readonly string[], launch: () => Promise<WorkerLaunch>, signal?: AbortSignal): Promise<Outcome<SyncAnswer>>;
+  /**
+   * Syncs through the root's worker, which drops its open store first unless the store generation committed before
+   * this sync is the one its own last sync committed: any other writer, a rebuild, or a sync left unfinished commits
+   * another generation or none.
+   */
+  sync(root: string, paths: readonly string[], launch: () => Promise<WorkerLaunch>, signal?: AbortSignal, generations?: SyncGenerations): Promise<Outcome<SyncAnswer>>;
   /** Closes the store the root's worker holds, so a rebuild replaces it without an open handle. */
   release(root: string, signal?: AbortSignal): Promise<"aborted" | undefined>;
   /** Ends every worker's input; each closes its store and exits once its request in flight is answered. */
@@ -38,7 +41,7 @@ export interface SyncWorkers {
 interface Worker {
   child: ChildProcess;
   dead: boolean;
-  /** The store generation as this worker's last answer left it. */
+  /** The store generation this worker's last sync commits; empty when no sync of it answered or none was named. */
   generation: string;
   settle: ((outcome: Outcome<WorkerAnswer>) => void) | null;
 }
@@ -124,50 +127,32 @@ export function createSyncWorkers(spawnWorker: SpawnWorker, shutdown?: AbortSign
   shutdown?.addEventListener("abort", close, { once: true });
 
   return {
-    sync: (root, paths, launch, signal) =>
+    sync: (root, paths, launch, signal, generations) =>
       serialized(root, async () => {
         if (signal?.aborted) return "aborted";
         const running = workers.get(root);
         const worker = running ?? start(root, await launch());
-        const outcome = await ask(worker, { op: "sync", paths, reopen: running !== undefined && foreignWriter(worker, root) }, root, signal);
+        const held = generations?.held ?? "";
+        const reopen = running !== undefined && (held === "" || held !== worker.generation);
+        worker.generation = "";
+        const outcome = await ask(worker, { op: "sync", paths, reopen }, root, signal);
         if (outcome === null || outcome === "aborted") return outcome;
         if (outcome.kind === "released") {
           retire(root, worker);
           return null;
         }
-        worker.generation = storeGeneration(root);
+        if (outcome.kind === "synced") worker.generation = generations?.next ?? "";
         return outcome;
       }),
     release: (root, signal) =>
       serialized(root, async () => {
         const worker = workers.get(root);
         if (worker === undefined) return undefined;
+        worker.generation = "";
         return (await ask(worker, { op: "release" }, root, signal)) === "aborted" ? "aborted" : undefined;
       }),
     close,
   };
-}
-
-/** True when the store changed since this worker's last answer: another process or a rebuild wrote it. */
-function foreignWriter(worker: Worker, root: string): boolean {
-  return worker.generation !== storeGeneration(root);
-}
-
-/**
- * The identity and last write of the store's database and its write-ahead log. Every committed write by any connection
- * changes one of them; readers change neither.
- */
-export function storeGeneration(root: string): string {
-  return ["codegraph.db", "codegraph.db-wal"]
-    .map((name) => {
-      try {
-        const { ino, size, mtimeNs } = statSync(join(root, INDEX_STORE_DIRECTORY, name), { bigint: true });
-        return `${ino}:${size}:${mtimeNs}`;
-      } catch {
-        return "-";
-      }
-    })
-    .join("|");
 }
 
 function hold(worker: Worker, held: boolean): void {

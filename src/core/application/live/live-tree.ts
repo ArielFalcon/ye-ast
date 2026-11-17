@@ -23,6 +23,8 @@ export interface LiveDeps {
   retention: LiveRetentionPolicy;
   /** The clock the sweep reads, supplied by composition: the core reads no wall clock. */
   now: () => number;
+  /** A token no other commit of any mirror, in this process or another, has used: the store generation a build or sync commits. */
+  newStoreGeneration: () => string;
 }
 
 export type { LiveFailure, LiveUnavailable } from "../../ports/live-queries.port.ts";
@@ -77,9 +79,14 @@ function unavailable(detail: string): Result<never, LiveUnavailable> {
 }
 
 /** The store a committed state names, if it can still be opened: the state is a claim, and the open is the proof. */
-function storeServes(deps: LiveDeps, root: string): CodeGraphReader | undefined {
-  const opened = deps.graph.open(root);
+function storeServes(deps: LiveDeps, root: string, state: MirrorState): CodeGraphReader | undefined {
+  const opened = deps.graph.open(root, committedGeneration(state));
   return opened.ok ? opened.value : undefined;
+}
+
+/** The store generation a state commits; none while a refresh left paths pending, since the store may then be mid-write. */
+function committedGeneration(state: MirrorState): string | undefined {
+  return state.pending.length === 0 && state.storeGeneration !== "" ? state.storeGeneration : undefined;
 }
 
 /**
@@ -127,11 +134,12 @@ export async function openLive<A>(deps: LiveDeps, request: OpenLive, use: (tree:
       await mirror.touch(location);
       if (signal?.aborted) return aborted();
       const takeStore = (): CodeGraphReader | undefined => {
-        const taken = proof.reader;
+        const taken = proof.reader ?? proof.open?.();
         proof.reader = undefined;
+        proof.open = undefined;
         return taken;
       };
-      const answered = await use(proof.reader === undefined ? tree : { ...tree, takeStore });
+      const answered = await use(proof.reader === undefined && proof.open === undefined ? tree : { ...tree, takeStore });
       return { ok: true, value: { answered, reflected: { state, stateId: tree.stateId }, reshaped } };
     })();
   } finally {
@@ -193,9 +201,13 @@ async function sweep(deps: LiveDeps, repo: string, current: string): Promise<boo
   }
 }
 
-/** The reader that proved the store, open until the query hands it over or returns; no build or sync follows its open. */
+/**
+ * The reader that proved the store, open until the query hands it over or returns; no build or sync follows its open.
+ * After a build or sync, `open` reads the store the refresh committed instead, under the same lock, when the query asks.
+ */
 interface Proof {
   reader: CodeGraphReader | undefined;
+  open?: (() => CodeGraphReader | undefined) | undefined;
 }
 
 interface Refreshed {
@@ -251,13 +263,14 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     unparsedSinceBuild: state?.unparsedSinceBuild ?? [],
     stateId,
     pending: behind,
+    storeGeneration: state?.storeGeneration ?? "",
   };
 
   // A committed state records what the engine last built; only opening the store proves it is still there. A store that
   // was removed, truncated or left unreadable behind such a state is rebuilt here, under the lock this refresh already
   // holds, instead of answering `unknown` with `index-unavailable` to every later query (RFC-0005 "First index").
   const claimsBuild = current.fullBuildStateId !== "" && behind.length === 0;
-  proof.reader = request.store && claimsBuild ? storeServes(deps, mirror.indexRoot(location)) : undefined;
+  proof.reader = request.store && claimsBuild ? storeServes(deps, mirror.indexRoot(location), current) : undefined;
   if (request.store && claimsBuild && proof.reader === undefined) {
     current.fullBuildStateId = "";
     staging = sorted(written);
@@ -289,6 +302,10 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   proof.reader?.close();
   proof.reader = undefined;
 
+  // A refresh that only copied files keeps the generation, since it left the store as it was; one that begins to write
+  // the store clears it until it commits, so a reader or a worker that finds the write unfinished trusts nothing kept.
+  const committedBefore = current.storeGeneration;
+  current.storeGeneration = "";
   const begun = await mirror.writeState(location, current);
   if (!begun.ok) return mirrorFailure(begun.fault);
   const indexRoot = mirror.indexRoot(location);
@@ -300,6 +317,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     const pruned = await mirror.prune(location, pruning, signal);
     if (!pruned.ok) return mirrorFailure(pruned.fault);
   }
+  const next = deps.newStoreGeneration();
   let full = needsBuild;
   let notHeld: readonly string[];
   let unparsed: readonly string[] = [];
@@ -308,7 +326,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     if (!built.ok) return unavailable(built.fault.detail);
     notHeld = built.value.filesNotIndexed;
   } else {
-    const synced = await graph.syncMirror(indexRoot, behind, signal);
+    const synced = await graph.syncMirror(indexRoot, behind, signal, { held: committedBefore, next });
     if (!synced.ok && synced.fault.kind === "aborted") return unavailable(synced.fault.detail);
     unparsed = synced.ok ? sorted([...new Set([...current.unparsedSinceBuild, ...synced.value.filesUnparsed])]) : [];
     const staleForAnswer = request.synthesized === true && unparsed.length > 0;
@@ -321,9 +339,10 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
       full = true;
     }
   }
-  const committed: MirrorState = { ...current, notHeld: sorted(notHeld), indexed: sorted(written), fullBuildStateId: full ? stateId : current.fullBuildStateId, unparsedSinceBuild: full ? [] : unparsed, pending: [] };
+  const committed: MirrorState = { ...current, notHeld: sorted(notHeld), indexed: sorted(written), fullBuildStateId: full ? stateId : current.fullBuildStateId, unparsedSinceBuild: full ? [] : unparsed, pending: [], storeGeneration: next };
   const writtenState = await mirror.writeState(location, committed);
   if (!writtenState.ok) return mirrorFailure(writtenState.fault);
+  proof.open = () => storeServes(deps, indexRoot, committed);
   return { ok: true, value: { tree: tree(committed), state: committed, reshaped: created || full } };
 }
 

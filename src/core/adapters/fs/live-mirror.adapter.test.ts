@@ -50,6 +50,7 @@ const state = (manifest: readonly MirrorEntry[] = []): MirrorState => ({
   unparsedSinceBuild: ["a.html"],
   stateId: "state",
   pending: ["b.ts"],
+  storeGeneration: "generation",
 });
 
 test("the mirror root is under the repository's store directory, per scope", async () => {

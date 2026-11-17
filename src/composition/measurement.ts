@@ -77,12 +77,12 @@ export function measuredDecisions(queries: DecisionQueries, deps: MeasurementDep
 export function measuredGraph(graph: CodeGraph, deps: MeasurementDeps): CodeGraph {
   return {
     index: (snapshot, store, signal) => measuredBuild("built", () => graph.index(snapshot, store, signal), store, deps),
-    open: (store) => {
-      const opened = measuredStage("store-open", () => graph.open(store), deps);
+    open: (store, generation) => {
+      const opened = measuredStage("store-open", () => graph.open(store, generation), deps);
       return opened.ok ? { ok: true, value: measuredStages(opened.value, { unresolvedReferences: "unresolved-references" }, deps) } : opened;
     },
     buildMirror: (mirror, signal) => measuredBuild("built", () => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
-    syncMirror: (mirror, paths, signal) => measuredBuild("synced", () => graph.syncMirror(mirror, paths, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
+    syncMirror: (mirror, paths, signal, generations) => measuredBuild("synced", () => graph.syncMirror(mirror, paths, signal, generations), join(mirror, INDEX_STORE_DIRECTORY), deps),
   };
 }
 

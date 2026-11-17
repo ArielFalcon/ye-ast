@@ -371,3 +371,30 @@ test("a live importers answer after an edit that only touched a template agrees 
   assert.deepEqual(users(sha), []);
   assert.deepEqual(users(live), users(sha));
 });
+
+test("a live callers after an edit reads the edges the sync committed, as a fresh composition does, and no file outside the mirror state holds the store generation", async () => {
+  await trust("trusted");
+  const indexCache = join(workspace, "index-cache");
+  const kept = composeQueries({ scratchRoot, trustDirectory, indexCache });
+  const callers = (queries: ReturnType<typeof composeQueries>) => queries.impact.callers({ repo, repoId: "shop", live: true, targets: [{ file: `${DIR}Util.java`, symbol: "fmt" }] });
+  const generation = (): string => (JSON.parse(readFileSync(stateFile(), "utf8")) as { storeGeneration: string }).storeGeneration;
+
+  const before = await callers(kept);
+  await callers(kept);
+  const built = generation();
+  write({ [`${DIR}Audit.java`]: 'package shop;\n\nclass Audit {\n  String note() {\n    return Util.fmt("audit");\n  }\n}\n' });
+  const after = await callers(kept);
+  const synced = generation();
+
+  assert.ok(before.ok && after.ok);
+  assert.ok(!canonicalJson(before).includes("Audit.java") && canonicalJson(after).includes("Audit.java"), "the new caller is read");
+  assert.equal(canonicalJson(after), canonicalJson(await callers(composeQueries({ scratchRoot, trustDirectory, indexCache: join(workspace, "fresh-cache") }))));
+  assert.ok(built !== "" && synced !== "" && built !== synced);
+  const written = [...filesUnder(indexCache).map((path) => join(indexCache, path)), ...filesUnder(join(repo, ".ye-ast-graph")).filter((path) => !path.endsWith(".state.json")).map((path) => join(repo, ".ye-ast-graph", path))];
+  assert.ok(written.length > 0);
+  for (const file of written) {
+    const bytes = readFileSync(file);
+    assert.ok(!bytes.includes(built) && !bytes.includes(synced), file);
+    assert.ok(!file.includes(built) && !file.includes(synced), file);
+  }
+});

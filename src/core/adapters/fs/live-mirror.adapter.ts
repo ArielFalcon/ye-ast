@@ -654,13 +654,13 @@ function unsafe(path: string): boolean {
 
 function parseState(value: unknown): MirrorState | null {
   if (!isRecord(value) || value.version !== STATE_FORMAT_VERSION) return null;
-  const { versions, manifest, skipped, notHeld, indexed, fullBuildStateId, unparsedSinceBuild, stateId, pending } = value;
+  const { versions, manifest, skipped, notHeld, indexed, fullBuildStateId, unparsedSinceBuild, stateId, pending, storeGeneration = "" } = value;
   if (!isRecord(versions) || typeof versions.codegraph !== "string" || typeof versions.store !== "string" || typeof versions.staging !== "string") return null;
   if (!Array.isArray(manifest) || !manifest.every(isEntry) || !Array.isArray(skipped) || !skipped.every(isSkipped)) return null;
-  if (!isStrings(notHeld) || !isStrings(indexed) || !isStrings(pending) || !isStrings(unparsedSinceBuild) || typeof fullBuildStateId !== "string" || typeof stateId !== "string") return null;
+  if (!isStrings(notHeld) || !isStrings(indexed) || !isStrings(pending) || !isStrings(unparsedSinceBuild) || typeof fullBuildStateId !== "string" || typeof stateId !== "string" || typeof storeGeneration !== "string") return null;
   return {
     versions: { codegraph: versions.codegraph, store: versions.store, staging: versions.staging },
-    manifest, skipped, notHeld, indexed, fullBuildStateId, unparsedSinceBuild, stateId, pending,
+    manifest, skipped, notHeld, indexed, fullBuildStateId, unparsedSinceBuild, stateId, pending, storeGeneration,
   };
 }
 
