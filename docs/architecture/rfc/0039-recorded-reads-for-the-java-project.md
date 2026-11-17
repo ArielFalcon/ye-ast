@@ -1,8 +1,8 @@
 # RFC-0039: The Java project answers through queries that record what a derivation reads
 
-- Status: Draft, 2026-11-17; the surface of M0 to M2 is accepted by ADR-0116
+- Status: Draft, 2026-11-17; the surface of M0 to M2 is accepted by ADR-0116, M3 and M6 by ADR-0117
 - Related: ADR-0031, ADR-0035, ADR-0040, ADR-0077, ADR-0114, ADR-0115 ("Not decided here": the dependency record
-  this RFC designs), RFC-0037
+  this RFC designs), ADR-0116, ADR-0117, RFC-0037
 
 **In short:** after a one-file edit the Java derivations `relations`, `entrypoints` and `receiver-methods` are derived
 again over every file, because the Java project hands other files out as plain objects and no key narrower than the
@@ -311,6 +311,50 @@ What it settles:
 - Reads recorded per file are few (40 distinct pairs on average), so verifying them is not the cost: 187 ms for 1,209
   verified entries and one derived.
 
+### M3 and M6: `entrypoints` per file, and the entries of `ofReads` on disk (2026-11-17)
+
+Same backend, the stdio MCP, live, `callers`, p50 of five rounds, host loaded by other sessions (load average 7 to 24), so read
+the ratios. Candidates against main 115cbda67, each measured in turn on one machine; the unchanged rows are three rounds
+of five taken alternately.
+
+| | Before | M3 | M3 and M6 |
+|---|---|---|---|
+| `entrypoints` stage, one edit | 1,746 ms | 924 ms | 935 ms |
+| `relations` stage, one edit | 191 ms | 201 ms | 198 ms |
+| `callers`, one edit | 10,088 ms | 10,046 ms | 9,497 ms |
+| `callers`, unchanged | 6,477 / 7,075 / 6,603 ms | 7,040 ms | 7,251 / 7,174 / 6,213 ms |
+| First call of a process, warm disk: `relations` | 2,606 ms | | 725 ms |
+| First call of a process, warm disk: `entrypoints` | 1,832 ms | | 1,311 ms |
+| First call of a process, warm disk: `callers` | 11,985 ms | | 10,281 ms |
+| First call of a process, empty cache: `callers` (three pairs) | 15,976 / 15,194 / 15,384 ms | | 16,373 / 16,336 / 16,513 ms |
+| First call, empty cache: `relations` and `entrypoints` together | about 5.0 s | | about 5.9 to 6.3 s |
+
+In process, the Spring routes over the same sources, cold read against the kept read (bytes compared with JSON):
+
+| Repository (sources) | Cold read | Kept, first | Kept, nothing changed | Kept, one edit | One edit: derived, verified |
+|---|---|---|---|---|---|
+| 1,340-file backend (1,278) | 2,042 ms | 2,397 ms | 939 ms | 897 ms | 1, 1,172 |
+| 131-file backend | 136 ms | 188 ms | 78 ms | 86 ms | 1, 86 |
+| 206-file application | 107 ms | 141 ms | 47 ms | 49 ms | 1, 80 |
+
+On disk the two slots add 2,356 entries and about 23.5 MB to the 2,360 entries and 26 MB the cache held (`du` blocks).
+
+What it settles:
+
+- The one-edit `entrypoints` stage falls by 0.8 s. What is left of its 0.9 s is the held project (a parse of every source
+  and a project build, about 0.6 s, paid once per call by whichever stage needs it first) and the callback walk
+  (`readHierarchy` 232 ms and `callbacksOf` 46 ms in process), which reads every declaration and is derived at each run
+  of the stage. The per-file part verifies 1,172 entries and derives one.
+- M5 (parse on demand) saves nothing yet: the callback walk needs every tree, so the held project is built at every run
+  of this stage. M5 follows a per-file form of the callback walk, which needs the supertype edges of each declaration as
+  a per-file derivation (the `unplaced`, `invokedSupertypes` and `unsettledSupertypes` of `readHierarchy`); that is the
+  next unit and comes before M5.
+- The disk tier turns the first call of a process with a warm cache from 2.6 s to 0.7 s for `relations` and from 1.8 s
+  to 1.3 s for `entrypoints`; the first call with an empty cache pays about 1 s for the 2,356 entries it writes and for
+  the recording. An unchanged call is unaffected: its stages are kept by the stage key.
+- A configuration, contract or generator edit derives every file: they are in the subject in full. A lookup of a
+  configuration property as a recorded question would narrow that and is not built.
+
 ## Open questions
 
 | # | Question | Recommendation |
@@ -318,8 +362,8 @@ What it settles:
 | 1 | Does `relations` go before `receiver-methods`, against the order ADR-0115 names? | Yes. It is the largest measured stage and the smallest read set; `receiver-methods` proves the hardest queries once the mechanism is proven |
 | 2 | Does a reader not yet on the plain handle record the whole file (P1) when it receives a type? | Yes. It is sound at once and needs no change in about 233 node reads; each reader earns P2 when a measurement shows its hits suffer |
 | 3 | How many entries does `ofReads` keep per subject? | One, replaced on a miss. More is decided by a measured hit rate, for example two branches read in turn |
-| 4 | Do the `ofReads` entries persist on disk? | Yes, as M6, after the memory tier is measured. They are per-file derivations, not the whole answers ADR-0077 keeps out |
+| 4 | Do the `ofReads` entries persist on disk? | Yes, as M6, after the memory tier is measured. They are per-file derivations, not the whole answers ADR-0077 keeps out. Done (ADR-0117) |
 | 5 | May a migrated derivation call `everyFile()`? | No. The three measured derivations reach zero; other readers stay on a frozen list |
 | 6 | Does the gate gain the pass warmed on the parent commit? | Yes, for units that touch `ofReads`. It is the only proof over real changes |
-| 7 | Is M5 built? | Decide with M0: it pays what the parse of every source costs an unchanged call, which no measurement isolates yet |
+| 7 | Is M5 built? | Not before the callback walk is per file: after M3 that walk reads every tree at each run of the stage, so parsing on demand saves nothing ("M3 and M6" above) |
 | 8 | Does the TypeScript program get the same surface? | Not here. `ofReads` names no language and can serve it; the checker hands out objects this RFC does not wrap |
