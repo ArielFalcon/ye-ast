@@ -18,7 +18,7 @@
  * `<out>/latency-report.json` and `<out>/latency-report.md`; exits 1 when a call wrote no query line.
  */
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { cloneAt, declareTrust, firstParentCommits, git, namedFiles, namedSourceFile, privateDirectory } from "./latency-clones.ts";
@@ -230,12 +230,18 @@ async function benchRepository(options: Options, repo: CorpusRepository, recorde
   log(`done; remove ${scratch} when the report is read`);
 }
 
+/** The machine's load average when the run started and when each repository ended: timings are comparable only under similar load. */
+interface LoadSample {
+  at: string;
+  loadavg: number[];
+}
+
 /** Writes the report of what the run measured so far: a repository that fails later never loses the earlier ones. */
-function writeReport(options: Options, repos: readonly CorpusRepository[], recorder: Recorder, started: string, failures: readonly string[]): void {
+function writeReport(options: Options, repos: readonly CorpusRepository[], recorder: Recorder, started: string, failures: readonly string[], load: readonly LoadSample[]): void {
   const cells = recorder.cells();
   const mixes = repos.map((repo) => recorder.mix(repo.name)).filter((mix) => mix.n > 0);
   const engineCommit = git(options.engine, ["rev-parse", "HEAD"], process.env);
-  const report = { schema: 1, started, finished: new Date().toISOString(), engine: engineCommit, node: process.version, options: { ...options, scenarios: [...options.scenarios] }, cells, mixes, extras: recorder.extras, missingQueryLines: recorder.missingQueryLines, failures };
+  const report = { schema: 1, started, finished: new Date().toISOString(), engine: engineCommit, node: process.version, options: { ...options, scenarios: [...options.scenarios] }, cells, mixes, extras: recorder.extras, missingQueryLines: recorder.missingQueryLines, failures, load };
   mkdirSync(options.out, { recursive: true });
   writeFileSync(join(options.out, "latency-report.json"), `${JSON.stringify(report, null, 1)}\n`);
   const extras = recorder.extras.filter((extra) => extra.scenario === "rss-slope").map((extra) => `| ${extra.repo} | ${extra.edits} | ${Math.round(Number(extra.rssFirstBytes) / 1048576)} | ${Math.round(Number(extra.rssLastBytes) / 1048576)} | ${Math.round(Number(extra.rssMaxBytes) / 1048576)} | ${Math.round(Number(extra.slopeBytesPerEdit) / 1024)} |`);
@@ -249,6 +255,7 @@ function writeReport(options: Options, repos: readonly CorpusRepository[], recor
     ...extras,
     "",
     `missing query lines: ${recorder.missingQueryLines}`,
+    `load average (1, 5, 15 min): ${load.map((sample) => `${sample.at} ${sample.loadavg.map((value) => value.toFixed(1)).join(" ")}`).join("; ")}`,
     ...failures.map((failure) => `failed: ${failure}`),
     "",
   ].join("\n");
@@ -261,6 +268,7 @@ async function main(): Promise<void> {
   const recorder = new Recorder();
   const started = new Date().toISOString();
   const failures: string[] = [];
+  const load: LoadSample[] = [{ at: "start", loadavg: loadavg() }];
   for (const repo of repos) {
     try {
       await benchRepository(options, repo, recorder);
@@ -268,7 +276,8 @@ async function main(): Promise<void> {
       failures.push(`${repo.name}: ${error instanceof Error ? error.message : String(error)}`);
       process.stderr.write(`bench ${repo.name}: failed: ${failures.at(-1)}\n`);
     }
-    writeReport(options, repos, recorder, started, failures);
+    load.push({ at: repo.name, loadavg: loadavg() });
+    writeReport(options, repos, recorder, started, failures, load);
   }
   process.stdout.write(`report: ${join(options.out, "latency-report.md")}\n`);
   process.exitCode = recorder.missingQueryLines === 0 && failures.length === 0 ? 0 : 1;
