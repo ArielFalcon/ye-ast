@@ -271,6 +271,7 @@ test("a run directory named by a timestamp and words stays whole in a path, in b
   for (const path of [
     "/Users/dev/work/ye-ast/evaluation/artifacts/20261116T235316Z-agents-r2/answers/q1.md",
     "/Users/dev/work/ye-ast/evaluation/artifacts/20261116T235316Z_agents_r2/answers/q1.md",
+    "/Users/dev/work/ye-ast/evaluation/artifacts/20261116T235316Z.agents.r2/answers/q1.md",
     "/Users/dev/work/ye-ast/evaluation/artifacts/2026-11-16T23-53-16Z-Agents-Run2/answers/q1.md",
     "/Users/dev/work/ye-ast/evaluation/artifacts/answer-01.20261116T235316Z.Agents-R2.md",
   ]) {
@@ -290,6 +291,9 @@ test("an encoded segment at the position of a run directory is still redacted wh
     "aB3xK9mQ2pL5vR8tY1wZ4nJ7hG0sD6fE",
     "aB3xK9mQ2pL5vR8tY1wZ-4nJ7hG0sD6fE_q1",
     "20261116T235316Z-aB3xK9mQ2pL5vR8tY1wZ-r2",
+    "Abcdefghijklmnopqrstuvwxyz1",
+    "Correcthorsebatterystaple1234-ok",
+    "AbCdEfGhIjKlMnOpQr-r2",
   ]) {
     const input = `${dir}/${segment}/answers/q1.md`;
     const result = sanitizeText(input, "model");
