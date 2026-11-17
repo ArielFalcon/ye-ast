@@ -298,6 +298,36 @@ test("a stage line carries its start offset on the process monotonic clock, so o
   assert.ok((second?.start_ms as number) >= (first?.start_ms as number) + (first?.duration_ms as number) - 1);
 });
 
+test("every read of an opened store is tallied per reader method into one line per query", async () => {
+  const { lines, sink } = collecting();
+  const deps = { sink, redaction, tallies: stageTallies() };
+  const reader = { versions: {}, symbolsInFiles: () => [], symbolsByIds: () => [], declarationsNamed: () => [], incomingEdges: () => [], outgoingEdges: () => [], unresolvedReferences: () => [], close: () => undefined };
+  const graph = { open: () => ({ ok: true, value: reader }) } as unknown as CodeGraph;
+  const queries = measuredImpact({
+    ...impactOf(fact("complete")),
+    callers: async (request) => {
+      const opened = measuredGraph(graph, deps).open("/store");
+      assert.ok(opened.ok);
+      opened.value.symbolsInFiles(["a.ts"]);
+      opened.value.symbolsInFiles(["b.ts"]);
+      opened.value.symbolsByIds([]);
+      opened.value.declarationsNamed(["a"]);
+      opened.value.incomingEdges([]);
+      opened.value.outgoingEdges([]);
+      opened.value.outgoingEdges([]);
+      opened.value.outgoingEdges([]);
+      opened.value.unresolvedReferences(["a.ts"]);
+      return impactOf(fact("complete")).callers(request);
+    },
+  }, deps);
+
+  await queries.callers({} as never);
+
+  const stages = lines.map(recordOf).filter((record) => record.event === "stage").map((record) => [record.stage, record.calls]);
+  assert.deepEqual(stages, [["store-open", undefined], ["graph-symbols-in-files", 2], ["graph-symbols-by-ids", 1], ["graph-declarations-named", 1], ["graph-incoming-edges", 1], ["graph-outgoing-edges", 3], ["unresolved-references", 1]]);
+  assert.equal(recordOf(lines.at(-1)).event, "query");
+});
+
 test("the unresolved references an opened store answers are their own stage", () => {
   const { lines, sink } = collecting();
   const reader = { versions: {}, unresolvedReferences: () => [], close: () => undefined };

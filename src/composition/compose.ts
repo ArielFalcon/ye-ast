@@ -200,7 +200,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
       return [...(await typescriptCallSites.placed(files, repo, libraries, options)), ...java].sort(({ site: a }, { site: b }) => compareCallPlaces(a, b));
     },
   }, { placed: "call-sites" });
-  const vcs = staged(createGitVcs(), { exportCommit: "export", listCommit: "export", materializeCommit: "materialize" });
+  const vcs = staged(createGitVcs(), { resolveCommit: "resolve-commit", exportCommit: "export", listCommit: "export", materializeCommit: "materialize" });
   const scratch = createTempScratchDirectory(options.scratchRoot);
   const reader = createFsSourceReader();
   const digest = createSha256Digest();
