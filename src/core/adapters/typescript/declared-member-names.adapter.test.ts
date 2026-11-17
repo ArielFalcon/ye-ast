@@ -660,6 +660,7 @@ test("given derived facts, the member names a file declares are derived once by 
       return JSON.parse(kept.get(key)!);
     },
     ofInputs: (_slot, _inputs, derive) => derive(),
+    ofReads: (_slot, _subject, _answerNow, derive) => derive(() => undefined),
     fingerprint: (inputs) => JSON.stringify(inputs),
     drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };

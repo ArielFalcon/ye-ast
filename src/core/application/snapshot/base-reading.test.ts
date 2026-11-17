@@ -146,6 +146,7 @@ function derivedFacts(): DerivedFacts {
       if (!kept.has(key)) kept.set(key, await derive());
       return kept.get(key) as T;
     },
+    ofReads: (_slot, _subject, _answerNow, derive) => derive(() => undefined),
     fingerprint: () => "fingerprint",
     drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   } as DerivedFacts;
@@ -195,6 +196,7 @@ function rememberingFacts(): DerivedFacts {
       if (!kept.has(key)) kept.set(key, JSON.stringify(await derive()));
       return JSON.parse(kept.get(key)!);
     },
+    ofReads: (_slot, _subject, _answerNow, derive) => derive(() => undefined),
     fingerprint: (inputs) => JSON.stringify(inputs),
     drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };

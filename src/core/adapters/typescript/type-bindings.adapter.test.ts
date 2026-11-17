@@ -62,6 +62,7 @@ function memo(): DerivedFacts & { derivations: number } {
       kept.set(key, value);
       return value;
     },
+    ofReads: <T>(_slot: string, _subject: object, _answerNow: (question: string) => string, derive: (record: (question: string, answer: string) => void) => Promise<T>) => derive(() => undefined),
     fingerprint: (inputs: object) => JSON.stringify(inputs),
     drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };

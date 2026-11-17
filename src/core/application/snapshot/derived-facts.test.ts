@@ -166,3 +166,64 @@ test("a stored fact is counted as a hit of the disk tier and is then held in mem
   const tally = facts.drain();
   assert.deepEqual([tally.hits, tally.misses, tally.diskHits, tally.admitted], [2, 0, 1, 1]);
 });
+
+test("a derivation is kept until an answer it recorded differs, and then replaced by the new one", async () => {
+  const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
+  let world = { declaring: '["a/A.java"]', file: "h1" };
+  const answerNow = (question: string): string => (question === "declaring|A" ? world.declaring : world.file);
+  let derivations = 0;
+  const derive = async (record: (question: string, answer: string) => void) => {
+    derivations++;
+    record("declaring|A", answerNow("declaring|A"));
+    record("file|a/A.java", answerNow("file|a/A.java"));
+    return { derived: derivations };
+  };
+
+  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, answerNow, derive), { derived: 1 });
+  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, answerNow, derive), { derived: 1 });
+  world = { ...world, file: "h2" };
+  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, answerNow, derive), { derived: 2 });
+  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, answerNow, derive), { derived: 2 });
+  assert.equal(derivations, 2);
+  assert.deepEqual({ hits: facts.drain().hits }, { hits: 2 });
+});
+
+test("a question that answered nothing is recorded, so an answer that appears is a difference", async () => {
+  const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
+  let declared: string[] = [];
+  const answerNow = () => JSON.stringify(declared);
+  const counted = counting("v");
+
+  const read = () => facts.ofReads("slot", { path: "b" }, answerNow, async (record) => (record("declaring|Missing", answerNow()), counted.derive()));
+  await read();
+  await read();
+  assert.equal(counted.derived(), 1);
+  declared = ["c/Missing.java"];
+  await read();
+  assert.equal(counted.derived(), 2);
+});
+
+test("an answer longer than the inline bound is compared whole, and another subject keeps its own entry", async () => {
+  const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
+  const long = (tail: string) => `${"x".repeat(80)}${tail}`;
+  let tail = "a";
+  const counted = counting("v");
+  const read = (subject: object) => facts.ofReads("slot", subject, () => long(tail), async (record) => (record("q", long(tail)), counted.derive()));
+
+  await read({ path: "one" });
+  await read({ path: "one" });
+  assert.equal(counted.derived(), 1);
+  tail = "b";
+  await read({ path: "one" });
+  assert.equal(counted.derived(), 2);
+  await read({ path: "two" });
+  assert.equal(counted.derived(), 3);
+});
+
+test("a derivation that throws keeps nothing for ofReads", async () => {
+  const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
+  await assert.rejects(facts.ofReads("slot", { path: "a" }, () => "1", async (record) => { record("q", "1"); throw new Error("cut"); }));
+  const counted = counting("v");
+  await facts.ofReads("slot", { path: "a" }, () => "1", async () => counted.derive());
+  assert.equal(counted.derived(), 1);
+});

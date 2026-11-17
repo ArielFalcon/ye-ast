@@ -322,6 +322,7 @@ test("given derived facts, a second reader over the same sources answers the sam
       if (!kept.has(key)) kept.set(key, JSON.stringify(await derive()));
       return JSON.parse(kept.get(key)!);
     },
+    ofReads: (_slot, _subject, _answerNow, derive) => derive(() => undefined),
     fingerprint: (inputs) => JSON.stringify(inputs),
     drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };
@@ -357,6 +358,7 @@ test("given derived facts, an edit of one file derives the receiver bindings of 
     async ofInputs(_slot, _inputs, derive) {
       return JSON.parse(JSON.stringify(await derive()));
     },
+    ofReads: (_slot, _subject, _answerNow, derive) => derive(() => undefined),
     fingerprint: (inputs) => JSON.stringify(inputs),
     drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };

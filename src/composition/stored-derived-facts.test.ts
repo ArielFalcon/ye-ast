@@ -54,6 +54,7 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
       record(slot, value);
       return value;
     },
+    ofReads: (_slot, _subject, _answerNow, derive) => derive(() => undefined),
     fingerprint: (inputs) => JSON.stringify(inputs),
     drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };

@@ -10,6 +10,14 @@ type Counts = Omit<DerivedFactsTally, "factBytes" | "retainedBytes">;
 
 const NO_COUNTS: Counts = { hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0 };
 
+/** A longer answer is kept by its digest; no digest is as short. */
+const MAX_INLINE_ANSWER = 48;
+
+interface ReadsEntry {
+  value: unknown;
+  reads: readonly (readonly [question: string, answer: string])[];
+}
+
 interface Address {
   /** In the snapshot data cache: the slot, the trust and the inputs. */
   key: string;
@@ -40,6 +48,7 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     tally.evicted += admission.evicted;
     return JSON.parse(json);
   };
+  const named = (answer: string): string => (answer.length > MAX_INLINE_ANSWER ? digest.of(answer) : answer);
   const kept = ({ key, diskKey: diskKeyOf }: Address): unknown => {
     const value = cache.getFact(key);
     if (value !== undefined) {
@@ -78,6 +87,19 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
       const address = addressOf(slot, inputs);
       const value = kept(address);
       return value === undefined ? keep(address, await derive()) : (value as Awaited<ReturnType<typeof derive>>);
+    },
+    async ofReads(slot, subject, answerNow, derive) {
+      const address = addressOf(slot, subject);
+      const entry = cache.getFact(address.key) as ReadsEntry | undefined;
+      if (entry !== undefined && entry.reads.every(([question, answer]) => named(answerNow(question)) === answer)) {
+        tally.hits++;
+        return entry.value as Awaited<ReturnType<typeof derive>>;
+      }
+      tally.misses++;
+      const reads = new Map<string, string>();
+      const value = await derive((question, answer) => void reads.set(question, named(answer)));
+      const json = JSON.stringify({ value, reads: [...reads] });
+      return json === undefined ? value : (admit(address.key, json) as ReadsEntry).value as typeof value;
     },
     fingerprint: (inputs) => digest.of(canonicalJson(inputs)),
     drain() {
