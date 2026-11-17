@@ -1,21 +1,30 @@
 import { basename, resolve } from "node:path";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { takeCacheFlag } from "../cli/cache-flag.ts";
 import { EXIT_CODE } from "../cli/main.ts";
 import { repositoryCatalog, type RepositoryBinding } from "../mcp/repository-targeting.ts";
 import { createMcpServer } from "../mcp/server.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
+import { cacheDirectoryRefusal } from "./cache-directory-refusal.ts";
 import type { ProcessHost } from "./process-host.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { javaSourcesDeclared, jdkDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 
-const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk [<at>=]<path>]... [--answer-bytes <n>]";
+const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk [<at>=]<path>]... [--answer-bytes <n>] [--cache <dir>]";
 
 /**
  * `ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk [<at>=]<path>]...`:
  * serves declared repositories over stdio. Only the launch repository is warmed; each request retains its own trust
  * check. A `--node-modules`, `--java-sources` or `--jdk` declares a build output of the launch repository (ADR-0037, ADR-0044, ADR-0063).
+ * A `--cache <dir>` moves the index cache, the derived facts and the answer files to that directory (ADR-0077 decision 6).
  */
-export async function runMcp(args: readonly string[], host: ProcessHost): Promise<number> {
+export async function runMcp(commandLine: readonly string[], host: ProcessHost): Promise<number> {
+  const taken = takeCacheFlag(commandLine, host.cwd);
+  if (taken === undefined) {
+    host.err(USAGE);
+    return EXIT_CODE.usage;
+  }
+  const { rest: args } = taken;
   let index = 0;
   const launchPath = args[0] !== undefined && !args[0].startsWith("-") ? args[index++] : ".";
   const declarations: { repoId: string; path: string }[] = [];
@@ -51,8 +60,14 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
     host.err(USAGE);
     return EXIT_CODE.usage;
   }
+  const refusal = taken.directory === undefined ? null : await cacheDirectoryRefusal(taken.directory);
+  if (refusal !== null) {
+    host.err(refusal);
+    return EXIT_CODE.usage;
+  }
+  const served = taken.directory === undefined ? host : host.withCache(taken.directory);
   let launchRoot: string | undefined;
-  const queries = host.queries({ trustRecord: true, ...(outputs.length > 0 && { buildOutputs: (repo: string) => (repo === launchRoot ? outputs : undefined) }) });
+  const queries = served.queries({ trustRecord: true, ...(outputs.length > 0 && { buildOutputs: (repo: string) => (repo === launchRoot ? outputs : undefined) }) });
   const canonical = async (path: string) => queries.canonicalRepositoryRoot(resolve(host.cwd, path), host.signal);
   const root = await canonical(launchPath);
   if (host.signal.aborted) return EXIT_CODE.interrupted;
@@ -91,7 +106,7 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
   });
   const handle = serveStdio(() => {
     const digest = createSha256Digest();
-    return createMcpServer({ ...queries, digest, evidenceComposition: createEvidenceComposition(digest), repository, repositories: bindings, ...(answerBytes === undefined ? {} : { answerBytes }), ...(host.answerFiles === undefined ? {} : { answerFiles: host.answerFiles }) });
+    return createMcpServer({ ...queries, digest, evidenceComposition: createEvidenceComposition(digest), repository, repositories: bindings, ...(answerBytes === undefined ? {} : { answerBytes }), ...(served.answerFiles === undefined ? {} : { answerFiles: served.answerFiles }) });
   }, {
     transport: wire,
     onerror: (error) => host.err(`ye-ast: ${queries.redaction.redactError(error)}`),

@@ -1300,6 +1300,58 @@ test("init rejects repeated answer byte limits before installing", async () => {
   }
 });
 
+test("init prints the cache directory it was given, resolved, into its registration and installs as without it", async () => {
+  const { io, deps, installs } = setupInstall();
+  assert.equal(await run(["init", "--trust", "untrusted", "--cache", "../cache dir", "/work/shop"], io, deps), EXIT_CODE.ok);
+  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --cache '${resolve("../cache dir")}'`), io.stdout.join("\n"));
+  const plain = setupInstall();
+  await run(["init", "--trust", "untrusted", "/work/shop"], plain.io, plain.deps);
+  assert.deepEqual(installs.map(({ signal: _, ...request }) => request), plain.installs.map(({ signal: _, ...request }) => request));
+  assert.ok(plain.io.stdout.every((line) => !line.includes("--cache")));
+});
+
+test("batch init prints the cache directory into the structured registration", async () => {
+  const { io, deps } = setupBatch();
+  assert.equal(await run(["init", "--trust", "trusted", "--repo", "launch-id", "/alias launch", "--cache=/var/ye cache", "/work/launch root"], io, deps), EXIT_CODE.ok);
+  assert.deepEqual(JSON.parse(io.stdout[1]!).args.slice(-2), ["--cache", "/var/ye cache"]);
+});
+
+test("every command takes a cache directory and answers exactly as without it", async () => {
+  const commands = [
+    ["map", "/work/shop"],
+    ["impact", "/work/shop", "--base", "main"],
+    ["callers", "/work/shop", "src/a.ts:run"],
+    ["importers", "/work/shop", "src/a.ts"],
+    ["outline", "/work/shop", "src/a.ts"],
+    ["trace", "/work/shop", "src/a.ts:run"],
+    ["workspace", "/work/shop"],
+    ["decisions", "/work/shop"],
+    ["contract-consequences", "/work/shop", "--base", "main"],
+  ];
+  for (const command of commands) {
+    const plain = setup();
+    const cached = setup();
+    const expected = await run(command, plain.io, plain.deps);
+    const code = await run([command[0]!, "--cache", "/var/ye-cache", ...command.slice(1)], cached.io, cached.deps);
+    assert.equal(code, expected, command.join(" "));
+    assert.notEqual(code, EXIT_CODE.usage, command.join(" "));
+    assert.deepEqual(cached.io.stdout, plain.io.stdout, command.join(" "));
+    assert.deepEqual(cached.io.stderr, plain.io.stderr, command.join(" "));
+    assert.deepEqual(cached.requests, plain.requests, command.join(" "));
+  }
+});
+
+test("a repeated cache flag, one without a value and one whose value is another flag are usage errors that run nothing", async () => {
+  for (const flags of [["--cache", "/a", "--cache", "/b"], ["--cache=/a", "--cache", "/b"], ["--cache"], ["--cache="], ["--cache", ""], ["--cache", "--live"]]) {
+    const read = setup();
+    assert.equal(await run(["map", "/work/shop", ...flags], read.io, read.deps), EXIT_CODE.usage, flags.join(" "));
+    assert.deepEqual(read.requests, []);
+    const init = setupInstall();
+    assert.equal(await run(["init", "--trust", "untrusted", "/work/shop", ...flags], init.io, init.deps), EXIT_CODE.usage, flags.join(" "));
+    assert.deepEqual(init.installs, []);
+  }
+});
+
 test("init carries a nonnegative answer byte limit into its registration", async () => {
   const { io, deps } = setupInstall();
   assert.equal(await run(["init", "--trust", "untrusted", "--answer-bytes", "0", "/work/shop"], io, deps), EXIT_CODE.ok);

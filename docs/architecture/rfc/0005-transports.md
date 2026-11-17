@@ -17,10 +17,14 @@ and agreed before its slice starts.
 |---|---|
 | `ye-ast map` | Prints the deterministic map at a snapshot ([RFC-0004](0004-deterministic-map.md)) |
 | `ye-ast init` | Records the user's trust declaration outside the repository, writes the fixed layer under `.ye-ast/`, ignores ye-ast's folders (`.ye-ast/`, `.ye-ast-graph/`) through `.git/info/exclude`, and prints the client configuration |
-| `ye-ast serve` | Serves the query protocol on stdio to a host that runs ye-ast as a child process ([ADR-0011](../adr/0011-query-protocol-in-the-mvp.md)) |
-| `ye-ast mcp` | Starts the stdio MCP server |
+| `ye-ast serve [--cache <dir>]` | Serves the query protocol on stdio to a host that runs ye-ast as a child process ([ADR-0011](../adr/0011-query-protocol-in-the-mvp.md)) |
+| `ye-ast mcp` | Starts the stdio MCP server; `--cache <dir>` names its cache directory |
 | `ye-ast contract-consequences` | Prints the contract consequences fact of written hypotheses or of a contract diff ([RFC-0023](0023-consequences-surfaces.md)) |
 | `ye-ast --version`, `--help` | Exist today |
+
+**Cache directory.** Every command, `serve` and `mcp` take `--cache <dir>` once, which replaces the per-user cache
+directory for that process ([RFC-0006](0006-configuration.md#cache-directory)); `init` prints it into the MCP
+registration. An unsafe directory, a repeated flag or one without a value is exit `2`.
 
 **Exit codes and signals.** `0` ok; `1` the query answered with a typed fault (unknown revision, a path that is not a
 repository root, a blob missing from a partial clone, a failed write of the export); `2` usage; `70` an internal fault

@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
@@ -18,6 +20,7 @@ interface Harness {
   errors: string[];
   warmed: string[];
   composed: { count: number; options: Parameters<ProcessHost["queries"]>[0][] };
+  cached: string[];
   stdin: PassThrough;
   finished: () => Promise<number>;
   call: (method: string, params?: unknown) => Promise<{ result?: { isError?: boolean }; error?: unknown }>;
@@ -36,6 +39,7 @@ function harness(
   const errors: string[] = [];
   const warmed: string[] = [];
   const composed: Harness["composed"] = { count: 0, options: [] };
+  const cached: string[] = [];
   const queries = {
     version: "0.0.0",
     entrypoints: {
@@ -64,6 +68,10 @@ function harness(
       composed.options.push(options);
       return queries;
     },
+    withCache: (directory) => {
+      cached.push(directory);
+      return host;
+    },
     ...overrides,
   };
   const replies = new Map<number, (message: never) => void>();
@@ -79,6 +87,7 @@ function harness(
     errors,
     warmed,
     composed,
+    cached,
     stdin,
     start: (args) => {
       running = runMcp(args, host);
@@ -92,6 +101,18 @@ function harness(
       }),
   };
 }
+
+const fact = (value: unknown) => ({ schema: SCHEMA, snapshot: { repo: "projects", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "0.0.0" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [], status: "complete", value });
+const answered = { ok: true as const, value: fact({ entrypoints: fact([]) }) };
+const composed = (): ComposedQueries => ({
+  version: "0.0.0",
+  entrypoints: { map: async () => answered },
+  impact: {},
+  redaction: { redact: (text: string) => text, redactValue: (value: unknown) => value, detect: () => ({ redacted: false, patterns: [], count: 0 }), containsSecret: () => false, redactError: () => REDACTED },
+  canonicalRepositoryRoot: async (path: string) => ({ ok: true, value: path }),
+  repositoryName: async () => ({ ok: false, fault: { kind: "git-failed", detail: "stub" } }),
+  warmLive: async () => null,
+}) as unknown as ComposedQueries;
 
 async function open(h: Harness): Promise<void> {
   await h.call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } });
@@ -314,17 +335,6 @@ test("--java-sources declares a generated source directory of the launch reposit
 });
 
 test("the server writes each answer through the answer files its host hands over, and writes none without them", async () => {
-  const fact = (value: unknown) => ({ schema: SCHEMA, snapshot: { repo: "projects", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "0.0.0" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [], status: "complete", value });
-  const answered = { ok: true as const, value: fact({ entrypoints: fact([]) }) };
-  const composed = (): ComposedQueries => ({
-    version: "0.0.0",
-    entrypoints: { map: async () => answered },
-    impact: {},
-    redaction: { redact: (text: string) => text, redactValue: (value: unknown) => value, detect: () => ({ redacted: false, patterns: [], count: 0 }), containsSecret: () => false, redactError: () => REDACTED },
-    canonicalRepositoryRoot: async (path: string) => ({ ok: true, value: path }),
-    repositoryName: async () => ({ ok: false, fault: { kind: "git-failed", detail: "stub" } }),
-    warmLive: async () => null,
-  }) as unknown as ComposedQueries;
   const kept: AnswerFolder[] = [];
   const handed = harness({ queries: composed, answerFiles: { keep: async (answer) => (kept.push(answer), "/cache/answers/entrypoints/key") } });
   const alone = harness({ queries: composed });
@@ -341,5 +351,67 @@ test("the server writes each answer through the answer files its host hands over
   for (const h of [handed, alone]) {
     h.stdin.end();
     await h.finished();
+  }
+});
+
+test("a cache directory is resolved against the working directory and the queries and answer files of the server come from the host it names", async () => {
+  const kept: AnswerFolder[] = [];
+  const named: Parameters<ProcessHost["queries"]>[0][] = [];
+  const h = harness({
+    withCache: (directory) => (h.cached.push(directory), { ...h.host, queries: (options) => (named.push(options), composed()), answerFiles: { keep: async (answer) => (kept.push(answer), "/named/answers/entrypoints/key") } }),
+  });
+  h.start(["--cache", "store"]);
+  await open(h);
+  const reply = await h.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
+  assert.deepEqual(h.cached, ["/work/projects/store"]);
+  assert.equal(named.length, 1);
+  assert.equal(h.composed.count, 0);
+  assert.equal(kept.length, 1);
+  assert.match(JSON.stringify(reply.result), /answer files: \/named\/answers\/entrypoints\/key/);
+  h.stdin.end();
+  assert.equal(await h.finished(), EXIT_CODE.ok);
+});
+
+test("without a cache flag the host is used as it is", async () => {
+  const h = harness();
+  h.start(["shop"]);
+  h.stdin.end();
+  await h.finished();
+  assert.deepEqual(h.cached, []);
+  assert.equal(h.composed.count, 1);
+});
+
+test("a repeated cache flag, one without a value and one whose value is another flag are usage errors that compose nothing", async () => {
+  for (const args of [["--cache", "/a", "--cache", "/b"], ["--cache=/a", "--cache", "/b"], ["--cache"], ["shop", "--cache"], ["--cache", ""], ["--cache", "--repo", "id", "/work/id"]]) {
+    const h = harness();
+    h.start(args);
+    h.stdin.end();
+    assert.equal(await h.finished(), EXIT_CODE.usage, args.join(" "));
+    assert.equal(h.composed.count, 0);
+    assert.deepEqual(h.cached, []);
+    assert.ok(h.errors.length > 0);
+  }
+});
+
+test("a cache directory that is open to others or is a symbolic link is refused, and nothing is composed from it", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "ye-ast-cache-flag-"));
+  try {
+    const open = join(scratch, "open");
+    const target = join(scratch, "target");
+    mkdirSync(open);
+    chmodSync(open, 0o777);
+    mkdirSync(target, { mode: 0o700 });
+    symlinkSync(target, join(scratch, "link"));
+    for (const directory of [open, join(scratch, "link")]) {
+      const h = harness();
+      h.start(["--cache", directory]);
+      h.stdin.end();
+      assert.equal(await h.finished(), EXIT_CODE.usage, directory);
+      assert.deepEqual(h.cached, []);
+      assert.equal(h.composed.count, 0);
+      assert.equal(h.errors.length, 1);
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 });

@@ -1,3 +1,4 @@
+import { takeCacheFlag } from "./cache-flag.ts";
 import { parseWorkspaceManifest } from "../core/domain/topology/workspace-manifest.ts";
 import { entrypointCandidateText, unknownEntryText, unknownTargetKey } from "../core/domain/shared/unknown-target.ts";
 import { basename, resolve } from "node:path";
@@ -76,10 +77,10 @@ const USAGE = [
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast contract-consequences --hypothesis <json> [--hypothesis <json>]... [--revision <rev>] [--repo-id <id>] [scope] <repo>",
   "       ye-ast contract-consequences --base <rev> [--head <rev>] [--repo-id <id>] [scope] <repo>",
-  "       ye-ast init --trust trusted|untrusted [--workspace <file>] [outputs] [--jdk [<at>=]<path>]... [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration, which carries the outputs and the JDKs)",
-  "       ye-ast init --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
-  "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
-  "       ye-ast mcp [<launch-root>] [--repo <id> <root>]... [outputs] [--jdk [<at>=]<path>]...   (read-only stdio MCP server; the outputs are the launch repository's)",
+  "       ye-ast init [--cache <dir>] --trust trusted|untrusted [--workspace <file>] [outputs] [--jdk [<at>=]<path>]... [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration, which carries the outputs and the JDKs)",
+  "       ye-ast init [--cache <dir>] --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
+  "       ye-ast serve [--cache <dir>]   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
+  "       ye-ast mcp [<launch-root>] [--repo <id> <root>]... [outputs] [--jdk [<at>=]<path>]... [--cache <dir>]   (read-only stdio MCP server; the outputs are the launch repository's)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers, how many of the file's declarations were left out, and what its own body uses outside itself (a declaration, a package or a global, with the lines of each use; an unproved use is a cut), without imports",
@@ -93,6 +94,7 @@ const USAGE = [
   "--answer-bytes: init and mcp, once: nonnegative UTF-8 text byte limit; init includes it in the registration; requests may override it",
   "jdk: trace, init and mcp, repeatable: --jdk [<at>=]<path>   (a JDK home your own machine has, whose lib/ct.sym and release are read as data, never run, as the library signatures of the Java sources under <at>, the root without <at>=; its feature release is the release of the signatures, and a build file that states a larger release makes it unusable. Write =<path> for a path that holds =. It is allowed with --live; init prints it into the MCP registration. Each answer that used one lists it in inputs.buildOutputs as an unverified jdk with its digest, and one it could not use is a build-output cut. Callers, impact, importers, outline, workspace, decisions and contract-consequences read no library signatures and refuse it. On trace they let a port with one implementation be followed when every function value of the repository is proven not to implement it, including those passed to a JDK method)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
+  "cache: --cache <dir>   (once, on every command: the directory ye-ast keeps its index cache, derived facts and the MCP answer files in, instead of $XDG_CACHE_HOME/ye-ast (%LOCALAPPDATA%\\ye-ast on Windows); a symbolic link, another account's directory or one open to the group or others is refused as a usage error, and init prints the flag into the MCP registration)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
 
@@ -110,7 +112,9 @@ function printedAnswer(redaction: Redaction, value: unknown, notice: LiveStaleNo
 }
 
 export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
-  const [command, ...named] = argv;
+  const [command, ...given] = argv;
+  const cache = takeCacheFlag(given);
+  const named = cache?.rest ?? given;
   const args = named.filter((argument) => argument !== MEASURE_FLAG);
   if (command === "--version") {
     io.out(deps.version);
@@ -120,7 +124,11 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
     io.out(USAGE);
     return EXIT_CODE.ok;
   }
-  if (command === "init") return runInit(named.includes("--repo") ? named : args, io, deps);
+  if (cache === undefined) {
+    io.err(USAGE);
+    return EXIT_CODE.usage;
+  }
+  if (command === "init") return runInit(named.includes("--repo") ? named : args, io, deps, cache.directory);
   try {
     const moved: StaleWatch = {};
     const query = await queryOf(command, args, deps, io, moved);
@@ -151,9 +159,9 @@ function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault | TraceFau
   return [`ye-ast: ${fault.kind}: ${redaction.redact(fault.detail.trim())}`, ...entries.map((line) => redaction.redact(line))];
 }
 
-async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
+async function runInit(args: readonly string[], io: CliIo, deps: CliDeps, cache: string | undefined): Promise<number> {
   try {
-    if (args.includes("--repo")) return await runBatchInit(args, io, deps);
+    if (args.includes("--repo")) return await runBatchInit(args, io, deps, cache);
     const parsed = await parseInitRequest(args, deps);
     if (parsed === undefined) {
       io.err(USAGE);
@@ -171,7 +179,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
-    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], answerBytes)) io.out(line);
+    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], answerBytes, cache)) io.out(line);
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
@@ -179,7 +187,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
   }
 }
 
-async function runBatchInit(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
+async function runBatchInit(args: readonly string[], io: CliIo, deps: CliDeps, cache: string | undefined): Promise<number> {
   let trust: string | undefined;
   let workspaceFile: string | undefined;
   let answerBytes: number | undefined;
@@ -276,7 +284,7 @@ async function runBatchInit(args: readonly string[], io: CliIo, deps: CliDeps): 
   if (report.targets.length === 0 || report.targets.some((target) => target.status !== "completed" || !target.canonicalRoot || !target.outcome || target.outcome.layer.outcome === "not-written")) return EXIT_CODE.queryFailed;
   const launchTarget = report.targets.find((target) => target.id === launch.id && target.requestedPaths.includes(launch.path));
   if (!launchTarget?.canonicalRoot || !deps.mcpCommand[0]) return EXIT_CODE.internalFault;
-  const registration = { command: deps.mcpCommand[0], args: [...deps.mcpCommand.slice(1), "mcp", launchTarget.canonicalRoot, ...report.targets.flatMap((target) => ["--repo", target.id, target.canonicalRoot!]), ...(answerBytes === undefined ? [] : ["--answer-bytes", String(answerBytes)])] };
+  const registration = { command: deps.mcpCommand[0], args: [...deps.mcpCommand.slice(1), "mcp", launchTarget.canonicalRoot, ...report.targets.flatMap((target) => ["--repo", target.id, target.canonicalRoot!]), ...(answerBytes === undefined ? [] : ["--answer-bytes", String(answerBytes)]), ...(cache === undefined ? [] : ["--cache", cache])] };
   io.out(JSON.stringify(deps.redaction.redactValue(registration)));
   return EXIT_CODE.ok;
 }
@@ -297,7 +305,7 @@ function registrationDeclarations(outputs: readonly DeclaredBuildOutput[]): stri
   return [...nodeModules, ...sorted("java-sources"), ...sorted("jdk")].flatMap(({ kind, at, path }) => [`--${kind}`, shellWord(kind !== "java-sources" && at === "" && !path.includes("=") ? path : `${at}=${path}`)]);
 }
 
-function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[], answerBytes: number | undefined): string[] {
+function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[], answerBytes: number | undefined, cache: string | undefined): string[] {
   const declared = registrationDeclarations(outputs);
   const layerLines =
     layer.outcome === "not-written"
@@ -309,7 +317,7 @@ function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo:
     ...layerLines,
     ...(workspace === undefined ? [] : [`${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}: ${workspace.outcome}`]),
     "register the MCP server with Claude Code:",
-    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared, ...(answerBytes === undefined ? [] : ["--answer-bytes", String(answerBytes)])].join(" ")}`,
+    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared, ...(answerBytes === undefined ? [] : ["--answer-bytes", String(answerBytes)]), ...(cache === undefined ? [] : ["--cache", shellWord(cache)])].join(" ")}`,
   ];
 }
 

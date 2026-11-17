@@ -85,6 +85,23 @@ the library passes its own values. Measurements so far, as the evidence a future
 Without a budget, a commit whose subtrees repeat (10^6 entries listed from 8 objects) still grows the listing's
 bookkeeping with the entry count, about 1 KB per listed entry; that is the case a host bounds today with `maxEntries`.
 
+## Cache directory
+
+One per-user directory holds the index cache (`indexes/`), the derived facts (`derived-facts/`), the remote mirrors
+(`remotes/`) and the MCP answer files (`answers/`). Its default is `$XDG_CACHE_HOME/ye-ast/`, falling back to
+`~/.cache/ye-ast/`, and `%LOCALAPPDATA%\ye-ast\` on Windows. `--cache <dir>` names it instead
+([ADR-0077](../adr/0077-derived-facts-persist-by-content-in-ye-asts-own-store.md) decision 6), given once, as `--cache
+<dir>` or `--cache=<dir>`, on every command (`map`, `impact`, `callers`, `importers`, `outline`, `trace`,
+`contract-consequences`, `workspace`, `decisions`), on `serve` and on `mcp`; a relative path is resolved against the
+working directory. The flag wins over the environment, and without it the default rule holds unchanged. `ye-ast init`
+prints the resolved directory into the MCP registration it emits, as it does for `--node-modules` and `--jdk`, so a
+registered server keeps its caches where the user chose; the map `init` computes for the fixed layer uses it too. The
+directory is created on first use with mode 0700 and is refused, as a usage error
+(exit 2, one stderr line, nothing read or written), when it is a symbolic link, belongs to another account or is open to
+the group or others: the rule the index cache applies to its own directory. A repeated flag, one without a value, or
+one whose value is empty or another flag is a usage error. The disk tier of the derived facts is on wherever the index
+cache is.
+
 ## Snapshot data retained between requests
 
 [ADR-0020](../adr/0020-host-budgeted-snapshot-memory-cache.md) permits an optional in-memory cache for completed SHA

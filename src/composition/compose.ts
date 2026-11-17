@@ -9,7 +9,9 @@ import type { HeadReaderDeps } from "../core/application/snapshot/head-reading.t
 import type { WorkspaceQueriesDeps } from "../core/application/topology/workspace-queries.ts";
 import { dirname, extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { run, type CliIo } from "../cli/main.ts";
+import { takeCacheFlag } from "../cli/cache-flag.ts";
+import { EXIT_CODE, run, type CliIo } from "../cli/main.ts";
+import { cacheDirectoryRefusal } from "./cache-directory-refusal.ts";
 import { createEntrypointQueries } from "../core/application/entrypoints/entrypoint-queries.ts";
 import { trustOf } from "../core/application/snapshot/read-snapshot.ts";
 import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
@@ -391,6 +393,20 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {
+  let standard: ReturnType<typeof cliOver> | undefined;
+  return async (argv, io) => {
+    const directory = takeCacheFlag(argv.slice(1))?.directory;
+    if (directory === undefined) return (standard ??= cliOver(options))(argv, io);
+    const refusal = await cacheDirectoryRefusal(directory);
+    if (refusal !== null) {
+      io.err(refusal);
+      return EXIT_CODE.usage;
+    }
+    return cliOver({ ...options, indexCache: directory, cacheDirectory: directory })(argv, io);
+  };
+}
+
+function cliOver(options: CompositionOptions): (argv: readonly string[], io: CliIo) => Promise<number> {
   const queries = composeQueries(options);
   const vcs = createGitVcs();
   const store = createFixedLayerStore();

@@ -18,6 +18,8 @@ export interface ProcessHost {
    * each repository; without it every repository is read `untrusted`, since a host declares the mode itself.
    */
   queries(options?: { trustRecord?: boolean; buildOutputs?: CompositionOptions["buildOutputs"] }): ComposedQueries;
+  /** The same host over the cache directory a `--cache` flag names, which replaces the one it was built with: the index cache, the derived facts and the answer files all live in it. */
+  withCache(directory: string): ProcessHost;
   /** Writes each answer as a folder of files under the per-user cache directory; absent when the host has none (ADR-0110). */
   answerFiles?: AnswerFiles;
 }
@@ -34,6 +36,7 @@ export function processHost(options: { signal: AbortSignal; indexCache?: string;
     stdout: process.stdout,
     err,
     ...(options.indexCache !== undefined && { answerFiles: composeAnswerFiles({ directory: options.indexCache, report: err }) }),
+    withCache: (directory) => processHost({ ...options, indexCache: directory }),
     queries: ({ trustRecord = false, buildOutputs } = {}) =>
       composeQueries({
         signal: options.signal,
