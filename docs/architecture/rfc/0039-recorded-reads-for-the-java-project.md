@@ -1,8 +1,8 @@
 # RFC-0039: The Java project answers through queries that record what a derivation reads
 
-- Status: Draft, 2026-11-17; the surface of M0 to M2 is accepted by ADR-0116, M3 and M6 by ADR-0117
+- Status: Draft, 2026-11-17; the surface of M0 to M2 is accepted by ADR-0116, M3 and M6 by ADR-0117, M4 by ADR-0119, the readers that ask about one declaration by ADR-0120
 - Related: ADR-0031, ADR-0035, ADR-0040, ADR-0077, ADR-0114, ADR-0115 ("Not decided here": the dependency record
-  this RFC designs), ADR-0116, ADR-0117, RFC-0037
+  this RFC designs), ADR-0116, ADR-0117, ADR-0119, ADR-0120, RFC-0037
 
 **In short:** after a one-file edit the Java derivations `relations`, `entrypoints` and `receiver-methods` are derived
 again over every file, because the Java project hands other files out as plain objects and no key narrower than the
@@ -210,6 +210,7 @@ Each unit starts with the ADR that amends ADR-0114 decision 1 or ADR-0115 decisi
 | M3 | `entrypoints` per file, on the held project | 1,751 ms, and one parse of every source per read | one file derived |
 | M4 | `receiver-methods` per file of sites, with `provesBinding`, `unplacedBelow`, `isReferenced` as queries (done, ADR-0119) | 788 ms | the files of the asked sites verified |
 | M5 | The held project parses a file when `syntaxOf` asks for it | part of the 6,200 ms an unchanged call pays; M0 says how much | only the files a derivation reads are parsed |
+| M4b | The readers that ask about one declaration (`declaredSupertypes`, `implicitChains`, `argumentCounts`, `acceptedCounts`, `implementedDeclarations`, `receiverFits`) per file of sites (done, ADR-0120); `outsideSupertypes` kept whole by the listing | the held project is built once by the first reader that misses, not by each | steady unchanged call builds none; a fresh process or an edit builds it once, for `outsideSupertypes` |
 | M6 | The entries of `ofReads` in the disk tier | the same stages in a fresh process | |
 
 `relations` goes first although ADR-0115 names `receiver-methods`: since ADR-0114 it is the largest stage and it has the
@@ -439,6 +440,66 @@ What it settles:
   project by file and name, `enumConstantSupertypes` by file, `methodsByPlace` is built over every type for the dispatch readers, and
   `java-imports.adapter.ts:69` asks whether a package holds a type.
 
+### The readers that ask about one declaration, and the decision on M5 (2026-11-17)
+
+Same backend (1,173 read sources), the stdio MCP, live, `callers`, p50 of eight rounds per block, three repetitions with a fresh cache,
+host loaded by other sessions (load average 5 to 9, which moves the same block of main by up to 1.5 s between repetitions), so
+read the stage figures and the paired differences; candidate (ADR-0120) against main e8a370569, measured in turn. The held project
+was counted by an event placed in a scratch copy of both trees, never committed, with the stack of each ask.
+
+Who builds the held project, by call (attribution by stack):
+
+| Call | Main | Candidate |
+|---|---|---|
+| Unchanged, steady process | 1 build per call: `declaredSupertypes` first, then `implementedDeclarations` (2 asks), `receiverFits` (2), argument and accepted counts (about 7), `outsideSupertypes` (about 47 asks, each over the held project) | 0 |
+| First call of a process, warm disk | 1 build, `declaredSupertypes` | 1 build, `outsideSupertypes` (memory only); every per-file derivation hits |
+| One edit | 1 build | 1 build, `outsideSupertypes` and the per-file derivations that miss |
+
+| Block (three repetitions) | Main | Candidate |
+|---|---|---|
+| `callers`, unchanged, p50 | 5,996 / 6,291 / 7,492 ms | 5,230 / 5,425 / 6,102 ms |
+| `callers`, one edit, p50 | 7,994 / 7,997 / 10,186 ms | 7,449 / 7,925 / 8,347 ms |
+| First call of a process, warm disk | 8,258 / 8,546 / 10,402 ms | 8,493 / 8,889 / 10,771 ms |
+| First call of a process, empty cache | 17,294 / 18,568 / 22,363 ms | 22,565 / 23,342 (before the fix below) / 23,681 ms |
+| `root-origins` stage, unchanged (third repetition) | 578 ms | 1,134 ms |
+| `receiver-methods` stage, one edit (third repetition) | 82 ms | 47 ms |
+
+The answers are the bytes of the whole-project reading. In process, for each of the seven readers over every site of four repositories
+(`declaredSupertypes` 70 to 1,236 sites, `argumentCounts` up to 30,045), a read with no facts, the kept read, a second kept read, and
+kept reads after an edit of a small file, of the most mentioned type, of its removal and restoration, and of the most extended type, its
+removal and restoration give the digest of main: 28 of 28 reader and repository pairs equal. On the backend the second kept read hits
+every file of sites (1,210 of `declaredSupertypes`, 1,087 of the implemented declarations, 490 of the receiver fits); an edit of a
+small file derives 2 of 1,210 files; an edit of the most extended type derives 60 of 1,210, 62 of 1,087 and 99 of 490. `outsideSupertypes`
+derives its four sets again after any edit, by design. Through the CLI, `callers`, `trace` and `impact` over sampled symbols of
+the four repositories (24 `callers` symbols and 10 `trace` symbols of each, and `impact` between two edits) are byte-equal between main
+and the candidate cold, kept and after one edit, and equal to a cold read; methods of a Lombok or record file are not sampled, as the
+symbol resolution of the CLI does not place them in main either.
+
+What it settles:
+
+- The steady unchanged call builds no project. The stage figures show no gain there, though: the per-file hit checks and the index
+  they read cost 0.55 s in `root-origins` (578 to 1,134 ms), as much as the build they remove, so the unchanged call is as fast as
+  main within the noise of the host: the paired wall differences (13 to 19 % lower) are larger than the stages explain, so they are
+  not claimed.
+- A one-edit call is faster by 0.1 to 1.8 s paired, and its `receiver-methods`, `relations` and `entrypoints` stages are below main's;
+  the held project is still built once by `outsideSupertypes`.
+- The first call of a process with a warm cache is 0.2 to 0.4 s slower: it reads the entries of six more slots from disk, and the
+  one build is the same. In the backend's live MCP the first call after the cold one named a per-file derivation as the builder
+  once (a miss not attributed to a reader); on a CLI repeat over a warm cache every per-file derivation hit and the one build was
+  `outsideSupertypes`.
+- The first call with an empty cache was 4.8 and 5.3 s slower in the first two repetitions. The cause was the held project's key, which
+  serializes every source on each ask: each file of sites asked it, thousands of times. A derivation now takes the held project once
+  per ask, and the third repetition shows +1.3 s (6 %), the price of writing the entries of six more slots, paid once per cache.
+- Sound, deliberately coarse: a source that stops parsing, a call-rewriting annotation or a JVM source no extractor reads derives
+  every file again, and an edit of a source read for its declarations only does the same (the index holds no types for it).
+
+Decision on M5. It is not built. After this unit, parsing on demand could only avoid the parse of the files no derivation touches, and
+`outsideSupertypes` (`readHierarchy` over every declaration, anonymous class and function value) and the dispatch readers touch every
+tree whenever they run, which is the build that remains in each fresh process and each edit. M5 saves the 0.5 s of a build only
+if those readers are also per closure; a per-closure `outsideSupertypes` needs three more questions (a function-value marker, the
+subtypes of a type by `naming(supertype, name)` closure, and the unsettled supertype clauses) and a new version of `java-declarations`,
+and the dispatch readers need `libraries`. That is the next unit; M5 follows it.
+
 ## Open questions
 
 | # | Question | Recommendation |
@@ -449,5 +510,5 @@ What it settles:
 | 4 | Do the `ofReads` entries persist on disk? | Yes, as M6, after the memory tier is measured. They are per-file derivations, not the whole answers ADR-0077 keeps out. Done (ADR-0117) |
 | 5 | May a migrated derivation call `everyFile()`? | No. The three measured derivations reach zero; other readers stay on a frozen list |
 | 6 | Does the gate gain the pass warmed on the parent commit? | Yes, for units that touch `ofReads`. It is the only proof over real changes |
-| 7 | Is M5 built? | Not yet. `receiver-methods` is per file since ADR-0119, but the readers that ask about one declaration (`declaredSupertypes`, `implicitChains`, `argumentCounts`) and the dispatch readers still build the held project in every call, 0.5 s of 6 to 7.5 s ("M4" above); they come first |
+| 7 | Is M5 built? | Not yet, and not before the dispatch readers and `outsideSupertypes` are per closure. After ADR-0120 the held project is built once in a fresh process (by `outsideSupertypes`) and once in every one-edit call; M5 would save part of that 0.5 s, but `outsideSupertypes` and the dispatch readers walk every tree, so no tree would stay unparsed ("U17" above) |
 | 8 | Does the TypeScript program get the same surface? | Not here. `ofReads` names no language and can serve it; the checker hands out objects this RFC does not wrap |
