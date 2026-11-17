@@ -279,3 +279,37 @@ test("a Java method reference survives reconciliation as a written reference", a
   const result = await callsOf("run", nodes, [], [reference], [], [{ start: { line: 2, column: 4 }, end: { line: 2, column: 14 } }]);
   assert.deepEqual([...result.writtenOnly, ...result.deferredOnly].filter(({ kind }) => kind === "references").map(({ name }) => name), ["fmt"]);
 });
+
+/** Counts every read of a written call's place, which is what comparing a record with the calls of its file costs. */
+function counted(call: SyntaxCall, reads: { count: number }): SyntaxCall {
+  const { line, column, anchors } = call;
+  return Object.defineProperties({ ...call }, {
+    line: { get: () => (reads.count++, line), enumerable: true },
+    column: { get: () => (reads.count++, column), enumerable: true },
+    anchors: { get: () => (reads.count++, anchors), enumerable: true },
+  });
+}
+
+test("aligning a file's records reads its written calls once per line, not once per record", async () => {
+  const size = 200;
+  const nodes = [fakeNode("run", "method", FILE, 1, size + 1), fakeNode("callee", "method", "src/lib.ts", 1)];
+  const lines = Array.from({ length: size }, (_, index) => index + 2);
+  const anchoredAt = (line: number): boolean => line % 2 === 0;
+  const edges: FakeEdge[] = lines.map((line) => ({ from: "run", to: "callee", kind: "calls", line, column: anchoredAt(line) ? 0 : 2 }));
+  const reads = { count: 0 };
+  const calls = lines.map((line) => counted({ ...written(line, 3, "callee", "callee"), ...(anchoredAt(line) ? { anchors: [{ line, column: 1 }] } : {}) }, reads));
+  const found = placed(await callsOf("run", nodes, edges, calls));
+  assert.equal(found.edges.length, size);
+  assert.ok(reads.count < 50 * size, `read ${reads.count} places for ${size} records`);
+});
+
+test("a call is at a record's place by an anchor on the record's line, listed once whatever its anchors on that line", async () => {
+  // run() {                                      (1)
+  //   const value = build(\n  1,\n  2);           (2-4): the index anchors the statement at 2:2, the call is written at 3:6
+  // }
+  const nodes = [fakeNode("run", "method", FILE, 1, 5), fakeNode("callee", "method", "src/lib.ts", 1)];
+  const call: SyntaxCall = { ...written(3, 7, "callee", "callee"), anchors: [{ line: 2, column: 3 }, { line: 2, column: 9 }, { line: 4, column: 3 }] };
+  const edges: FakeEdge[] = [{ from: "run", to: "callee", kind: "calls", line: 2, column: 2 }];
+  const found = placed(await callsOf("run", nodes, edges, [call]));
+  assert.deepEqual(found, { edges: ["callee@3:6"], references: [], contradicted: [], writtenOnly: [], ambiguous: [] });
+});
