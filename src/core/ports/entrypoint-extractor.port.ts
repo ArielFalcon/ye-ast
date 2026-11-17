@@ -3,11 +3,9 @@ import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
 import type { Cut, Finding } from "../domain/shared/fact.ts";
 import type { DerivedFacts } from "./derived-facts.port.ts";
 import type { ParseHold } from "./parse-holds.port.ts";
+import type { SourceFile } from "./source-file.port.ts";
 
-export interface SourceFile {
-  path: string;
-  content: string;
-}
+export type { SourceFile };
 
 export interface EntrypointExtraction {
   findings: readonly Finding<Entrypoint>[];

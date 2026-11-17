@@ -1,4 +1,4 @@
-import type { SourceFile } from "./entrypoint-extractor.port.ts";
+import type { SourceFile } from "./source-file.port.ts";
 
 /** What a view of derived facts did since its previous drain; `diskHits` are the `hits` the disk tier answered, `factBytes` and `retainedBytes` are what the cache holds now. */
 export interface DerivedFactsTally {

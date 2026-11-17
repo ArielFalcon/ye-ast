@@ -1,4 +1,4 @@
-import type { SourceFile } from "./entrypoint-extractor.port.ts";
+import type { SourceFile } from "./source-file.port.ts";
 
 /**
  * Where the syntax trees parsed from one snapshot read's sources live until the read ends (ADR-0040). A reader that
