@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { javaDeclarationIndex } from "../core/adapters/spring/java-declaration-index.ts";
+import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
 import { createJavaReceiverMethods } from "../core/adapters/spring/java-receiver-methods.ts";
 import { createJavaRelations } from "../core/adapters/spring/java-relations.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
@@ -58,6 +59,7 @@ const JAVA_CALLBACKS: SourceFile = {
 };
 const JAVA_SPACED: SourceFile = { path: "src/main/java/app/Spaced.java", content: ["package app;", "class Spaced implements app . Port, app.", "    Store { Object o = new java . lang . Thread() {}; }", ""].join("\n") };
 const JAVA_AMBIGUOUS: SourceFile = { path: "src/main/java/app/Ambiguous.java", content: ["package app;", "import first.*;", "import second.*;", "class Ambiguous implements UserDetailsService {}", ""].join("\n") };
+const JAVA_ENUM: SourceFile = { path: "src/main/java/app/Unit.java", content: ["package app;", "enum Unit {", "  ONE {", "    int area() { return 1; }", "  };", "  int area() { return 2; }", "}", ""].join("\n") };
 const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export function run(redact: () => void): void {", "  redact();", "}", ""].join("\n") };
 const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };
 const WRITER: SourceFile = { path: "src/writer.ts", content: ["export {};", "(Array.prototype as any).last = () => 1;", ""].join("\n") };
@@ -83,6 +85,7 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "java-entrypoints": [1, "3a63c07df1763ffeacea0e437ac9a1ada4f10d0de462ec6f50ca063ea72c1cb0"],
   "java-callbacks": [1, "31e796b313e5ab7c1a14d463c85c1e147f377e0585c86f8d0742b4d0fbc8eaf9"],
   "java-receiver-sites": [1, "a6a10152c6d15d73ae90cb581762317393860044cdc48be40a7f8ed1250657d0"],
+  "java-declared-supertypes": [1, "c70d229b3526e9bcf93ccfd71b405e6d19230efc95331dc179f51a0854b53cc8"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
   "ts-module-resolutions": [1, "06babd9d9388578f4fac7b2d6655e24b5df82a7f5c1aa5b6d5dec0c70e1125c9"],
 };
@@ -131,6 +134,10 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   await createSpringRoutesExtractor(await createJavaParser(holds)).extract(hold.keep(javaSources), [], { hold, facts: downstream });
   const siteFacts = recordingFacts((slot, value) => slot === "java-receiver-sites" && record(slot, value));
   await createJavaReceiverMethods(() => createJavaParser(holds), javaSources, javaSources.map(({ path }) => path), siteFacts, hold)([{ file: JAVA_FILE.path, line: 2, column: 36, member: "go" }]);
+  const supertypeSources = [...javaSources, JAVA_ENUM];
+  const supertypeFacts = recordingFacts((slot, value) => slot === "java-declared-supertypes" && record(slot, value));
+  const at = (file: SourceFile, name: string) => ({ file: file.path, line: file.content.split("\n").findIndex((text) => new RegExp(`class ${name}\\b`).test(text)) + 1, name });
+  await createJavaNameBindings(() => createJavaParser(holds), supertypeSources, supertypeSources.map(({ path }) => path), supertypeFacts, hold).declaredSupertypes!([at(JAVA_CALLBACKS, "Users"), at(JAVA_CALLBACKS, "Lonely"), at(JAVA_AMBIGUOUS, "Ambiguous"), { file: JAVA_ENUM.path, line: 3, name: "ONE" }]);
   hold.release();
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));

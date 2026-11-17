@@ -9,6 +9,7 @@ import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins
 import { createJavaRootBindings } from "./java-root-bindings.ts";
 import { createJavaDeclaredTypes } from "./java-declared-types.ts";
 import { createJavaDispatchTargets, createJavaOutsideSupertypes } from "./java-dispatch-targets.ts";
+import { keptReads } from "./java-kept-reads.ts";
 import { createJavaReceiverFits } from "./java-receiver-fits.ts";
 import { createJavaArgumentCounts, createJavaDeclaredSupertypes, createJavaImplementedDeclarations, createJavaImplicitChains, createJavaReceiverMethods, provesBinding } from "./java-receiver-methods.ts";
 import { declaredVariablesOnce, declaresAnyVariable, type DeclaredVariables } from "../tree-sitter/java-declared-variables.ts";
@@ -49,18 +50,19 @@ interface Spelled {
 export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path), facts?: DerivedFacts, hold?: ParseHold, context: readonly SourceFile[] = [], libraries?: LibraryReading): ImportOrigins {
   const build = projectBuildIn(context);
   const unreadJvm = paths.some(isUncoveredJvmSource);
+  const reads = facts === undefined || hold === undefined ? undefined : keptReads(facts, hold, parser, sources, { generatesInterfaces: build.generatesInterfaces === true, unreadJvm });
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources, build)(sites, signal),
     declaredTypes: createJavaDeclaredTypes(parser, sources, paths, build),
     dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold, build, libraries),
-    receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold, build),
+    receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold, build, reads),
     implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build),
     outsideSupertypes: createJavaOutsideSupertypes(parser, sources, paths, hold, build),
     ...createJavaArgumentCounts(parser, sources, paths, hold, build),
     receiverFits: createJavaReceiverFits(parser, sources, paths, facts, hold, build),
     implicitChains: createJavaImplicitChains(parser, sources, paths, hold, build),
-    declaredSupertypes: createJavaDeclaredSupertypes(parser, sources, paths, hold, build),
+    declaredSupertypes: createJavaDeclaredSupertypes(parser, sources, paths, hold, build, reads),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
     rootOrigins: async (sites, signal) => {
       const results: RootOrigin[] = sites.map((site) => unresolved(site));

@@ -8,7 +8,7 @@ import type { AcceptedCounts, ArgumentCount, ConstructedClassSite, DeclaredSuper
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { declarationsProject, enclosingType, heldJavaProject, thisHolder, thisType, withJavaSources, type HeldJavaProject, type UnparsedSource } from "./java-project.ts";
+import { declarationsProject, enclosingType, heldJavaProject, thisHolder, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings, statedType } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, CALL_REWRITING_ANNOTATIONS, isAnonymous, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
@@ -16,8 +16,9 @@ import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, R
 import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, writtenSimpleName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 import { indexWrites, projectWrites, type FilesWriting } from "./java-written-names.ts";
-import { javaDeclarationIndex, type JavaDeclarationIndex } from "./java-declaration-index.ts";
+import type { DeclarationState } from "./java-declarations.ts";
 import { questions } from "./java-declaration-questions.ts";
+import { heldProject, keptByFile, keptReads, type KeptReads, type ReadOver } from "./java-kept-reads.ts";
 
 const SLOT = "java-receiver-methods";
 const BINDINGS_SLOT = "java-receiver-bindings";
@@ -94,8 +95,9 @@ interface ReadFile extends ReceiverSource {
  * literal, an object creation) is `unproven`, and so is a place several invocations start at whose readings differ;
  * invocations of one place that read alike keep that reading.
  */
-export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["receiverMethods"] {
+export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}, reads?: KeptReads): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some(isUncoveredJvmSource);
+  const keeping = reads ?? (facts === undefined || hold === undefined ? undefined : keptReads(facts, hold, parser, sources, { generatesInterfaces: build.generatesInterfaces === true, unreadJvm }));
   const generated = !paths.some((path) => LOMBOK_CONFIG.test(path));
   const sourcesByPath = new Map(sources.map((source) => [source.path, source]));
   let layout: string | undefined;
@@ -132,11 +134,10 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       return analyze(files, unparsed, createJavaProject(files, build));
     });
   };
-  let indexed: Promise<JavaDeclarationIndex> | undefined;
-  const indexOf = (kept: DerivedFacts, held: ParseHold) => (indexed ??= parser().then((read) => javaDeclarationIndex(kept, read, held.keep(sources), { generatesInterfaces: build.generatesInterfaces === true, unreadJvm })));
   /** The receiver methods of each file of sites, kept by the questions its derivation asked of the declaration index (ADR-0119). */
-  const keptByReads = async (sites: readonly ReceiverCallSite[], signal: AbortSignal | undefined, kept: DerivedFacts, held: ParseHold): Promise<readonly ReceiverMethod[]> => {
-    const index = await indexOf(kept, held);
+  const keptByReads = async (sites: readonly ReceiverCallSite[], signal: AbortSignal | undefined, reading: KeptReads): Promise<readonly ReceiverMethod[]> => {
+    const { facts: kept, hold: held } = reading;
+    const index = await reading.index();
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
     const byFile = Map.groupBy(sites.entries(), ([, site]) => site.file);
     for (const [path, entries] of byFile) {
@@ -175,7 +176,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
     layout ??= facts.fingerprint({ java: sources.map(({ path, content }) => [path, content]), paths, generatesInterfaces: build.generatesInterfaces === true });
     try {
       return await facts.ofInputs(SLOT, { layout, sites }, async () => {
-        const results = hold === undefined ? await resolved(sites, signal) : await keptByReads(sites, signal, facts, hold);
+        const results = keeping === undefined ? await resolved(sites, signal) : await keptByReads(sites, signal, keeping);
         if (signal?.aborted) throw new DeadlineCut(results);
         return results;
       });
@@ -187,19 +188,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
 }
 
 const SITES_SLOT = "java-receiver-sites";
-
-const filesOfHeld = new WeakMap<HeldJavaProject, ReadonlyMap<string, JavaFile>>();
-
-/** The project a read holds over `sources`, with its files by path. */
-async function heldProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], build: ProjectBuild): Promise<{ project: JavaProject; files: ReadonlyMap<string, JavaFile> }> {
-  const held = await heldJavaProject(hold, parser, sources, [], build);
-  let files = filesOfHeld.get(held);
-  if (files === undefined) {
-    files = new Map(held.files.map(({ file }) => [file.path, file]));
-    filesOfHeld.set(held, files);
-  }
-  return { project: held.project, files };
-}
+const DECLARED_SUPERTYPES_SLOT = "java-declared-supertypes";
 
 function readFileOf(file: JavaFile, source: SourceFile | undefined, facts?: DerivedFacts): ReadFile {
   return { file, bindings: receiverBindingsOf(file, source, facts), invocations: invocationsOf(file.root) };
@@ -326,8 +315,8 @@ export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sour
  * local to it, which no clause outside it can name. The class body of an enum constant extends its enum (JLS 8.9.1),
  * which its own file settles.
  */
-export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["declaredSupertypes"]> {
-  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf, "declarations", enumConstantSupertypes);
+export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}, reads?: KeptReads): NonNullable<ImportOrigins["declaredSupertypes"]> {
+  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf, "declarations", enumConstantSupertypes, reads === undefined ? undefined : { reads, slot: DECLARED_SUPERTYPES_SLOT });
 }
 
 /**
@@ -399,23 +388,32 @@ function acceptedCountsOf(method: MethodDecl): AcceptedCounts {
  * no binding: `bindings` holds where `provesBinding` does, over the read sources; `declarations` where every declaration
  * is read (`readsEveryDeclaration`), over the project that holds the declarations of the sources whose syntax errors lie
  * in member bodies, since a type such a body declares is local to it and no site places one. `settled` answers first a
- * site its own file settles.
+ * site its own file settles. With `kept`, the sites of each file are answered by one derivation kept by the questions it
+ * asked of the declaration index, which answers the same where the sources do not change.
  */
-function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A, reading: "bindings" | "declarations" = "bindings", settled?: (site: ConstructedClassSite, project: JavaProject) => A | undefined): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
+function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A, reading: ReadOver = "sources", settled?: (site: ConstructedClassSite, types: readonly TypeDecl[]) => A | undefined, kept?: { reads: KeptReads; slot: string }): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
+  const answerAt = (site: ConstructedClassSite, types: readonly TypeDecl[], project: JavaProject, proves: boolean): A => {
+    const own = settled?.(site, types);
+    if (own !== undefined) return own;
+    if (!proves) return unknown;
+    const placed = types.filter((type) => type.name === site.name && typePlace(type).start <= site.line && site.line <= typePlace(type).nameLine);
+    return placed.length === 1 ? answer(placed[0]!, project) : unknown;
+  };
   const analyze = (sites: readonly ConstructedClassSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], declared: readonly JavaFile[], project: JavaProject, declarations: JavaProject): readonly A[] => {
     const proves = reading === "declarations" ? readsEveryDeclaration(declarations, unparsed, declared, unreadJvm) : provesBinding(files, project, unparsed, unreadJvm);
     const read = reading === "declarations" ? declarations : project;
-    if (!proves) return sites.map((site) => settled?.(site, read) ?? unknown);
-    return sites.map((site) => {
-      const own = settled?.(site, read);
-      if (own !== undefined) return own;
-      const placed = read.types.filter((type) => type.file.path === site.file && type.name === site.name && typePlace(type).start <= site.line && site.line <= typePlace(type).nameLine);
-      return placed.length === 1 ? answer(placed[0]!, read) : unknown;
-    });
+    return sites.map((site) => answerAt(site, read.types.filter((type) => type.file.path === site.file), read, proves));
   };
   return async (sites) => {
     if (sites.length === 0) return [];
+    if (kept !== undefined)
+      return keptByFile(kept.reads, { slot: kept.slot, parser, sources, build, over: reading }, sites, ({ line, name }) => `${line}:${name}`, unknown, ({ project, files, asked }, places) => {
+        const proves = reading === "declarations" ? readsEveryDeclarationIn(asked) : provesFromIndex(project, asked, (at) => files.get(at));
+        const file = files.get(places[0]!.file);
+        const types = file === undefined ? [] : project.typesOf(file);
+        return places.map((site) => answerAt(site, types, project, proves));
+      });
     const read = await parser();
     const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
     if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.declared, held.project, held.declarations);
@@ -428,12 +426,12 @@ function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly S
 }
 
 /** The enum an enum constant with a class body at the site extends, by the enum's name; none for any other site. */
-function enumConstantSupertypes(site: ConstructedClassSite, project: JavaProject): DeclaredSupertypes | undefined {
+function enumConstantSupertypes(site: ConstructedClassSite, types: readonly TypeDecl[]): DeclaredSupertypes | undefined {
   const isBodiedAtSite = (constant: Node): boolean => {
     const name = constant.childForFieldName("name");
     return constant.type === "enum_constant" && constant.childForFieldName("body") !== null && name?.text === site.name && constant.startPosition.row + 1 <= site.line && site.line <= name.startPosition.row + 1;
   };
-  const enums = project.types.filter((type) => type.file.path === site.file && type.node.type === "enum_declaration" && namedChildren(type.node.childForFieldName("body") ?? type.node).some(isBodiedAtSite));
+  const enums = types.filter((type) => type.node.type === "enum_declaration" && namedChildren(type.node.childForFieldName("body") ?? type.node).some(isBodiedAtSite));
   if (enums.length !== 1) return undefined;
   const { name } = enums[0]!;
   return { kind: "supertypes", supertypes: [{ relation: "extends", written: name, kind: "placed", name, ...typePlace(enums[0]!) }] };
@@ -566,6 +564,17 @@ function sameItems<T>(left: readonly T[], right: readonly T[]): boolean {
 function readsEveryDeclaration(declarations: JavaProject, unparsed: readonly UnparsedSource[], declared: readonly JavaFile[], unreadJvm: boolean): boolean {
   const read = new Set(declared.map(({ path }) => path));
   return unparsed.every(({ path }) => read.has(path)) && !unreadJvm && declarations.unreadable.length === 0;
+}
+
+/**
+ * What `readsEveryDeclaration` answers over the declaration index: every source the index does not read in full has its
+ * declarations read, and no JVM source is left unread. The index holds no header and no type of such a source, which the
+ * project over the declarations does, so its content is asked: an edit of it derives again.
+ */
+function readsEveryDeclarationIn(ask: (question: string) => string): boolean {
+  const unread = JSON.parse(ask(questions.unread())) as { files: readonly (readonly [path: string, state: DeclarationState["state"]])[]; unreadJvm: boolean };
+  for (const [path, state] of unread.files) if (state === "declarations-only") ask(questions.file(path));
+  return !unread.unreadJvm && unread.files.every(([, state]) => state === "declarations-only");
 }
 
 /** Whether the reader read every source: none left unparsed, no JVM source no extractor reads, no declaration the project could not read. */
