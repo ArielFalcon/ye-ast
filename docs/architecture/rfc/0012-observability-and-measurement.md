@@ -435,13 +435,15 @@ manifest beside the baselines.
    - Two runs produce identical bytes.
    - The normalized diff against the previous baseline is empty for an unchanged commit.
 
-   The latency bench of [RFC-0040](0040-resident-generations-and-answer-latency.md) drives the real stdio MCP on
-   disposable clones of the corpus and reads these lines: it reports the wall time, the stages, the SQL statements,
-   the cache counters and the RSS per repository, scenario and family.
+   The latency bench and the warm differential of [RFC-0040](0040-resident-generations-and-answer-latency.md) drive
+   the real stdio MCP on disposable clones of the corpus and read these lines: the bench reports the wall time, the
+   stages, the SQL statements, the cache counters and the RSS per repository, scenario and family; the differential
+   proves that a long-lived process answers the same bytes as a cold one after commits, edits and trust changes.
 
    ```bash
    node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>]
    node --import tsx scripts/latency-bench.ts --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]
+   node --import tsx scripts/warm-differential.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--commits <n>] [--build-output <group>/<repo>=<flag>:<dir>]... [--fail-fast] [--engine <checkout>]
    ```
 
    `--quick` asks `callers` and `outline` of one repository, unchanged and after an edit, five times each, so an
