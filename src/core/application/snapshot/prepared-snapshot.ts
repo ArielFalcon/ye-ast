@@ -141,7 +141,7 @@ export async function prepareCommit(
           if (!read.ok) return read;
           if (signal?.aborted) return ABORTED;
           if (extracted !== undefined) return { ok: true, value: extracted };
-          const answer = await extractSources(deps, read.value.kept, signal);
+          const answer = await extractSources(deps, read.value.kept, signal, { ...(hold === undefined ? {} : { hold }), ...(retention === undefined ? {} : { facts: retention.facts }) });
           if (answer.ok) {
             extracted = answer.value;
             retention?.keepExtraction(read.value.read, extracted);

@@ -180,8 +180,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const frameworks = composeFrameworkPlugins();
   const contracts = createContractRoutes();
   const extractor = staged<EntrypointExtractor>({
-    extract: async (files, libraries) => {
-      const spring = await createSpringRoutesExtractor(await javaParser(), contracts).extract(files, libraries);
+    extract: async (files, libraries, reading) => {
+      const spring = await createSpringRoutesExtractor(await javaParser(), contracts).extract(files, libraries, reading);
       const routes = await frameworkEntrypoints(frameworks, files);
       return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },

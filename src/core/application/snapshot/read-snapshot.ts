@@ -7,7 +7,7 @@ import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { DerivedFactDisk } from "../../ports/derived-fact-store.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
-import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { EntrypointExtractor, EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { LiveFault } from "../../ports/live-queries.port.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import type { ParseHold, ParseHolds } from "../../ports/parse-holds.port.ts";
@@ -227,9 +227,10 @@ export async function extractSources(
   deps: Pick<SnapshotReaderDeps, "extractor">,
   tree: Pick<CommitExtraction, "export" | "sources">,
   signal?: AbortSignal,
+  reading?: EntrypointReading,
 ): Promise<Result<CommitExtraction, VcsFault>> {
   if (signal?.aborted) return ABORTED;
-  const extraction = await deps.extractor.extract(tree.sources);
+  const extraction = await deps.extractor.extract(tree.sources, undefined, reading);
   return signal?.aborted ? ABORTED : { ok: true, value: { ...tree, findings: extraction.findings, readingCuts: extraction.readingCuts } };
 }
 

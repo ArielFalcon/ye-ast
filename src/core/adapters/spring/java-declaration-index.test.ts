@@ -135,6 +135,15 @@ test("the project tells a derivation each question its answer rests on, the ones
   assert.ok(!asked.has(questions.file("app/Ghost.java")));
 });
 
+test("the types the sources declare under a qualified name tell the file of each one they hand out, and the name when none is declared", async () => {
+  const asked = new Set<string>();
+  await reading((project) => {
+    assert.equal(project.typesDeclaring("app.Parent").length, 1);
+    assert.equal(project.typesDeclaring("app.Ghost").length, 0);
+  }, (question) => asked.add(question));
+  assert.deepEqual([...asked].sort(), [questions.declaring("app.Ghost"), questions.declaring("app.Parent"), questions.file("app/Parent.java")].sort());
+});
+
 test("a member type a memo answers tells the reads of the computation that filled it, filled by a recorded read or not", async () => {
   const sort = (asked: Set<string>) => [...asked].sort();
   const readTwice = async (recordedFirst: boolean) => withJavaSources(await createJavaParser(), (parse) => {

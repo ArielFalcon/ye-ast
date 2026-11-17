@@ -1,5 +1,5 @@
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
-import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { Entrypoint, FrameworkCallback } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import { httpRouteName, requestMethodOf, type BasePath, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
@@ -7,11 +7,15 @@ import { isSpringConfigFile, resourcesOfSource } from "../../domain/languages/sp
 import { declarationSpan } from "../../domain/shared/fact.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { ContractOperation, ContractRoutes } from "../../ports/contract-routes.port.ts";
-import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import type { EntrypointExtractor, EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { withJavaSources, type ParseJava } from "./java-project.ts";
+import { heldJavaProject, withJavaSources, type ParseJava, type UnparsedSource } from "./java-project.ts";
+import { javaDeclarationIndex } from "./java-declaration-index.ts";
+import { questions } from "./java-declaration-questions.ts";
 import { delegateMethodsOf, sourceGeneratorIn } from "./api-delegates.ts";
-import { basePathOf, configurationsOf } from "./application-config.ts";
+import { basePathOf, configurationsOf, type Configuration } from "./application-config.ts";
 import { spanOf, subjectOf, unknown, unknownAt, type MappedEntrypoint, type MappedRoute } from "./findings.ts";
 import { foreignEndpointsOf } from "./foreign-endpoints.ts";
 import { callbacksOf } from "./callbacks.ts";
@@ -22,7 +26,7 @@ import { readHierarchy } from "./java-dispatch-targets.ts";
 import { listenersOf, unreadBaseOf } from "./listeners.ts";
 import { natsListenersOf } from "./nats-listeners.ts";
 import { registeredJobsOf } from "./registered-jobs.ts";
-import { basePathConfigurations, pathPrefixConfigurations } from "./path-prefix.ts";
+import { basePathCallsIn, basePathSourcesOf, inPathOrder, pathPrefixCallsIn, pathPrefixSubclassesOf } from "./path-prefix.ts";
 import {
   counterpart,
   createJavaProject,
@@ -109,38 +113,180 @@ function contractIndex(operations: readonly Finding<ContractOperation>[]): Contr
 }
 
 export function createSpringRoutesExtractor(parser: JavaParser, contracts: ContractRoutes = NO_CONTRACTS): EntrypointExtractor {
-  return { extract: async (files, libraries = []) => ({ findings: extractRoutes(parser, files, libraries, contracts), readingCuts: [] }) };
+  return {
+    extract: async (files, libraries = [], reading = {}) => {
+      const javaLibraries = javaSourcesOf(libraries);
+      const findings = reading.hold === undefined || javaLibraries.length > 0 ? extractRoutes(parser, files, libraries, contracts) : await extractHeld(parser, files, contracts, reading.hold, reading.facts);
+      return { findings, readingCuts: [] };
+    },
+  };
+}
+
+const javaSourcesOf = <T extends { path: string }>(sources: readonly T[]): T[] => sources.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
+
+/** What the derivation of one Java file reads that is not the Java project: the configuration of the modules, the contract operations the repository holds and the source generator its build declares. */
+interface RoutesEnvironment {
+  configurations: (file: JavaFile) => Configuration;
+  contracts: ContractIndex;
+  operations: readonly Finding<ContractOperation>[];
+  generator: Evidence | undefined;
+  configurationFiles: readonly SourceFile[];
+}
+
+function environmentOf(files: readonly SourceFile[], contracts: ContractRoutes): RoutesEnvironment {
+  const operations = contracts.operations(files);
+  const configurationFiles = files.filter((file) => isSpringConfigFile(file.path));
+  return { configurations: configurationsOf(configurationFiles), contracts: contractIndex(operations), operations, generator: sourceGeneratorIn(files), configurationFiles };
+}
+
+/** What one Java file contributes to the entrypoints of its project: plain data, which a read of the project merges. */
+interface FileRoutes {
+  types: Finding<MappedEntrypoint>[];
+  /** The positions in `types` of the routes of a contract whose servers disagree on the path. */
+  undecided: number[];
+  listeners: Finding<MappedEntrypoint>[];
+  pathPrefixCalls: Evidence[];
+  pathPrefixSubclasses: Evidence[];
+  basePathCalls: Evidence[];
+  basePathSources: Evidence[];
+  applicationResources: string[];
+}
+
+interface NatsView {
+  project: JavaProject;
+  text: JavaValueEvaluator;
+}
+
+/** The entrypoints of one Java file of `project`; a read of another file goes through the project's recorded questions (ADR-0116), and no state is shared with the derivation of another file. */
+function routesOfFile(file: JavaFile, project: JavaProject, environment: RoutesEnvironment, view?: NatsView): FileRoutes {
+  const annotations = createSpringAnnotations(project);
+  const text = new JavaValueEvaluator(project, environment.configurations);
+  const operations: ContractIndex = { ...environment.contracts, undecided: new WeakSet() };
+  const types = project.typesOf(file);
+  const found = types.flatMap((type) => guarded(() => findingsOfType(type, project, annotations, text, environment.generator, operations), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
+  return {
+    types: found,
+    undecided: found.flatMap((finding, index) => (operations.undecided.has(finding) ? [index] : [])),
+    listeners: natsListenersIn(file, view ?? { project, text }),
+    pathPrefixCalls: pathPrefixCallsIn(file),
+    pathPrefixSubclasses: pathPrefixSubclassesOf(types, project),
+    basePathCalls: basePathCallsIn(file),
+    basePathSources: basePathSourcesOf(types, annotations),
+    applicationResources: applicationResourcesOf(types, annotations),
+  };
+}
+
+interface RoutesReading {
+  unparsed: Finding<never>[];
+  unreadable: Finding<never>[];
+  files: FileRoutes[];
+}
+
+/** The entrypoints of the sources: the reading of each file in order, then the base path of each route and the callbacks, which read the whole project. */
+function mergeRoutes(sources: readonly SourceFile[], environment: RoutesEnvironment, reading: RoutesReading, callbacks: Finding<FrameworkCallback>[]): Finding<Entrypoint>[] {
+  const undecided = new WeakSet<object>();
+  const findings: Finding<MappedEntrypoint>[] = [...reading.unparsed, ...environment.contracts.faults, ...reading.unreadable];
+  for (const read of reading.files) {
+    for (const index of read.undecided) undecided.add(read.types[index]!);
+    findings.push(...read.types);
+  }
+  for (const read of reading.files) findings.push(...read.listeners);
+  const prefixes = inPathOrder([...reading.files.flatMap((read) => read.pathPrefixCalls), ...reading.files.flatMap((read) => read.pathPrefixSubclasses)]);
+  const basePaths = inPathOrder([...reading.files.flatMap((read) => read.basePathCalls), ...reading.files.flatMap((read) => read.basePathSources)]);
+  const applications = new Set(reading.files.flatMap((read) => read.applicationResources));
+  const entrypoints = sortFindings(withPathPrefixes(findings, prefixes));
+  return sortFindings([...withBasePaths(entrypoints, sources, applications, basePaths, undecided), ...callbacks]);
+}
+
+/** The callbacks the project's declarations register: every declaration's supertypes are read, so they are derived at each run of the stage. */
+function callbacksOver(project: JavaProject, parsed: readonly JavaFile[]): Finding<FrameworkCallback>[] {
+  return callbacksOf(project, INVOKED_CONTRACTS, createSpringAnnotations(project), readHierarchy(parsed, project));
+}
+
+function routesOver(sources: readonly SourceFile[], parsed: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject, environment: RoutesEnvironment, view?: NatsView): Finding<Entrypoint>[] {
+  const readable = parsed.filter((file) => !project.unreadable.includes(file));
+  const reading: RoutesReading = {
+    unparsed: unparsed.map(({ path, line }) => unreadable(path, line)),
+    unreadable: project.unreadable.map((file) => unreadable(file.path, 1)),
+    files: readable.map((file) => routesOfFile(file, project, environment, view)),
+  };
+  return mergeRoutes(sources, environment, reading, callbacksOver(project, parsed));
 }
 
 export function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
-  const index = contractIndex(contracts.operations(files));
+  const environment = environmentOf(files, contracts);
   return withJavaSources(parser, (parse) => {
-    const { files: parsed, unparsed } = parse(files.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path)));
-    const findings: Finding<MappedEntrypoint>[] = unparsed.map(({ path, line }) => unreadable(path, line));
+    const { files: parsed, unparsed } = parse(javaSourcesOf(files));
     const project = createJavaProject(parsed);
-    const annotations = createSpringAnnotations(project);
-    const text = new JavaValueEvaluator(project, configurationsOf(files.filter((file) => isSpringConfigFile(file.path))));
-    const generator = sourceGeneratorIn(files);
-    findings.push(...index.faults, ...project.unreadable.map((file) => unreadable(file.path, 1)));
-    for (const type of project.types) {
-      findings.push(...guarded(() => findingsOfType(type, project, annotations, text, generator, index), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
-    }
-    findings.push(...natsListeners(project, text, parsed, libraries, files, parse));
-    const readable = parsed.filter((file) => !project.unreadable.includes(file));
-    const entrypoints = sortFindings(withPathPrefixes(findings, pathPrefixConfigurations(project, readable)));
-    return sortFindings([...withBasePaths(entrypoints, files, applicationModules(project, annotations), basePathConfigurations(project, readable, annotations), index.undecided), ...callbacksOf(project, INVOKED_CONTRACTS, annotations, readHierarchy(parsed, project))]);
+    const javaLibraries = javaSourcesOf(libraries);
+    return routesOver(files, parsed, unparsed, project, environment, javaLibraries.length === 0 ? undefined : withLibraries(parsed, javaLibraries, environment, parse));
   });
 }
 
+interface HeldRoutes {
+  project: JavaProject;
+  parsed: JavaFile[];
+  unparsed: readonly UnparsedSource[];
+  files: ReadonlyMap<string, JavaFile>;
+}
+
+/** The entrypoints over the project the read's hold built once, each Java file kept by what it read when the read keeps facts. */
+async function extractHeld(parser: JavaParser, files: readonly SourceFile[], contracts: ContractRoutes, hold: ParseHold, facts: DerivedFacts | undefined): Promise<Finding<Entrypoint>[]> {
+  const environment = environmentOf(files, contracts);
+  const sources = hold.keep(javaSourcesOf(files));
+  let held: Promise<HeldRoutes> | undefined;
+  const heldOver = () => (held ??= heldJavaProject(hold, () => Promise.resolve(parser), sources).then(({ project, files: parsed, unparsed }) => ({ project, parsed: parsed.map(({ file }) => file), unparsed, files: new Map(parsed.map(({ file }) => [file.path, file])) })));
+  if (facts !== undefined) return keptByReads(parser, files, sources, environment, heldOver, facts);
+  const { project, parsed, unparsed } = await heldOver();
+  return routesOver(files, parsed, unparsed, project, environment);
+}
+
+const ROUTES_SLOT = "java-entrypoints";
+
+/** The entrypoints of each Java file, kept by the questions its derivation asked of the declaration index and the answers it got (ADR-0117). */
+async function keptByReads(
+  parser: JavaParser,
+  files: readonly SourceFile[],
+  sources: readonly SourceFile[],
+  environment: RoutesEnvironment,
+  heldOver: () => Promise<HeldRoutes>,
+  facts: DerivedFacts,
+): Promise<Finding<Entrypoint>[]> {
+  const index = javaDeclarationIndex(facts, parser, sources, { generatesInterfaces: false, unreadJvm: false });
+  const unread = index.unread();
+  const unreadPaths = new Set(unread.map(({ path }) => path));
+  const environmentKey = facts.fingerprint({ configurations: environment.configurationFiles.map(({ path, content }) => [path, content]), operations: environment.operations, generator: environment.generator ?? null });
+  const reading: RoutesReading = {
+    unparsed: unread.flatMap(({ path, state }) => (state.state === "unparsed" || state.state === "declarations-only" ? [unreadable(path, state.line)] : [])),
+    unreadable: unread.flatMap(({ path, state }) => (state.state === "unreadable" ? [unreadable(path, 1)] : [])),
+    files: [],
+  };
+  for (const { path } of sources) {
+    if (unreadPaths.has(path)) continue;
+    const subject = { path, content: index.answer(questions.file(path)), environment: environmentKey };
+    reading.files.push(await facts.ofReads(ROUTES_SLOT, subject, (question) => index.answer(question), async (record) => {
+      const { project, files: held } = await heldOver();
+      return project.reading((question) => void record(question, index.answer(question)), () => routesOfFile(held.get(path)!, project, environment));
+    }));
+  }
+  const { project, parsed } = await heldOver();
+  return mergeRoutes(files, environment, reading, callbacksOver(project, parsed));
+}
+
+function withLibraries(parsed: readonly JavaFile[], libraries: readonly LibrarySource[], environment: RoutesEnvironment, parse: ParseJava): NatsView {
+  const foreign = parse(libraries).files;
+  const project = createJavaProject([...parsed, ...foreign]);
+  return { project, text: new JavaValueEvaluator(project, environment.configurations) };
+}
+
 /**
- * The NATS listeners of the repository's own classes. With libraries, the classes are read over a project that also
- * holds the library sources, so a subscription a base class declares there is found; without, over the repository's own.
+ * The NATS listeners of the classes of one file. With libraries, the classes are read over a project that also holds the
+ * library sources, so a subscription a base class declares there is found; without, over the repository's own.
  */
-function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parse: ParseJava): Finding<MappedEntrypoint>[] {
-  const javaLibraries = libraries.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
-  const view = javaLibraries.length === 0 ? { project, text } : withLibraries(parsed, javaLibraries, files, parse);
+function natsListenersIn(file: JavaFile, view: NatsView): Finding<MappedEntrypoint>[] {
   const annotations = createSpringAnnotations(view.project);
-  return view.project.types
+  return view.project
+    .typesOf(file)
     .filter((type) => type.kind === "class" && !type.isAbstract && !isLibraryPath(type.file.path))
     .flatMap((type) =>
       guarded(
@@ -151,12 +297,6 @@ function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: r
         () => unknown("unresolved", [spanOf(type.file.path, type.node)]),
       ),
     );
-}
-
-function withLibraries(parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parse: ParseJava): { project: JavaProject; text: JavaValueEvaluator } {
-  const foreign = parse(libraries).files;
-  const project = createJavaProject([...parsed, ...foreign]);
-  return { project, text: new JavaValueEvaluator(project, configurationsOf(files.filter((file) => isSpringConfigFile(file.path)))) };
 }
 
 function unreadable(path: string, line: number): Finding<never> {
@@ -217,19 +357,17 @@ function withBasePaths(
   });
 }
 
-/** The main resources of every module that declares a `@SpringBootApplication` class; a type whose annotations cannot be read declares none. */
-function applicationModules(project: JavaProject, annotations: SpringAnnotations): ReadonlySet<string> {
-  return new Set(
-    project.types
-      .filter((type) => {
-        try {
-          return annotationUses(type.node, scopeOf(type)).some((use) => annotations.keyOf(use) === SPRING_BOOT_APPLICATION);
-        } catch {
-          return false;
-        }
-      })
-      .flatMap((type) => resourcesOfSource(type.file.path) ?? []),
-  );
+/** The main resources of the module of each `@SpringBootApplication` class among `types`; a type whose annotations cannot be read declares none. */
+function applicationResourcesOf(types: readonly TypeDecl[], annotations: SpringAnnotations): string[] {
+  return types
+    .filter((type) => {
+      try {
+        return annotationUses(type.node, scopeOf(type)).some((use) => annotations.keyOf(use) === SPRING_BOOT_APPLICATION);
+      } catch {
+        return false;
+      }
+    })
+    .flatMap((type) => resourcesOfSource(type.file.path) ?? []);
 }
 
 /** Where a path prefix may be configured, no route is known: which routes it reaches depends on a predicate that is not evaluated. */

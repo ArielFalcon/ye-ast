@@ -54,7 +54,7 @@ export function createHeldLive(input: { repo: string; repoId: string; scope: Dec
   const { hold, ...held } = input;
   const { vcs, reader, extractor, graph, matcher, live } = held.deps;
   const captureDeps = { vcs, reader, extractor, graph, matcher, ...(live === undefined ? {} : { live }) };
-  const readers = liveSnapshotReaders(held.deps, { repo: held.repo, scope: held.scope, trust: held.trust, root: held.tree.root, export: held.tree.export }, hold?.keep.bind(hold));
+  const readers = liveSnapshotReaders(held.deps, { repo: held.repo, scope: held.scope, trust: held.trust, root: held.tree.root, export: held.tree.export }, hold);
   return { ...held, ...(hold === undefined ? {} : { hold }), deps: captureDeps, kind: "live", ...readers };
 }
 

@@ -22,7 +22,8 @@ import { createImpactQueries, type ImpactQueriesDeps } from "../impact/impact-qu
 import type { ImportOriginsReader, ImportOriginSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ParseHolds } from "../../ports/parse-holds.port.ts";
+import type { ParseHold, ParseHolds } from "../../ports/parse-holds.port.ts";
+import type { EntrypointReading } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { SnapshotDataCache } from "./read-snapshot.ts";
 import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
@@ -476,15 +477,15 @@ test("cancellation during an outer postlude suppresses already queued inner noti
 });
 
 /** Holds that hand out copies and count each hold opened and released; releasing one twice fails. */
-function countingHolds(): { holds: ParseHolds; log: { opened: number; released: number; kept: SourceFile[] } } {
-  const log = { opened: 0, released: 0, kept: [] as SourceFile[] };
+function countingHolds(): { holds: ParseHolds; log: { opened: number; released: number; kept: SourceFile[]; holds: ParseHold[] } } {
+  const log = { opened: 0, released: 0, kept: [] as SourceFile[], holds: [] as ParseHold[] };
   return {
     log,
     holds: {
       open() {
         log.opened++;
         let open = true;
-        return {
+        const hold: ParseHold = {
           keep: (sources) => {
             const own = sources.map((source) => ({ ...source }));
             log.kept.push(...own);
@@ -497,6 +498,8 @@ function countingHolds(): { holds: ParseHolds; log: { opened: number; released: 
             log.released++;
           },
         };
+        log.holds.push(hold);
+        return hold;
       },
     },
   };
@@ -511,8 +514,10 @@ test("a read at a revision and a live read hand their readers the sources their 
       deps.holds = holds;
       if (live) deps.reader.read = async () => [source];
       const read: SourceFile[] = [];
-      deps.extractor.extract = async (files) => {
+      const readings: (EntrypointReading | undefined)[] = [];
+      deps.extractor.extract = async (files, _libraries, reading) => {
         read.push(...files);
+        readings.push(reading);
         if (fails) throw new Error("reader failed");
         return { findings: [], readingCuts: [] };
       };
@@ -523,6 +528,7 @@ test("a read at a revision and a live read hand their readers the sources their 
       else assert.ok((await asked).ok);
       assert.deepEqual({ opened: log.opened, released: log.released }, { opened: 1, released: 1 }, `live ${live !== undefined}, fails ${fails}`);
       assert.ok(read.length > 0 && read.every((file) => log.kept.includes(file)));
+      assert.ok(readings.length > 0 && readings.every((reading) => reading?.hold !== undefined && log.holds.includes(reading.hold)));
     }
   }
 });

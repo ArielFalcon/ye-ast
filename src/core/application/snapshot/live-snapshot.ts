@@ -4,6 +4,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import { snapshotRetention } from "./prepared-snapshot.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import { ABORTED, extractSources, readSources, type CommitExtraction, type PreparedCommit, type ReadScope, type SnapshotReaderDeps } from "./read-snapshot.ts";
 
 /** What a live capture is read from: its mirror root, its listing and the inputs besides the listing that the read depends on. */
@@ -27,7 +28,8 @@ export interface LiveSnapshotReaders {
  * capture's content, its listing of content hashes (RFC-0010 "The mirror"), the repository, scope and trust; never by
  * HEAD, so a capture whose files did not change reuses what an earlier one read, and an edit misses.
  */
-export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "derivedFactDisk" | "digest">, capture: LiveCapture, keep: ReadScope["keep"] = (sources) => [...sources]): LiveSnapshotReaders {
+export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "derivedFactDisk" | "digest">, capture: LiveCapture, hold?: ParseHold): LiveSnapshotReaders {
+  const keep: ReadScope["keep"] = hold === undefined ? (sources) => [...sources] : (sources) => hold.keep(sources);
   const retention = snapshotRetention(deps, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export, capture.trust);
   let loaded: Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> | undefined;
   let extracted: Promise<Result<CommitExtraction, VcsFault>> | undefined;
@@ -68,7 +70,7 @@ export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "e
         const result = await sources(signal);
         if (!result.ok) return result;
         if (retainedReading !== undefined) return { ok: true as const, value: { ...result.value, ...retainedReading } };
-        const answer = await extractSources(deps, result.value, signal);
+        const answer = await extractSources(deps, result.value, signal, { ...(hold === undefined ? {} : { hold }), ...(retention === undefined ? {} : { facts: retention.facts }) });
         if (answer.ok) retention?.keepExtraction(read, answer.value);
         return answer;
       })();

@@ -8,6 +8,7 @@ import { createEntrypointQueries } from "../entrypoints/entrypoint-queries.ts";
 import { withSnapshotPreparation } from "./prepared-snapshot.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
+import type { EntrypointReading } from "../../ports/entrypoint-extractor.port.ts";
 import type { SnapshotReaderDeps, SnapshotData, SnapshotDataCache } from "./read-snapshot.ts";
 
 const SHA = "a".repeat(40);
@@ -154,6 +155,23 @@ function dataCache(): SnapshotDataCache {
   const entries = new Map<string, SnapshotData>();
   return { beginRead: () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: () => ({ admitted: false, entryBytes: 0, evicted: 0 }), usage: () => ({ factBytes: 0, retainedBytes: 0 }) };
 }
+
+test("the extractor reads over the hold of the read that owns the sources and the facts the snapshot cache keeps for them", async () => {
+  const { deps, query, request } = setup();
+  const hold = { keep: (sources: readonly { path: string; content: string }[]) => sources.map((source) => ({ ...source })), open: () => true, release() {} };
+  const seen: (EntrypointReading | undefined)[] = [];
+  deps.extractor.extract = async (_files, _libraries, reading) => {
+    seen.push(reading);
+    return { findings: [], readingCuts: [] };
+  };
+  assert.ok((await query({ snapshotCache: dataCache(), holds: { open: () => hold } }).map(request)).ok);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]?.hold, hold);
+  assert.equal(typeof seen[0]?.facts?.ofReads, "function");
+  seen.length = 0;
+  assert.ok((await query().map({ ...request, revision: "other" })).ok);
+  assert.deepEqual(seen, [{}]);
+});
 
 test("independent requests reuse sources and findings but each exports into its own temporary directory", async () => {
   const { log, query, request } = setup();
