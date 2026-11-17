@@ -6,6 +6,7 @@ import { statedType } from "../tree-sitter/java-receiver-bindings.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 import { REPOSITORY_TYPES } from "./data-vocabulary.ts";
+import { questions } from "./java-declaration-questions.ts";
 
 export function isLibraryPath(path: string): boolean {
   return path.startsWith(`${LIBRARY_ROOT}/`);
@@ -121,6 +122,16 @@ export interface ProjectBuild {
 
 export interface JavaProject {
   types: readonly TypeDecl[];
+  /** The types a file declares, in declaration order. */
+  typesOf(file: JavaFile): readonly TypeDecl[];
+  /** The types the sources declare under a qualified name: several when files of different modules do. */
+  typesDeclaring(qualifiedName: string): readonly TypeDecl[];
+  /**
+   * Runs `run` and tells `record` each question of the declaration index that an answer of the project rests on: the
+   * names the sources declare, the packages they hold and the platform packages they claim, and the file of every
+   * declaration of another file that it hands out.
+   */
+  reading<T>(record: (question: string) => void, run: () => T): T;
   /** The files whose declarations could not be read; none of their types is in the project. */
   unreadable: readonly JavaFile[];
   lookupType(name: string, scope: Scope): TypeLookup;
@@ -280,7 +291,7 @@ export function platformTypeName(name: string, scope: Scope, project: JavaProjec
 }
 
 /** The platform prefix and its next segment, when a package the sources declare sits under a platform prefix. */
-function claimedPlatformPackage(packageName: string): string | undefined {
+export function claimedPlatformPackage(packageName: string): string | undefined {
   const prefix = PLATFORM_PACKAGES.find((candidate) => packageName.startsWith(candidate));
   const next = prefix === undefined ? undefined : packageName.slice(prefix.length).split(".")[0];
   return next ? `${prefix}${next}.` : undefined;
@@ -314,6 +325,8 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
   const types: TypeDecl[] = [];
   const unreadable: JavaFile[] = [];
   const namesToTypes = new Map<string, TypeDecl[]>();
+  const typesByFile = new Map<JavaFile, TypeDecl[]>();
+  let record: ((question: string) => void) | undefined;
   for (const file of files) {
     const declared: TypeDecl[] = [];
     try {
@@ -322,10 +335,26 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
       unreadable.push(file);
       continue;
     }
+    typesByFile.set(file, declared);
     for (const type of declared) {
       types.push(type);
       namesToTypes.set(type.fqn, [...(namesToTypes.get(type.fqn) ?? []), type]);
     }
+  }
+  const typedPackages = new Set(types.map((type) => type.file.packageName));
+
+  /** Tells the recording derivation that an answer rests on a question of the index. */
+  function ask(question: () => string): void {
+    if (record !== undefined) record(question());
+  }
+
+  function askFilesOf(found: readonly TypeDecl[]): void {
+    if (record !== undefined) for (const type of found) record(questions.file(type.file.path));
+  }
+
+  function hasPackage(name: string): boolean {
+    ask(() => questions.package("prefix", name));
+    return packages.has(name);
   }
 
   const packages = new Set<string>();
@@ -337,12 +366,15 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
   const claimed = [...new Set(files.map((file) => claimedPlatformPackage(file.packageName)).filter((owned) => owned !== undefined))];
 
   function isPlatformName(fqn: string): boolean {
+    ask(() => questions.build("claimed"));
     return PLATFORM_PACKAGES.some((prefix) => fqn.startsWith(prefix)) && claimed.every((owned) => !fqn.startsWith(owned));
   }
 
   /** A name that two files declare (modules of one repository may) is not resolved: the sources do not say which is meant. */
   function byFqn(fqn: string): TypeLookup {
     const found = namesToTypes.get(fqn);
+    ask(() => questions.declaring(fqn));
+    if (found !== undefined) askFilesOf(found);
     return found === undefined ? undefined : found.length === 1 ? found[0] : "ambiguous";
   }
 
@@ -395,7 +427,7 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     if (rest.length > 0 && scope.at !== undefined && typeVariableAround(scope.at, head) !== undefined) return undefined;
     const { file } = scope;
     const direct = file.singleImports.get(head);
-    if (file.conflictingSingleImports.has(head) || (direct !== undefined && types.some((type) => type.file === file && type.outer === undefined && type.name === head && type.fqn !== direct))) return undefined;
+    if (file.conflictingSingleImports.has(head) || (direct !== undefined && (typesByFile.get(file) ?? []).some((type) => type.outer === undefined && type.name === head && type.fqn !== direct))) return undefined;
     const lexical = lexicalType(head, scope, true, false);
     if (lexical !== undefined) {
       if (typeof lexical !== "object" || "local" in lexical) return undefined;
@@ -403,7 +435,7 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     }
     const statics = file.staticImports.filter(({ member }) => member === head);
     if (direct !== undefined || statics.length > 0) {
-      const unit = types.filter((type) => type.file === file && type.outer === undefined && type.name === head);
+      const unit = (typesByFile.get(file) ?? []).filter((type) => type.outer === undefined && type.name === head);
       const choices = [
         ...(direct === undefined ? [] : [qualifiedIdentity(direct)]),
         ...statics.map(({ className }) => demandIdentity(className, head, true)),
@@ -438,9 +470,9 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     for (const [index, part] of parts.entries()) {
       const qualified = prefix === "" ? part : `${prefix}.${part}`;
       const declared = prefix === "" ? undefined : byFqn(qualified);
-      if (declared !== undefined) return typeof declared === "object" && !packages.has(qualified) ? memberIdentity(declared, parts.slice(index + 1)) : undefined;
+      if (declared !== undefined) return typeof declared === "object" && !hasPackage(qualified) ? memberIdentity(declared, parts.slice(index + 1)) : undefined;
       if (PLATFORM_TYPE_NAMES.get(prefix)?.has(part) && isPlatformName(qualified)) return index === parts.length - 1 ? qualified : undefined;
-      if (!packages.has(qualified)) return undefined;
+      if (!hasPackage(qualified)) return undefined;
       prefix = qualified;
     }
     return undefined;
@@ -478,7 +510,8 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     if (declared !== undefined) return typeof declared === "object" && modifierWords(declared.node).includes("public") ? declared.fqn : undefined;
     const platform = PLATFORM_TYPE_NAMES.get(container);
     if (platform !== undefined && isPlatformName(`${container}.${name}`)) return platform.has(name) ? `${container}.${name}` : "";
-    return types.some((type) => type.file.packageName === container) ? "" : undefined;
+    ask(() => questions.package("typed", container));
+    return typedPackages.has(container) ? "" : undefined;
   }
 
   /**
@@ -503,7 +536,12 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     return undefined;
   }
 
-  const inherited = { strict: new Map<TypeDecl, Map<string, TypeLookup | "unsettled">>(), lenient: new Map<TypeDecl, Map<string, TypeLookup | "unsettled">>() };
+  /** A memoized member type with the questions its computation asked, which a derivation that reuses it asks too. */
+  interface Inherited {
+    result: TypeLookup | "unsettled";
+    questions: readonly string[] | undefined;
+  }
+  const inherited = { strict: new Map<TypeDecl, Map<string, Inherited>>(), lenient: new Map<TypeDecl, Map<string, Inherited>>() };
 
   /**
    * The member type of the name `type` inherits (JLS 8.5): from each supertype the nearest declaration of the name, kept
@@ -512,12 +550,23 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
    */
   function inheritedMember(type: TypeDecl, head: string, strict: boolean): TypeLookup | "unsettled" {
     const cache = strict ? inherited.strict : inherited.lenient;
-    const byName = cache.get(type) ?? new Map<string, TypeLookup | "unsettled">();
+    const byName = cache.get(type) ?? new Map<string, Inherited>();
     cache.set(type, byName);
-    if (byName.has(head)) return byName.get(head);
-    const result = inheritedThrough(supertypesOf(type), head, strict, new Set([type.file.packageName]), new Set([type]));
-    byName.set(head, result);
-    return result;
+    const known = byName.get(head);
+    if (known !== undefined && (record === undefined || known.questions !== undefined)) {
+      for (const question of known.questions ?? []) record?.(question);
+      return known.result;
+    }
+    const outer = record;
+    const asked: string[] = [];
+    if (outer !== undefined) record = (question) => void (asked.push(question), outer(question));
+    try {
+      const result = inheritedThrough(supertypesOf(type), head, strict, new Set([type.file.packageName]), new Set([type]));
+      byName.set(head, { result, questions: outer === undefined ? undefined : asked });
+      return result;
+    } finally {
+      record = outer;
+    }
   }
 
   /** The direct supertypes that can declare a member type: an interface known to declare none is left out. */
@@ -737,6 +786,25 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
   return {
     types,
     unreadable,
+    typesOf: (file) => {
+      ask(() => questions.file(file.path));
+      return typesByFile.get(file) ?? [];
+    },
+    typesDeclaring: (qualifiedName) => {
+      const found = namesToTypes.get(qualifiedName) ?? [];
+      ask(() => questions.declaring(qualifiedName));
+      askFilesOf(found);
+      return found;
+    },
+    reading: (tell, run) => {
+      const outer = record;
+      record = tell;
+      try {
+        return run();
+      } finally {
+        record = outer;
+      }
+    },
     lookupType,
     typeIdentity,
     bindName,
@@ -946,7 +1014,7 @@ function localTypeIn(name: string, inner: Node, around: Node): Node | undefined 
   return statements.find((statement) => statement.startIndex <= inner.startIndex && LOCAL_TYPE_DECLARATIONS.has(statement.type) && statement.childForFieldName("name")?.text === name);
 }
 
-function modifierWords(declaration: Node): string[] {
+export function modifierWords(declaration: Node): string[] {
   const modifiers = declaration.namedChildren.find((child) => child.type === "modifiers");
   return modifiers === undefined ? [] : modifiers.children.filter((child) => !child.isNamed).map((child) => child.text);
 }

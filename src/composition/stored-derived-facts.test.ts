@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
+import { javaDeclarationIndex } from "../core/adapters/spring/java-declaration-index.ts";
 import { createJavaReceiverMethods } from "../core/adapters/spring/java-receiver-methods.ts";
 import { createJavaMemberNames } from "../core/adapters/tree-sitter/java-member-names.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
@@ -36,6 +37,7 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "ts-module-statements": [1, "91ab9359a95e086f838319423bdedbe521677be9a9aeeeaa9559d89865c9aaa7"],
   "ts-default-declaration": [1, "bb5c1e3feab5ef3908224d5f2c0eabde6442b0d5202265d2d7b2f4aee3b13de8"],
   "java-receiver-bindings": [1, "90990e5ddeb91598c35caee6778aaeb4bcfbeca882230eda67aed1a064c6760d"],
+  "java-declarations": [1, "c071c93f19ce4e2529f88d5ec16c4e6d215754db03c734a36c5eca20db082d54"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
   "ts-module-resolutions": [1, "06babd9d9388578f4fac7b2d6655e24b5df82a7f5c1aa5b6d5dec0c70e1125c9"],
 };
@@ -65,6 +67,7 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   await origins.replacedRoots();
   await createModuleDependenciesReader().extract([IMPORTER, LATER], { facts });
   await createJavaReceiverMethods(createJavaParser, [JAVA_FILE], [JAVA_FILE.path], facts)([{ file: JAVA_FILE.path, line: 2, column: 36, member: "go" }]);
+  javaDeclarationIndex(facts, await createJavaParser(), [JAVA_FILE], { generatesInterfaces: false, unreadJvm: false });
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));
   const digest = createSha256Digest();

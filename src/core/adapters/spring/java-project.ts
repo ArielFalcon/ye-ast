@@ -131,7 +131,7 @@ export function withJavaSources<T>(parser: JavaParser, use: (parse: ParseJava) =
 
 /** The innermost type of the project whose declaration holds `node`: the type the names written there resolve in. */
 export function enclosingType(node: Node, file: JavaFile, project: JavaProject): TypeDecl | undefined {
-  return project.types.filter((type) => type.file === file && type.node.startIndex <= node.startIndex && node.endIndex <= type.node.endIndex).sort((a, b) => b.node.startIndex - a.node.startIndex)[0];
+  return project.typesOf(file).filter((type) => type.node.startIndex <= node.startIndex && node.endIndex <= type.node.endIndex).sort((a, b) => b.node.startIndex - a.node.startIndex)[0];
 }
 
 /** The node whose body holds `node`, through lambdas: the declaration or the creation whose instance `this` and `super` denote there. */
@@ -145,7 +145,7 @@ export function thisHolder(node: Node): Node | undefined {
  */
 export function thisType(node: Node, file: JavaFile, project: JavaProject): TypeDecl | undefined {
   const holder = thisHolder(node);
-  return holder === undefined ? undefined : project.types.find((type) => type.file === file && type.node.id === holder.id);
+  return holder === undefined ? undefined : project.typesOf(file).find((type) => type.node.id === holder.id);
 }
 
 /**

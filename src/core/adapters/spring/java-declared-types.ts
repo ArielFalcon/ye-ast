@@ -25,8 +25,14 @@ const PACKAGE_SEGMENT = /^[a-z]/;
  * a package both offers the name and the repository compiles, so no other package offers it too (ADR-0070).
  */
 const CLOSED_VOCABULARIES: readonly ReadonlySet<string>[] = [SPRING_DATA_TYPES, LOMBOK_TYPES];
+/**
+ * Annotations by which a processor changes what a call names without a declaration the sources hold: Lombok's
+ * `@Delegate` adds a type's methods to a class, an overload of any signature, and `@ExtensionMethod` makes a call that
+ * no member accepts run a static method of another class.
+ */
+export const CALL_REWRITING_ANNOTATIONS: ReadonlySet<string> = new Set(["Delegate", "ExtensionMethod"]);
 /** The JDK APIs that make a value implementing an interface at run time, by their simple names. */
-const DYNAMIC_IMPLEMENTATIONS: ReadonlyMap<string, string> = new Map([
+export const DYNAMIC_IMPLEMENTATIONS: ReadonlyMap<string, string> = new Map([
   ["Proxy", "java.lang.reflect.Proxy"],
   ["EventHandler", "java.beans.EventHandler"],
   ["MethodHandleProxies", "java.lang.invoke.MethodHandleProxies"],

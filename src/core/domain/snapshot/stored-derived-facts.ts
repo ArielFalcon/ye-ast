@@ -12,6 +12,7 @@ export const STORED_DERIVED_FACT_VERSIONS: Readonly<Record<string, number>> = {
   "ts-module-statements": 1,
   "ts-default-declaration": 1,
   "java-receiver-bindings": 1,
+  "java-declarations": 1,
   tokens: 1,
   "ts-module-resolutions": 1,
 };

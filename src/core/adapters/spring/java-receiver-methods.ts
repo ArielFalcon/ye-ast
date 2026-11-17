@@ -10,7 +10,7 @@ import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { declarationsProject, enclosingType, heldJavaProject, thisHolder, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings, statedType } from "../tree-sitter/java-receiver-bindings.ts";
-import { annotationAt, isAnonymous, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
+import { annotationAt, CALL_REWRITING_ANNOTATIONS, isAnonymous, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
@@ -38,12 +38,6 @@ const UNKNOWN_COUNT = { kind: "unknown" } as const satisfies ArgumentCount & Acc
 export const OBJECT_METHODS: ReadonlySet<string> = new Set(["clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait"]);
 /** Nodes the grammar places among a call's arguments that are no argument. */
 const NOT_ARGUMENTS: ReadonlySet<string> = new Set(["line_comment", "block_comment"]);
-/**
- * Annotations by which a processor changes what a call names without a declaration the sources hold: Lombok's
- * `@Delegate` adds a type's methods to a class, an overload of any signature, and `@ExtensionMethod` makes a call that
- * no member accepts run a static method of another class.
- */
-const CALL_REWRITING_ANNOTATIONS: ReadonlySet<string> = new Set(["Delegate", "ExtensionMethod"]);
 const PRIMITIVES: ReadonlySet<string> = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double"]);
 /** Platform classes a signature names that declare no type parameter, so a value of one is never raw. */
 const ROOT_CLASS = "java.lang.Object";

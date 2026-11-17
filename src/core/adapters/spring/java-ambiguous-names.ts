@@ -134,7 +134,7 @@ function strongest(readings: readonly Obscuring[]): Obscuring {
 function enclosingScopes(node: Node, file: JavaFile, owner: TypeDecl | undefined, project: JavaProject, head: string, wanted: Wanted = VARIABLE): Obscuring[] {
   const readings: Obscuring[] = [];
   for (let around = node.parent; around !== null; around = around.parent) {
-    const declared = isTypeDeclaration(around) ? project.types.find((type) => type.file === file && type.node.id === around.id) : undefined;
+    const declared = isTypeDeclaration(around) ? project.typesOf(file).find((type) => type.node.id === around.id) : undefined;
     if (declared !== undefined) readings.push(membersOf(declared.node, head, "own", wanted) ?? inheritedMember(declared, head, new Set([declared]), project, wanted));
     else if (isTypeDeclaration(around) || (around.type === "class_body" && around.parent?.type === "object_creation_expression")) {
       const supertypes = around.type === "class_body" ? [around.parent!.childForFieldName("type")] : [around.childForFieldName("superclass")?.namedChildren[0] ?? null, ...(around.childForFieldName("interfaces")?.namedChildren.find((child) => child?.type === "type_list")?.namedChildren ?? [])];
@@ -244,7 +244,7 @@ type FieldOwner = DeclaredConstant | DeclaredField | "maybe" | undefined;
 const isConstant = (owner: FieldOwner): owner is DeclaredConstant => typeof owner === "object" && "name" in owner;
 const isField = (owner: FieldOwner): owner is DeclaredField => typeof owner === "object" && "declaration" in owner;
 
-function constantNamesOf(type: TypeDecl): Node[] {
+export function constantNamesOf(type: TypeDecl): Node[] {
   const body = type.node.childForFieldName("body");
   const members = body === null ? [] : body.namedChildren.flatMap((child) => (child?.type === "enum_body_declarations" ? child.namedChildren : [child]));
   return members.flatMap((member) => (member?.type !== "field_declaration" || !["static", "final"].every((word) => modifierWords(member).includes(word)) ? [] : member.childrenForFieldName("declarator").flatMap((declarator) => declarator?.childForFieldName("name") ?? [])));
@@ -287,7 +287,7 @@ function fieldDeclaration(type: TypeDecl, head: string): Node | undefined {
 function staticImportMayBind(head: string, file: JavaFile, project: JavaProject): boolean {
   if (file.staticImports.some(({ member }) => member === head)) return true;
   return file.staticOnDemandImports.some((className) => {
-    const types = project.types.filter((type) => type.fqn === className);
+    const types = project.typesDeclaring(className);
     return types.length === 0 || types.some((type) => fieldOwner(type, head, file.packageName, false, new Set([type]), project) !== undefined);
   });
 }
@@ -305,7 +305,7 @@ function fieldInScope(node: Node, head: string, file: JavaFile, owner: TypeDecl 
   for (let around = node.parent; around !== null; around = around.parent) {
     const anonymous = around.type === "class_body" && around.parent?.type === "object_creation_expression";
     if (!isTypeDeclaration(around) && !anonymous) continue;
-    const declared = anonymous ? undefined : project.types.find((type) => type.file === file && type.node.id === around.id);
+    const declared = anonymous ? undefined : project.typesOf(file).find((type) => type.node.id === around.id);
     let found: FieldOwner;
     if (declared !== undefined) found = fieldOwner(declared, head, file.packageName, true, new Set([declared]), project);
     else {
