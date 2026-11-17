@@ -54,7 +54,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
   const reads = facts === undefined || hold === undefined ? undefined : keptReads(facts, hold, parser, sources, { generatesInterfaces: build.generatesInterfaces === true, unreadJvm });
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
-    rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources, build)(sites, signal),
+    rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources, build, reads)(sites, signal),
     declaredTypes: createJavaDeclaredTypes(parser, sources, paths, build),
     dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold, build, libraries),
     receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold, build, reads),

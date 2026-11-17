@@ -3,11 +3,13 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { keptByFile, type KeptReads } from "./java-kept-reads.ts";
 import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
 import { createJavaProject, qualifiedTypeName, type JavaFile, type JavaProject, type ProjectBuild } from "./java-symbols.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 
 const UNKNOWN: RootBinding = { kind: "unknown" };
+const ROOT_BINDINGS_SLOT = "java-root-bindings";
 /** Links of a chain whose first name is the root: a member access, a call on a receiver, a qualified name. */
 const CHAIN_LINKS: readonly string[] = ["field_access", "method_invocation", "scoped_identifier", "scoped_type_identifier"];
 
@@ -16,25 +18,36 @@ const CHAIN_LINKS: readonly string[] = ["field_access", "method_invocation", "sc
  * local or parameter is declared in the file, a field or a method of the enclosing types is a member of `this`, a type
  * the sources declare is located by its fully qualified name, and a type a single import or `java.lang` names under a
  * platform package is external. A name only a wildcard import supplies is not proved, since `java.lang` may supply it
- * too: ambiguous when the sources declare it, unknown otherwise. Every Java source is read when a site asks, and
- * released after.
+ * too: ambiguous when the sources declare it, unknown otherwise. With `reads`, the bindings of a file of sites are kept
+ * by the questions they asked of the declaration index (ADR-0120); without, every Java source is read when a site asks,
+ * and released after.
  */
-export function createJavaRootBindings(parser: Promise<JavaParser>, sources: readonly SourceFile[], build: ProjectBuild = {}): ImportOrigins["rootBindings"] {
+export function createJavaRootBindings(parser: Promise<JavaParser>, sources: readonly SourceFile[], build: ProjectBuild = {}, reads?: KeptReads): ImportOrigins["rootBindings"] {
   return async (sites, signal) => {
     const results: RootBinding[] = sites.map(() => UNKNOWN);
-    if (sites.length === 0) return results;
+    if (sites.length === 0 || (reads !== undefined && signal?.aborted)) return results;
+    if (reads !== undefined) return [...(await keptByFile<UseSite, RootBinding>(reads, { slot: ROOT_BINDINGS_SLOT, parser: () => parser, sources, build, over: "sources" }, sites, placeOf, UNKNOWN, ({ project, files }, places) => bindingsAt(places, project, (path) => files.get(path))))];
     const read = await parser;
     return withJavaSources(read, (parse) => {
       const files = new Map(parse(sources).files.map((file) => [file.path, file]));
       const project = createJavaProject([...files.values()], build);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
-        const file = files.get(site.file);
-        if (file !== undefined && !project.unreadable.includes(file)) results[index] = bindingAt(site, file, project);
+        results[index] = bindingsAt([site], project, (path) => files.get(path))[0]!;
       }
       return results;
     });
   };
+}
+
+const placeOf = ({ line, column, spelled, owner }: UseSite): string => JSON.stringify([line, column, spelled, owner.name, owner.line, owner.endLine]);
+
+/** What binds each site's root over one project; a file whose declarations the project could not read answers nothing, which depends on its own content alone. */
+function bindingsAt(sites: readonly UseSite[], project: JavaProject, fileAt: (path: string) => JavaFile | undefined): RootBinding[] {
+  return sites.map((site) => {
+    const file = fileAt(site.file);
+    return file === undefined || project.unreadable.includes(file) ? UNKNOWN : bindingAt(site, file, project);
+  });
 }
 
 function bindingAt(site: UseSite, file: JavaFile, project: JavaProject): RootBinding {
