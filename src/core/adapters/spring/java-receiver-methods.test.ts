@@ -358,7 +358,7 @@ test("given derived facts, an edit of one file derives the receiver bindings of 
       return JSON.parse(JSON.stringify(await derive()));
     },
     fingerprint: (inputs) => JSON.stringify(inputs),
-    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+    drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };
   const caller = (path: string, body: string) => java(path, ["package app;", "", `class ${path.replace(".java", "")} {`, `  void run(Store store) { store.save("x"); ${body} }`, "}"]);
   const siteIn = (source: SourceFile) => ({ file: source.path, line: 4, column: source.content.split("\n")[3]!.indexOf("store.save") + 1, member: "save" });
