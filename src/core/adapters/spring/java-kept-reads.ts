@@ -58,6 +58,7 @@ export async function keptByFile<S extends { file: string }, A>(
   unknown: A,
   derive: (reading: FileReading, places: readonly S[]) => readonly A[],
 ): Promise<readonly A[]> {
+  if (sites.length === 0) return [];
   const index = await kept.index();
   const results: A[] = sites.map(() => unknown);
   for (const [path, entries] of Map.groupBy(sites.entries(), ([, site]) => site.file)) {

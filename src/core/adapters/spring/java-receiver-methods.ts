@@ -189,6 +189,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
 
 const SITES_SLOT = "java-receiver-sites";
 const DECLARED_SUPERTYPES_SLOT = "java-declared-supertypes";
+const IMPLICIT_CHAINS_SLOT = "java-implicit-chains";
 
 function readFileOf(file: JavaFile, source: SourceFile | undefined, facts?: DerivedFacts): ReadFile {
   return { file, bindings: receiverBindingsOf(file, source, facts), invocations: invocationsOf(file.root) };
@@ -301,8 +302,8 @@ export function createJavaImplementedDeclarations(parser: () => Promise<JavaPars
  * strict lexical and import rules do not settle its superclass, or that superclass holds an annotation by which a processor may add constructors, declares a
  * varargs constructor, or writes constructors and none of no arguments.
  */
-export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["implicitChains"]> {
-  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_CHAIN, implicitChainOf);
+export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}, reads?: KeptReads): NonNullable<ImportOrigins["implicitChains"]> {
+  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_CHAIN, implicitChainOf, "sources", undefined, reads === undefined ? undefined : { reads, slot: IMPLICIT_CHAINS_SLOT });
 }
 
 /**
