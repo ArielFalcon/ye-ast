@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { javaDeclarationIndex } from "../core/adapters/spring/java-declaration-index.ts";
+import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
 import { createJavaReceiverMethods } from "../core/adapters/spring/java-receiver-methods.ts";
 import { createJavaRelations } from "../core/adapters/spring/java-relations.adapter.ts";
@@ -64,6 +65,7 @@ const JAVA_CHAINS: SourceFile = { path: "src/main/java/app/Chains.java", content
 const JAVA_COUNTS: SourceFile = { path: "src/main/java/app/Counts.java", content: ["package app;", "class Tool {", "  Tool(int size) {}", "  void use(String... names) {}", "  void use(int a, int b) {}", "}", "class User { void run(Tool tool) { tool.use(1, 2); new Tool(3); tool.use(\"a\").use(\"b\"); } }", ""].join("\n") };
 const JAVA_IMPLEMENTS: SourceFile = { path: "src/main/java/app/Implements.java", content: ["package app;", "interface Store {", "  void save(String value);", "}", "class Disk implements Store {", "  public void save(String value) {}", "  <T> void generic(T value) {}", "}", "class Tool {", "  void use() {}", "}", ""].join("\n") };
 const JAVA_FITS: SourceFile = { path: "src/main/java/app/Fits.java", content: ["package app;", "interface Mapper<S, T> { T convert(S source); }", "class Tax {}", "class Rate {}", "class Cat {}", "class TaxMapper implements Mapper<Tax, Rate> {", "  public Rate convert(Tax source) { return null; }", "}", "class Other { Mapper<Cat, Rate> mapper; void run() { mapper.convert(null); } }", "class Same { Mapper<Tax, Rate> mapper; void run() { mapper.convert(null); } }", ""].join("\n") };
+const JAVA_IMPORTS: SourceFile = { path: "src/main/java/app/Imports.java", content: ["package app;", "import app.Orders;", "import static app.Orders.LIMIT;", "import app.*;", "import java.util.List;", "import com.acme.Missing;", "class Imports {}", ""].join("\n") };
 const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export function run(redact: () => void): void {", "  redact();", "}", ""].join("\n") };
 const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };
 const WRITER: SourceFile = { path: "src/writer.ts", content: ["export {};", "(Array.prototype as any).last = () => 1;", ""].join("\n") };
@@ -90,6 +92,8 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "java-callbacks": [1, "31e796b313e5ab7c1a14d463c85c1e147f377e0585c86f8d0742b4d0fbc8eaf9"],
   "java-receiver-sites": [1, "a6a10152c6d15d73ae90cb581762317393860044cdc48be40a7f8ed1250657d0"],
   "java-argument-counts": [1, "470a1bdbb5025f531531f3b6c7e47a35c2060b9f9e79b42e8c51156198208b84"],
+  "java-import-statements": [1, "fe7cb1f88d1be1da7a34da4ce94417c360d8c286d8c4ae1a0b09b70e33907a7d"],
+  "java-import-targets": [1, "e12ac75e3999be57bad6e62ca2ace609ff5e43d3d9d763e0114f7a52feea4519"],
   "java-accepted-counts": [1, "46a2118d21d79f7565b33d6bc4f95c5eb8fe796382fc6f1ba47c07bf438926a7"],
   "java-receiver-fits": [1, "e0663b4d88d03a139c713cd0a2bdf4432899622d600fed98ed81a6e15da70934"],
   "java-implemented-declarations": [1, "1548f363531649fe08135d3449aec499e77c24649017b3076b1f9e6beb097297"],
@@ -164,6 +168,8 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   const fitFacts = recordingFacts((slot, value) => slot === "java-receiver-fits" && record(slot, value));
   const fitCall = (line: number) => ({ file: JAVA_FITS.path, line, column: JAVA_FITS.content.split("\n")[line - 1]!.indexOf("mapper.convert") + 1, member: "convert", implementation: { file: JAVA_FITS.path, start: 7, name: "convert" } });
   await createJavaNameBindings(() => createJavaParser(holds), fitSources, fitSources.map(({ path }) => path), fitFacts, hold).receiverFits!([fitCall(9), fitCall(10)]);
+  const importFacts = recordingFacts((slot, value) => (slot === "java-import-statements" || slot === "java-import-targets") && record(slot, value));
+  await createJavaImportsReader(await createJavaParser()).extract([...javaSources, JAVA_IMPORTS], { facts: importFacts });
   hold.release();
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));

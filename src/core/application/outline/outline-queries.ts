@@ -82,7 +82,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const unknown = focused === undefined ? [] : snapshot.describe(focused.unknown);
           if (unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(unknown, unmodelled)}`, entries: unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const listed = focused === undefined ? await readOutline(store, covered, await deps.moduleReader.extract(sources, { files: covered }), reading.declarations) : undefined;
+          const listed = focused === undefined ? await readOutline(store, covered, await deps.moduleReader.extract(sources, { files: covered, ...(head.prepared?.facts === undefined ? {} : { facts: head.prepared.facts }) }), reading.declarations) : undefined;
           if (request.signal?.aborted) return ABORTED;
           const typed = focused === undefined ? undefined : await reading.typed();
           if (typed === "aborted") return ABORTED;

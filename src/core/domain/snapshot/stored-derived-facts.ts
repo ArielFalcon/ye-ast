@@ -23,6 +23,8 @@ export const STORED_DERIVED_FACT_VERSIONS: Readonly<Record<string, number>> = {
   "java-implicit-chains": 1,
   "java-argument-counts": 1,
   "java-accepted-counts": 1,
+  "java-import-statements": 1,
+  "java-import-targets": 1,
   tokens: 1,
   "ts-module-resolutions": 1,
 };
