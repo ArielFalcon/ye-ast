@@ -99,6 +99,7 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "java-implemented-declarations": [1, "1548f363531649fe08135d3449aec499e77c24649017b3076b1f9e6beb097297"],
   "java-implicit-chains": [1, "851729aee28f2536adf62614a5323d7ab2d36bc6c7be23a6a052cd7ee4eca1fb"],
   "java-declared-supertypes": [1, "b8ae346f455499547b6d9b411349b1f46826c212414f75bcccd21caa3d56d95c"],
+  "java-root-origins": [1, "b143a99258135457f3739eb131887755ec6e559865bafe4b9ed73554922d3050"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
   "ts-module-resolutions": [1, "06babd9d9388578f4fac7b2d6655e24b5df82a7f5c1aa5b6d5dec0c70e1125c9"],
 };
@@ -170,6 +171,9 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   await createJavaNameBindings(() => createJavaParser(holds), fitSources, fitSources.map(({ path }) => path), fitFacts, hold).receiverFits!([fitCall(9), fitCall(10)]);
   const importFacts = recordingFacts((slot, value) => (slot === "java-import-statements" || slot === "java-import-targets") && record(slot, value));
   await createJavaImportsReader(await createJavaParser()).extract([...javaSources, JAVA_IMPORTS], { facts: importFacts });
+  const rootFacts = recordingFacts((slot, value) => slot === "java-root-origins" && record(slot, value));
+  const rootSite = (file: SourceFile, line: number, written: string, kind: "calls" | "instantiates", name: string) => ({ file: file.path, line, column: file.content.split("\n")[line - 1]!.indexOf(written) + 1, kind, name });
+  await createJavaNameBindings(() => createJavaParser(holds), javaSources, javaSources.map(({ path }) => path), rootFacts, hold).rootOrigins([rootSite(JAVA_FILE, 2, "new B()", "instantiates", "B"), rootSite(JAVA_FILE, 2, "b.go()", "calls", "go"), rootSite(JAVA_TARGET, 1, "go", "calls", "go")]);
   hold.release();
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));
