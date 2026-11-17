@@ -84,7 +84,16 @@ function pathTokenAt(text: string, offset: number, length: number): string {
 
 /** A segment long enough to be an encoded secret and shaped like one: both cases and a digit. */
 function isBase64Segment(segment: string): boolean {
-  return segment.length >= 20 && /[a-z]/.test(segment) && /[A-Z]/.test(segment) && /[0-9]/.test(segment) && !isSourceFilename(segment);
+  return segment.length >= 20 && /[a-z]/.test(segment) && /[A-Z]/.test(segment) && /[0-9]/.test(segment) && !isSourceFilename(segment) && !isLabelSegment(segment);
+}
+
+/* A word, a number, a word with a short number (`r2`, `Run2`, `16Z`) or a timestamp (`20261116T235316Z`): the parts a run directory or file name is named by. A part holding two cases inside a word is not one. */
+const LABEL_PART_RE = /^(?:[a-z]+|[A-Z][a-z]*|[A-Z]+|\d+|(?:[a-z]+|[A-Z][a-z]*|[A-Z]+)\d{1,3}|\d{1,3}(?:[a-z]+|[A-Z][a-z]*|[A-Z]+)|\d+(?:[A-Z]\d+)+[A-Z]?)$/;
+
+/** A segment joined by `-`, `_` or `.` whose every part is a label part: a name, never an encoded value. */
+function isLabelSegment(segment: string): boolean {
+  const parts = segment.split(/[-_.]/).filter((part) => part !== "");
+  return parts.length > 1 && parts.every((part) => LABEL_PART_RE.test(part));
 }
 
 /* A file name is identifier words plus digits (`ProductFacadeV2Impl`, `OAuth2Client`) and a lowercase extension. A run of digits that ends the stem needs a `V`/`Version` marker, so a numeric tail does not disguise an encoded segment. */

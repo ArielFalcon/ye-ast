@@ -267,6 +267,38 @@ test("does NOT redact a hyphenated path whose match stops at the hyphen, because
   assert.equal(sanitizeText(`- ${path}`).text, `- ${path}`);
 });
 
+test("a run directory named by a timestamp and words stays whole in a path, in both modes", () => {
+  for (const path of [
+    "/Users/dev/work/ye-ast/evaluation/artifacts/20261116T235316Z-agents-r2/answers/q1.md",
+    "/Users/dev/work/ye-ast/evaluation/artifacts/20261116T235316Z_agents_r2/answers/q1.md",
+    "/Users/dev/work/ye-ast/evaluation/artifacts/2026-11-16T23-53-16Z-Agents-Run2/answers/q1.md",
+    "/Users/dev/work/ye-ast/evaluation/artifacts/answer-01.20261116T235316Z.Agents-R2.md",
+  ]) {
+    for (const mode of ["issue", "model"] as const) {
+      const input = `answers: ${path}`;
+      const result = sanitizeText(input, mode);
+      assert.equal(result.text, input);
+      assert.equal(result.detection.redacted, false);
+      assert.equal(containsSecrets(input, mode), false);
+    }
+  }
+});
+
+test("an encoded segment at the position of a run directory is still redacted when any part of it is not a plain word or number", () => {
+  const dir = "/Users/dev/work/ye-ast/evaluation/artifacts";
+  for (const segment of [
+    "aB3xK9mQ2pL5vR8tY1wZ4nJ7hG0sD6fE",
+    "aB3xK9mQ2pL5vR8tY1wZ-4nJ7hG0sD6fE_q1",
+    "20261116T235316Z-aB3xK9mQ2pL5vR8tY1wZ-r2",
+  ]) {
+    const input = `${dir}/${segment}/answers/q1.md`;
+    const result = sanitizeText(input, "model");
+    assert.equal(result.detection.redacted, true, segment);
+    assert.equal(result.text.includes(segment), false, segment);
+    assert.throws(() => assertNoSecretLeak(input, "model", "encoded-path"));
+  }
+});
+
 test("still redacts a base64 run whose slashes split it into segments, when a long segment is base64-shaped", () => {
   const blob = "AbCdEfGhIjKlMnOpQrStUvWxYz012345/aB3xK9mQ2pL5vR8tY1wZ4nJ7hG0sD6fE/zz/QQ";
   const { text: out } = sanitizeText(blob);
