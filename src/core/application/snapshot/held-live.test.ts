@@ -532,3 +532,40 @@ test("a read at a revision and a live read hand their readers the sources their 
     }
   }
 });
+
+test("a live query that needs HEAD only for its answer reads it once, and reads the store through the reader the refresh proved", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const { deps, queries, log } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES });
+  const opens: string[] = [];
+  const heads: string[] = [];
+  const open = deps.graph.open;
+  const shared: CodeGraph = { ...live.deps.graph, index: deps.graph.index, open: (root) => { opens.push(root); return open(root); } };
+  live.deps.graph = shared;
+  deps.graph = shared;
+  const resolve = deps.vcs.resolveCommit;
+  deps.vcs.resolveCommit = async (repo, revision, signal) => { if (revision === "HEAD") heads.push(revision); return resolve(repo, revision, signal); };
+  const ask = () => queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true });
+  assert.ok((await ask()).ok);
+  opens.length = 0;
+  heads.length = 0;
+  const closed = log.closed;
+
+  const answer = await ask();
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.snapshot.kind === "live" && answer.value.snapshot.head, HEAD);
+  assert.equal(heads.length, 1);
+  assert.deepEqual(opens, ["/index"]);
+  assert.equal(log.closed - closed, 1);
+});
+
+test("a live query whose HEAD cannot be read answers that fault even when the mirror cannot be opened either", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const { deps, queries } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES });
+  live.engine.lock = { ok: false, fault: { kind: "refused", detail: "the mirror is not private" } };
+  deps.vcs.resolveCommit = async (_repo, revision) => (revision === "HEAD" ? { ok: false, fault: { kind: "unknown-revision", detail: "HEAD" } } : { ok: true, value: BASE });
+
+  const answer = await queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true });
+
+  assert.deepEqual(!answer.ok && answer.fault, { kind: "unknown-revision", detail: "HEAD" });
+});
