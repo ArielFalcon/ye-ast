@@ -1,3 +1,5 @@
+import { stat } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import type { Result } from "../../domain/shared/result.ts";
 import { isEngineEntry } from "../../ports/staging-rules.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
@@ -18,19 +20,66 @@ const LISTING_PREFIX: readonly string[] = [
   "core.fsmonitor=false",
 ];
 
-export function createGitWorkingTree(deps: Pick<GitDeps, "runGit"> = defaultGitDeps): WorkingTree {
+export interface WorkingTreeDeps extends Pick<GitDeps, "runGit"> {
+  /** The identity of a file (device, inode, size, change times), or `undefined` when it cannot be read. */
+  fileIdentity: (path: string) => Promise<string | undefined>;
+}
+
+const defaultWorkingTreeDeps: WorkingTreeDeps = {
+  runGit: defaultGitDeps.runGit,
+  fileIdentity: async (path) => {
+    try {
+      const status = await stat(path, { bigint: true });
+      return `${status.dev}:${status.ino}:${status.size}:${status.mtimeNs}:${status.ctimeNs}`;
+    } catch {
+      return undefined;
+    }
+  },
+};
+
+/** A repository's object format, valid while its configuration file keeps the identity it had when the format was read. */
+interface KeptFormat {
+  config: string;
+  identity: string;
+  format: string;
+}
+
+/**
+ * Lists working trees. The object format is set in the repository's configuration when the repository is created and
+ * never changes after (`extensions.objectFormat`), so it is asked once per repository and asked again only when that
+ * file is replaced or rewritten, as a new repository created at the same path does.
+ */
+export function createGitWorkingTree(deps: Pick<GitDeps, "runGit"> & Partial<WorkingTreeDeps> = defaultWorkingTreeDeps): WorkingTree {
+  const fileIdentity = deps.fileIdentity ?? defaultWorkingTreeDeps.fileIdentity;
+  const formats = new Map<string, KeptFormat>();
+
+  async function objectFormat(repo: string, signal?: AbortSignal): Promise<Result<string, VcsFault>> {
+    const kept = formats.get(repo);
+    if (kept !== undefined && (await fileIdentity(kept.config)) === kept.identity) return { ok: true, value: kept.format };
+    formats.delete(repo);
+    const asked = await deps.runGit(repo, ["rev-parse", "--show-object-format", "--git-path", "config"], signal);
+    if (asked.code !== 0) return gitFailed(asked);
+    const [format = "", path] = asked.stdout.toString("utf8").split("\n");
+    if (path !== undefined && path !== "") {
+      const config = isAbsolute(path) ? path : join(repo, path);
+      const identity = await fileIdentity(config);
+      if (identity !== undefined) formats.set(repo, { config, identity, format });
+    }
+    return { ok: true, value: format };
+  }
+
   async function list(repo: string, signal?: AbortSignal): Promise<Result<WorkingTreeListing, VcsFault>> {
     const [root, tracked, untracked, format] = await Promise.all([
       ensureRepositoryRoot(deps, repo, signal),
       deps.runGit(repo, [...LISTING_PREFIX, "ls-files", "-z", "-s", "--cached"], signal),
       deps.runGit(repo, [...LISTING_PREFIX, "ls-files", "-z", "--others", "--exclude-standard"], signal),
-      deps.runGit(repo, ["rev-parse", "--show-object-format"], signal),
+      objectFormat(repo, signal),
     ]);
     if (signal?.aborted) return ABORTED;
     if (!root.ok) return root;
     if (tracked.code !== 0) return gitFailed(tracked);
     if (untracked.code !== 0) return gitFailed(untracked);
-    if (format.code !== 0) return gitFailed(format);
+    if (!format.ok) return format;
 
     const listed = new Map<string, WorkingTreePath>();
     for (const record of records(tracked.stdout)) {
@@ -45,7 +94,7 @@ export function createGitWorkingTree(deps: Pick<GitDeps, "runGit"> = defaultGitD
       listed.set(path, { path, submodule: nested });
     }
     const paths = [...listed.values()].filter((entry) => !isEngineEntry(entry.path)).sort((a, b) => compareText(a.path, b.path));
-    return { ok: true, value: { paths, objectFormat: format.stdout.toString("utf8").trim() } };
+    return { ok: true, value: { paths, objectFormat: format.value.trim() } };
   }
 
   return { list };

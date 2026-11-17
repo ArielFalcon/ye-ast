@@ -1104,3 +1104,144 @@ test("canonicalRoot respects cancellation after filesystem work succeeds or fail
   const result = await createGitVcs().canonicalRoot(repo, controller.signal);
   assert.equal(!result.ok && result.fault.kind, "aborted");
 });
+
+function counting(): { deps: GitDeps; spawned: () => number } {
+  let calls = 0;
+  const counted = <Args extends unknown[], Answer>(run: (...args: Args) => Answer) => (...args: Args): Answer => (calls++, run(...args));
+  return {
+    deps: {
+      ...defaultGitDeps,
+      runGit: counted(defaultGitDeps.runGit),
+      runIsolatedGit: counted(defaultGitDeps.runIsolatedGit),
+      streamRecords: counted(defaultGitDeps.streamRecords),
+      streamLines: counted(defaultGitDeps.streamLines),
+      checkBlobs: counted(defaultGitDeps.checkBlobs),
+      streamBlobs: counted(defaultGitDeps.streamBlobs),
+    },
+    spawned: () => calls,
+  };
+}
+
+function writeMixedCommit(): string {
+  write("a.java", "1234");
+  write("b.java", "5678");
+  write("c.java", "9012");
+  write("docs.txt", "x".repeat(500));
+  symlinkSync("a.java", join(repo, "link"));
+  return commitAll();
+}
+
+test("a commit listed again runs no git process and answers what the first listing did", async () => {
+  const sha = writeMixedCommit();
+  const { deps, spawned } = counting();
+  const vcs = createGitVcs(deps);
+  const first = valueOf(await vcs.listCommit!(repo, sha, JAVA_ONLY));
+  const afterFirst = spawned();
+
+  const second = valueOf(await vcs.listCommit!(repo, sha, JAVA_ONLY));
+
+  assert.ok(afterFirst > 0);
+  assert.equal(spawned(), afterFirst);
+  assert.deepEqual(second, first);
+});
+
+test("every plan over a kept commit is decided from the listing as a fresh adapter decides it, whatever plan came first", async () => {
+  const sha = writeMixedCommit();
+  const plans: ExportPlan[] = [
+    JAVA_ONLY,
+    EVERYTHING,
+    { write: () => false },
+    { ...JAVA_ONLY, budget: { maxEntries: 1000, maxBytes: 11 } },
+    { ...EVERYTHING, budget: { maxEntries: 1000, maxBytes: 13 } },
+    { ...EVERYTHING, budget: { maxEntries: 1000, maxBytes: 1000 } },
+  ];
+  const kept = createGitVcs();
+  valueOf(await kept.listCommit!(repo, sha, { ...JAVA_ONLY, budget: { maxEntries: 1000, maxBytes: 5 } }));
+
+  for (const plan of plans) {
+    const fresh = valueOf(await createGitVcs().listCommit!(repo, sha, plan));
+    assert.deepEqual(valueOf(await kept.listCommit!(repo, sha, plan)), fresh);
+  }
+});
+
+test("the entry budget is part of what is kept, so a listing stopped at one budget never answers another", async () => {
+  const sha = writeMixedCommit();
+  const vcs = createGitVcs();
+  const stopped = valueOf(await vcs.listCommit!(repo, sha, { ...EVERYTHING, budget: { maxEntries: 2, maxBytes: 1000 } }));
+  const whole = valueOf(await vcs.listCommit!(repo, sha, { ...EVERYTHING, budget: { maxEntries: 100, maxBytes: 1000 } }));
+
+  assert.deepEqual(stopped.stopped, { at: "c.java", limit: 2 });
+  assert.equal(whole.stopped, undefined);
+  assert.deepEqual(whole, valueOf(await createGitVcs().listCommit!(repo, sha, { ...EVERYTHING, budget: { maxEntries: 100, maxBytes: 1000 } })));
+});
+
+test("a symbolic revision is resolved on every call, and the commit it newly names lists its own tree", async () => {
+  write("a.java", "class A {}");
+  const first = commitAll();
+  const { deps, spawned } = counting();
+  const vcs = createGitVcs(deps);
+  assert.equal(valueOf(await vcs.resolveCommit(repo, "HEAD")), first);
+  valueOf(await vcs.listCommit!(repo, first, EVERYTHING));
+  write("b.java", "class B {}");
+  const second = commitAll();
+
+  const before = spawned();
+  const resolved = valueOf(await vcs.resolveCommit(repo, "HEAD"));
+  const listed = valueOf(await vcs.listCommit!(repo, resolved, EVERYTHING));
+
+  assert.equal(resolved, second);
+  assert.ok(spawned() > before);
+  assert.deepEqual(listed.files.map((file) => file.path), ["a.java", "b.java"]);
+  assert.deepEqual(valueOf(await vcs.listCommit!(repo, first, EVERYTHING)).files.map((file) => file.path), ["a.java"]);
+});
+
+test("a listing the bound cannot hold is read again every time and never changes the answer", async () => {
+  const sha = writeMixedCommit();
+  const { deps, spawned } = counting();
+  const vcs = createGitVcs(deps, { listingBytes: 1 });
+  const first = valueOf(await vcs.listCommit!(repo, sha, JAVA_ONLY));
+  const afterFirst = spawned();
+
+  const second = valueOf(await vcs.listCommit!(repo, sha, JAVA_ONLY));
+
+  assert.ok(spawned() >= 2 * afterFirst);
+  assert.deepEqual(second, first);
+});
+
+test("a listing that was aborted or faulted keeps nothing, so the next call reads git and answers", async () => {
+  const sha = writeMixedCommit();
+  const controller = new AbortController();
+  const { deps, spawned } = counting();
+  const vcs = createGitVcs({ ...deps, checkBlobs: (...args) => (controller.abort(), deps.checkBlobs(...args)) });
+
+  const aborted = await vcs.listCommit!(repo, sha, JAVA_ONLY, controller.signal);
+  const afterAbort = spawned();
+  const again = await createGitVcs(deps).listCommit!(repo, sha, JAVA_ONLY);
+
+  assert.equal(!aborted.ok && aborted.fault.kind, "aborted");
+  assert.ok(again.ok);
+  assert.ok(spawned() > afterAbort);
+
+  const missing = execFileSync("git", ["hash-object", "--stdin"], { cwd: repo, env: GIT_ENV, input: "class M {}", encoding: "utf8" }).trim();
+  const root = execFileSync("git", ["mktree", "-z", "--missing"], { cwd: repo, env: GIT_ENV, input: `100644 blob ${missing}\tM.java\u0000`, encoding: "utf8" }).trim();
+  const crafted = commitTree(root);
+  const memo = createGitVcs();
+  const lacking = await memo.listCommit!(repo, crafted, JAVA_ONLY);
+  blob("class M {}");
+  const present = await memo.listCommit!(repo, crafted, JAVA_ONLY);
+
+  assert.equal(!lacking.ok && lacking.fault.kind, "object-missing");
+  assert.deepEqual(valueOf(present).files, [{ path: "M.java", blob: missing, written: true }]);
+});
+
+test("a kept listing is never handed out itself, so changing an answer changes no later one", async () => {
+  const sha = writeMixedCommit();
+  const vcs = createGitVcs();
+  const expected = structuredClone(valueOf(await vcs.listCommit!(repo, sha, JAVA_ONLY)));
+  const kept = valueOf(await vcs.listCommit!(repo, sha, JAVA_ONLY)) as unknown as { files: { written: boolean }[]; skipped: unknown[]; stopped?: unknown };
+  kept.files[0]!.written = !kept.files[0]!.written;
+  kept.files.pop();
+  kept.skipped.pop();
+
+  assert.deepEqual(valueOf(await vcs.listCommit!(repo, sha, JAVA_ONLY)), expected);
+});

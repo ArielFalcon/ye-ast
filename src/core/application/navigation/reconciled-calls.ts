@@ -86,14 +86,37 @@ type Alignment = { kind: "matched"; call: SyntaxCall; deferred: boolean; body: G
 
 const callKey = (call: SyntaxCall): string => `${call.kind}:${call.line}:${call.column}:${call.name}`;
 
+/** A file's written calls, grouped by the line they are written on and by each line an anchor of theirs lies on, each group in written order. */
+interface CallsByLine {
+  written: ReadonlyMap<number, readonly SyntaxCall[]>;
+  anchored: ReadonlyMap<number, readonly SyntaxCall[]>;
+}
+
+function callsByLine(calls: readonly SyntaxCall[]): CallsByLine {
+  const written = new Map<number, SyntaxCall[]>();
+  const anchored = new Map<number, SyntaxCall[]>();
+  const add = (index: Map<number, SyntaxCall[]>, line: number, call: SyntaxCall): void => {
+    const group = index.get(line);
+    if (group === undefined) index.set(line, [call]);
+    else if (group[group.length - 1] !== call) group.push(call);
+  };
+  for (const call of calls) {
+    if (call.kind === "references") continue;
+    add(written, call.line, call);
+    for (const anchor of call.anchors ?? []) add(anchored, anchor.line, call);
+  }
+  return { written, anchored };
+}
+
 /**
  * The written calls a record is compared with: those at its line and column, or at an anchor the reader lists there, or,
  * when the record has no column or its column lies past its line's first character outside ASCII, those on its line.
  */
-function callsAtPlace(calls: readonly SyntaxCall[], { line, column }: CallRecord, text: string | undefined): readonly SyntaxCall[] {
-  if (column === null || !Number.isFinite(column) || !countedAlike(column, text ?? "")) return calls.filter((call) => call.line === line);
-  const primary = calls.filter((call) => call.line === line && call.column - 1 === column);
-  return primary.length > 0 ? primary : calls.filter((call) => call.anchors?.some((anchor) => anchor.line === line && anchor.column - 1 === column));
+function callsAtPlace({ written, anchored }: CallsByLine, { line, column }: CallRecord, text: string | undefined): readonly SyntaxCall[] {
+  const onLine = line === null ? [] : written.get(line) ?? [];
+  if (column === null || !Number.isFinite(column) || !countedAlike(column, text ?? "")) return onLine;
+  const primary = onLine.filter((call) => call.column - 1 === column);
+  return primary.length > 0 ? primary : (line === null ? [] : anchored.get(line) ?? []).filter((call) => call.anchors?.some((anchor) => anchor.line === line && anchor.column - 1 === column));
 }
 
 /**
@@ -256,17 +279,28 @@ function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberName
   const accounted = new Set<string>();
   const classOwning = new Map(declarations.flatMap((body) => isClassKind(body.kind) ? (owned.get(body.id) ?? []).filter((call) => !call.ambiguous).map((call) => [callKey(call), body] as const) : []));
   const enclosingExecutions = new Map(declarations.flatMap((body) => (owned.get(body.id) ?? []).filter((call) => !call.ambiguous && call.owners.some((scope) => scope.runsInEnclosingBody)).map((call) => [callKey(call), body] as const)));
+  const ownedByKey = new Map<string, Map<string, OwnedCall>>();
+  const ownCall = (body: GraphSymbol, call: SyntaxCall): OwnedCall | undefined => {
+    let keyed = ownedByKey.get(body.id);
+    if (keyed === undefined) {
+      keyed = new Map();
+      for (const candidate of owned.get(body.id) ?? []) if (!keyed.has(callKey(candidate))) keyed.set(callKey(candidate), candidate);
+      ownedByKey.set(body.id, keyed);
+    }
+    return keyed.get(callKey(call));
+  };
   const { calls } = syntax;
+  const written = calls === undefined ? undefined : callsByLine(calls);
   const alignments = records.map((record): Alignment => {
-    if (calls === undefined || record.synthesized) return { kind: "kept" };
-    const at = callsAtPlace(calls.filter((call) => call.kind !== "references"), record, record.line === null ? undefined : lineOf(record.line));
+    if (written === undefined || record.synthesized) return { kind: "kept" };
+    const at = callsAtPlace(written, record, record.line === null ? undefined : lineOf(record.line));
     const agreeing = agreeingCalls(at, record);
     for (const call of agreeing) accounted.add(callKey(call));
     const [call] = agreeing;
     if (call !== undefined && agreeing.length === 1) {
       if (call.inline === true) return { kind: "inlined" };
       const body = enclosingExecutions.get(callKey(call)) ?? (record.node.kind === "file" ? classOwning.get(callKey(call)) : undefined) ?? record.node;
-      const own = owned.get(body.id)?.find((candidate) => callKey(candidate) === callKey(call));
+      const own = ownCall(body, call);
       return { kind: "matched", call, body, deferred: own !== undefined ? own.deferred === true : !executesInBody(declarationSpan(body), syntax.functionValues, { line: call.line, column: call.column - 1 }) };
     }
     const receiver = at.some((written) => receiverRootOf(written.name) === record.name);

@@ -722,6 +722,23 @@ test("callers and a trace at one snapshot read the relations once, under the one
   assert.equal(relationReads(), 1);
 });
 
+test("a second trace at one snapshot reads no call site, and answers what the first answered", async () => {
+  writeFileSync(join(repo, "src", "Orders.java"), JAVA_ORDERS);
+  git("add", "-A");
+  git("commit", "-q", "-m", "orders");
+  const lines: string[] = [];
+  const { trace } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+  const callSiteReads = (): number => lines.filter((line) => { const record = JSON.parse(line).ye_ast as { event: string; stage?: string }; return record.event === "stage" && record.stage === "call-sites"; }).length;
+  const request = { repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Orders.java", symbol: "Orders.run" }] };
+
+  const first = await trace.walk(request);
+  assert.equal(callSiteReads(), 1);
+  const second = await trace.walk(request);
+
+  assert.equal(callSiteReads(), 1);
+  assert.deepEqual(second, first);
+});
+
 test("a measured callers names the origin reads of its reference proofs as stages", async () => {
   writeFileSync(join(repo, "src", "origin.ts"), ["export function origin(): number {", "  return 1;", "}", ""].join("\n"));
   writeFileSync(join(repo, "src", "user.ts"), ["import { origin } from './origin';", "export function user(): number {", "  return origin();", "}", ""].join("\n"));

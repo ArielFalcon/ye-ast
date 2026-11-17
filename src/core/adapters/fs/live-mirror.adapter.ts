@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, lstatSync } from "node:fs";
 import type { BigIntStats, Dirent, Stats } from "node:fs";
 import { copyFile, link, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir, utimes, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -25,6 +25,12 @@ const FILE_MODE = 0o600;
 const LOCK_POLL_MS = 50;
 /** Stats in flight at once: a bound on open requests to the file system, not a rule over the size of the tree. */
 const STAT_CONCURRENCY = 32;
+/**
+ * Synchronous stats between two yields to the event loop. A synchronous `lstat` costs a half to a third of a bounded
+ * asynchronous one (measured: 619 paths in 7 ms against 18 ms, 1,340 in 20 ms against 42 ms), and a slice of this many
+ * holds the loop for about 4 ms at that rate, so a concurrent query or an abort waits no longer than that.
+ */
+const STAT_SLICE = 256;
 const SKIP_REASONS: ReadonlySet<string> = new Set(["symlink", "submodule", "unsafe-path", "collision"]);
 
 export interface LiveMirrorDeps {
@@ -302,7 +308,8 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
         if (unsafe(path)) { skipped.push({ path, reason: "unsafe-path" }); continue; }
         statable.push(path);
       }
-      const probes = await mapBounded(statable, STAT_CONCURRENCY, (path) => (signal?.aborted ? null : probe(location.repo, path, directories)));
+      const probes = await inSlices(statable, (path) => probe(location.repo, path, directories), signal);
+      if (probes === undefined) return aborted();
 
       for (const [index, path] of statable.entries()) {
         if (signal?.aborted) return aborted();
@@ -359,10 +366,8 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       const changed = new Set<string>();
       const directories = new Map<string, "ok" | "link" | "missing">();
       const candidates = paths.filter(({ path, submodule }) => !(isEngineEntry(path) || submodule || unsafe(path) || skippedOthers.has(path)));
-      const statuses = await mapBounded(candidates, STAT_CONCURRENCY, async ({ path }) =>
-        signal?.aborted ? null : (await parentState(location.repo, path, directories)) === "ok" ? await lstat(join(location.repo, path), { bigint: true }).catch(() => null) : null,
-      );
-      if (signal?.aborted) return aborted();
+      const statuses = await inSlices(candidates, ({ path }) => (parentState(location.repo, path, directories) === "ok" ? statOrNull(join(location.repo, path)) : null), signal);
+      if (statuses === undefined || signal?.aborted) return aborted();
       for (const [index, { path }] of candidates.entries()) {
         listed.add(path);
         const status = statuses[index]!;
@@ -568,32 +573,49 @@ async function mapBounded<T, R>(items: readonly T[], limit: number, work: (item:
   return results;
 }
 
+/** Runs `work` over `items` in order, synchronously within a slice and yielding between slices; `undefined` once `signal` aborts. */
+async function inSlices<T, R>(items: readonly T[], work: (item: T) => R, signal: AbortSignal | undefined): Promise<R[] | undefined> {
+  const results: R[] = [];
+  for (let start = 0; start < items.length; start += STAT_SLICE) {
+    if (start > 0) await new Promise((resolve) => setImmediate(resolve));
+    if (signal?.aborted) return undefined;
+    for (const item of items.slice(start, start + STAT_SLICE)) results.push(work(item));
+  }
+  return signal?.aborted ? undefined : results;
+}
+
+function statOrNull(path: string): BigIntStats | null {
+  try {
+    return lstatSync(path, { bigint: true });
+  } catch {
+    return null;
+  }
+}
+
 interface Probe {
   parents: "ok" | "link" | "missing";
   status?: BigIntStats;
   failure?: unknown;
 }
 
-async function probe(repo: string, path: string, directories: Map<string, "ok" | "link" | "missing">): Promise<Probe> {
-  const parents = await parentState(repo, path, directories);
+function probe(repo: string, path: string, directories: Map<string, "ok" | "link" | "missing">): Probe {
+  const parents = parentState(repo, path, directories);
   if (parents !== "ok") return { parents };
   try {
-    return { parents, status: await lstat(join(repo, path), { bigint: true }) };
+    return { parents, status: lstatSync(join(repo, path), { bigint: true }) };
   } catch (failure) {
     return { parents, failure };
   }
 }
 
-async function parentState(repo: string, path: string, cache: Map<string, "ok" | "link" | "missing">): Promise<"ok" | "link" | "missing"> {
+function parentState(repo: string, path: string, cache: Map<string, "ok" | "link" | "missing">): "ok" | "link" | "missing" {
   let directory = repo;
   for (const segment of path.split("/").slice(0, -1)) {
     directory = join(directory, segment);
     let state = cache.get(directory);
     if (state === undefined) {
-      state = await lstat(directory).then(
-        (status) => (status.isSymbolicLink() ? "link" : status.isDirectory() ? "ok" : "missing"),
-        () => "missing" as const,
-      );
+      const status = statOrNull(directory);
+      state = status === null ? "missing" : status.isSymbolicLink() ? "link" : status.isDirectory() ? "ok" : "missing";
       cache.set(directory, state);
     }
     if (state !== "ok") return state;

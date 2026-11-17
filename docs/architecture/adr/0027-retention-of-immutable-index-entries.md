@@ -7,6 +7,8 @@
   eficientes y seguros, que tienen políticas de validación correctas y que cubren los casos de uso, para evitar dar
   código stale" (decision 8).
 - Amends: [ADR-0015](0015-index-reuse-by-content.md) (its "Not decided: garbage collection of kept indexes")
+- Amended by: [ADR-0123](0123-a-commit-listing-is-kept-by-its-sha-and-the-index-cache-sweeps-when-it-builds-or-once-per-interval.md) (decision 4: the sweep runs after a build, on the first obtain
+  of a process and once per interval, not on every obtain)
 - Related: [ADR-0023](0023-operation-snapshot-views-and-safe-retention.md),
   [RFC-0003](../rfc/0003-codegraph-integration.md), [RFC-0006](../rfc/0006-configuration.md),
   [RFC-0010](../rfc/0010-impact-queries.md) "Retention", [RFC-0012](../rfc/0012-observability-and-measurement.md)
