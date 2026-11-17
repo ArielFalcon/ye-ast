@@ -48,7 +48,7 @@ interface Options {
 }
 
 function setup(options: Options = {}) {
-  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][], materialized: 0, readBeforeWrite: false, moduleReads: [] as (readonly string[] | undefined)[], scanned: [] as string[][] };
+  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][], materialized: 0, readBeforeWrite: false, moduleReads: [] as (readonly string[] | undefined)[], moduleFacts: [] as boolean[], scanned: [] as string[][] };
   const store = { ...fakeCodeGraph(options.nodes ?? [], options.edges ?? [], options.unresolved ?? []), close: () => void (log.closed += 1) };
   const written = options.written ?? [];
   const exported = { files: written.map((path) => ({ path, blob: "1", written: true })), skipped: (options.skipped ?? []).map((path) => ({ path, reason: "symlink" as const })) };
@@ -70,7 +70,7 @@ function setup(options: Options = {}) {
     graph: { index: async () => ({ ok: true, value: { ...SUMMARY, filesNotIndexed: options.notIndexed ?? [] } }), open: () => ({ ok: true, value: store }) },
     engines: {},
     memberNames: options.syntax === undefined ? undefined : { memberNames: async ({ path }: { path: string }) => options.syntax?.[path] ?? NOTHING_DECLARED },
-    moduleReader: { extract: async (_sources: unknown, read?: { files?: readonly string[] }) => { log.moduleReads.push(read?.files); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: options.dependencies ?? [], unread: [] }; } },
+    moduleReader: { extract: async (_sources: unknown, read?: { files?: readonly string[]; facts?: unknown }) => { log.moduleReads.push(read?.files); log.moduleFacts.push(read?.facts !== undefined); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: options.dependencies ?? [], unread: [] }; } },
     importOrigins: () => ({
       origins: async () => [],
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): RootOrigin => options.roots?.[`${site.line}:${site.column}`] ?? { status: "unknown", reason: "unresolved", evidence: [] }),
@@ -345,6 +345,13 @@ test("a requested-files module read is repeated for every request and never answ
   await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Order.java"] });
   await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Cart.java"] });
   assert.deepEqual(log.moduleReads, [["src/Order.java"], ["src/Cart.java"]]);
+});
+
+test("a requested-files module read gets the derived facts of the snapshot, so a source it keeps by content is read once", async () => {
+  const written = ["src/Order.java"];
+  const { queries, log } = setup({ written, snapshotCache: createSnapshotDataCache(1 << 20) });
+  await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: written });
+  assert.deepEqual(log.moduleFacts, [true]);
 });
 
 const USE = "src/use.ts";
