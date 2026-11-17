@@ -171,7 +171,7 @@ export function measuredDerivedFacts<T extends object>(port: T, facts: DerivedFa
       return await call();
     } finally {
       const tally = facts.drain();
-      if (tally.hits + tally.misses > 0) reportBestEffort({ event: "derived-facts", reader, hits: tally.hits, misses: tally.misses, admitted: tally.admitted, admitted_bytes: tally.admittedBytes, evicted: tally.evicted, skipped: tally.skipped, fact_bytes: tally.factBytes, retained_bytes: tally.retainedBytes }, deps);
+      if (tally.hits + tally.misses > 0) reportBestEffort({ event: "derived-facts", reader, hits: tally.hits, misses: tally.misses, disk_hits: tally.diskHits, admitted: tally.admitted, admitted_bytes: tally.admittedBytes, evicted: tally.evicted, skipped: tally.skipped, fact_bytes: tally.factBytes, retained_bytes: tally.retainedBytes }, deps);
     }
   });
 }

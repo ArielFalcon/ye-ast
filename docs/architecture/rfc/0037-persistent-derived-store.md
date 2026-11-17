@@ -117,3 +117,16 @@ reads the same store. This RFC decides nothing about it.
 | 1 | Is the disk tier on by default? | Yes wherever the index cache is on today. It follows the same directory and the same trust rule, and a host that passes no directory in a sandbox gets today's behavior |
 | 2 | Is the store shared between trust modes? | Yes. A key is content and reader version; the mode that read the content does not change what is derived from it |
 | 3 | Do answers (whole facts) get stored? | No, not in this RFC. A fact's inputs include the snapshot and declared outputs; storing derivations gets most of the gain with a key that is easy to prove |
+
+## As built
+
+| Part | State |
+|---|---|
+| Disk tier behind `DerivedFacts` | Built. `createDerivedFacts` takes a `DerivedFactDisk` (the `DerivedFactStore` port and a version per slot); the readers are unchanged. A memory miss asks the store, a derivation that completed writes to it, a hit is held in memory |
+| Key | `digest(schema, slot, reader version, inputs)`, without the trust mode. The reader version of a slot is the number in `STORED_DERIVED_FACT_VERSIONS` followed by the versions of the engines the derivation runs on (the TypeScript compiler, `web-tree-sitter`, `tree-sitter-java`), so an engine upgrade never reads what the old one stored |
+| Stored slots | The per-file slots: `ts-member-names`, `java-member-names`, `ts-binding-uses`, `ts-script-globals`, `ts-written-roots` and `tokens`. A slot absent from the table is kept in memory only |
+| Entry | One file, `<key>`, a digest of key and value, the JSON value, written beside its name and renamed into place under `<cache>/derived-facts/<first two hex of the key>/`. An entry whose key or digest does not match is a miss and is removed. The directory is used only while it is private to the account, as the index cache's is |
+| Retention | The index cache's policy shape and numbers as a budget of its own (`unusedForMs: 14 days`, `maxBytes: 512 MiB`), applied once per process at the first write, last use from the entry's modification time, which a read refreshes; a host overrides it through `derivedFactRetention` |
+| Where it is on | Wherever the index cache directory is given (`indexCache`); without it nothing is written |
+| `--cache <dir>` | Not built. It is a flag on every command and in the registration `init` prints, a change of the CLI surface of its own |
+| Version test | `src/composition/stored-derived-facts.test.ts` pins, per stored slot, its version and a digest of what its reader derives from fixed sources. A reader that changes what it derives changes its digest, and the pin is updated with the version bump |

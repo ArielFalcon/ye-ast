@@ -124,7 +124,7 @@ test("with the index digest and derived facts, a second read finds the calls the
       return JSON.parse(kept.get(key)!);
     },
     fingerprint: (inputs) => JSON.stringify(inputs),
-    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+    drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };
   const nodes = [fakeNode("fetch", "function", "src/api.ts", 1, 3), fakeNode("a", "constant", "src/a.ts", 2, 4), fakeNode("b", "constant", "src/b.ts", 2, 4)];
   const written: Written[] = [{ body: "a", line: 3, name: "fetch" }, { body: "b", line: 3, name: "other" }];
@@ -157,7 +157,7 @@ test("a retained call whose body the index no longer holds realigns its source i
       return JSON.parse(kept.get(key)!);
     },
     fingerprint: (inputs) => JSON.stringify(inputs),
-    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+    drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };
   const read = (body: string) => {
     const world = setup([fakeNode("fetch", "function", "src/api.ts", 1, 3), fakeNode(body, "constant", "src/a.ts", 2, 4)], [], [{ body, line: 3, name: "fetch" }], () => declaration(world.symbol("fetch")), {}, { "src/a.ts": "fetch();" }, { facts, index: "same" });

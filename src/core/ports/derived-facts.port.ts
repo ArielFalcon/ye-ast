@@ -1,9 +1,10 @@
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
 
-/** What a view of derived facts did since its previous drain; `factBytes` and `retainedBytes` are what the cache holds now. */
+/** What a view of derived facts did since its previous drain; `diskHits` are the `hits` the disk tier answered, `factBytes` and `retainedBytes` are what the cache holds now. */
 export interface DerivedFactsTally {
   hits: number;
   misses: number;
+  diskHits: number;
   admitted: number;
   admittedBytes: number;
   evicted: number;

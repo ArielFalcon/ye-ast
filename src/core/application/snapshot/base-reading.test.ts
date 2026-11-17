@@ -147,7 +147,7 @@ function derivedFacts(): DerivedFacts {
       return kept.get(key) as T;
     },
     fingerprint: () => "fingerprint",
-    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+    drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   } as DerivedFacts;
 }
 
@@ -196,7 +196,7 @@ function rememberingFacts(): DerivedFacts {
       return JSON.parse(kept.get(key)!);
     },
     fingerprint: (inputs) => JSON.stringify(inputs),
-    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+    drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };
 }
 

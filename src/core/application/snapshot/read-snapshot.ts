@@ -4,6 +4,7 @@ import { sortedEngines, SCHEMA, type Cut, type DeclaredConfig, type DeclaredScop
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
+import type { DerivedFactDisk } from "../../ports/derived-fact-store.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -21,6 +22,8 @@ export interface SnapshotReaderDeps {
   vcs: Vcs;
   preparation?: SnapshotPreparation;
   snapshotCache?: SnapshotDataCache;
+  /** The disk tier of the derived facts of every snapshot read (ADR-0077); without it they are kept in memory only. */
+  derivedFactDisk?: DerivedFactDisk;
   scratch: ScratchDirectory;
   reader: SourceReader;
   extractor: EntrypointExtractor;

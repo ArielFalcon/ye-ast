@@ -27,7 +27,7 @@ export interface LiveSnapshotReaders {
  * capture's content, its listing of content hashes (RFC-0010 "The mirror"), the repository, scope and trust; never by
  * HEAD, so a capture whose files did not change reuses what an earlier one read, and an edit misses.
  */
-export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "digest">, capture: LiveCapture, keep: ReadScope["keep"] = (sources) => [...sources]): LiveSnapshotReaders {
+export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "derivedFactDisk" | "digest">, capture: LiveCapture, keep: ReadScope["keep"] = (sources) => [...sources]): LiveSnapshotReaders {
   const retention = snapshotRetention(deps, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export, capture.trust);
   let loaded: Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> | undefined;
   let extracted: Promise<Result<CommitExtraction, VcsFault>> | undefined;

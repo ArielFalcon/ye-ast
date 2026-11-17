@@ -1,0 +1,13 @@
+/**
+ * The derived-fact slots that persist across processes (ADR-0077), each with the version of the reader that owns it.
+ * A reader that changes what it derives bumps its slot's version, so entries stored under the old one are never read; a
+ * slot absent here is kept in memory only. Slots keyed by one file's content come first (decision 7).
+ */
+export const STORED_DERIVED_FACT_VERSIONS: Readonly<Record<string, number>> = {
+  "ts-member-names": 1,
+  "java-member-names": 1,
+  "ts-binding-uses": 1,
+  "ts-script-globals": 1,
+  "ts-written-roots": 1,
+  tokens: 1,
+};

@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import type { DerivedFactDisk, DerivedFactStore } from "../../ports/derived-fact-store.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import { createDerivedFacts } from "./derived-facts.ts";
 import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
@@ -80,7 +81,7 @@ test("facts share the snapshot data budget: the least recently used is evicted, 
   facts.ofFile("slot", FILE, derive);
 
   assert.equal(derived(), 1);
-  assert.deepEqual(facts.drain(), { hits: 0, misses: 3, admitted: 3, admittedBytes: 3 * charge, evicted: 2, skipped: 0, factBytes: charge, retainedBytes: charge });
+  assert.deepEqual(facts.drain(), { hits: 0, misses: 3, diskHits: 0, admitted: 3, admittedBytes: 3 * charge, evicted: 2, skipped: 0, factBytes: charge, retainedBytes: charge });
   const disabled = createDerivedFacts(createSnapshotDataCache(0), digest, "untrusted");
   const twice = counting([1]);
   disabled.ofFile("slot", FILE, twice.derive);
@@ -96,5 +97,72 @@ test("drain answers what a view did since the previous drain", () => {
   facts.ofFile("slot", FILE, () => 1);
 
   assert.deepEqual([first.hits, first.misses, first.admitted], [0, 1, 1]);
-  assert.deepEqual(facts.drain(), { hits: 2, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: first.factBytes, retainedBytes: first.retainedBytes });
+  assert.deepEqual(facts.drain(), { hits: 2, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: first.factBytes, retainedBytes: first.retainedBytes });
+});
+
+function memoryStore(): DerivedFactStore & { entries: Map<string, string> } {
+  const entries = new Map<string, string>();
+  return { entries, read: (key) => entries.get(key), write: (key, json) => void entries.set(key, json) };
+}
+
+function viewOver(disk: DerivedFactDisk, trust: "trusted" | "untrusted" = "untrusted") {
+  return createDerivedFacts(createSnapshotDataCache(BUDGET), digest, trust, disk);
+}
+
+test("a new view over the same store answers a stored fact without deriving, whatever the trust that stored it", async () => {
+  const disk = { store: memoryStore(), versions: { slot: "1", aggregate: "1" } };
+  const value = { starts: [3, 1], absent: undefined };
+  viewOver(disk, "untrusted").ofFile("slot", FILE, () => value);
+  await viewOver(disk, "untrusted").ofInputs("aggregate", { at: 1 }, async () => value);
+
+  const file = counting(value);
+  const inputs = counting(value);
+  const trusted = viewOver(disk, "trusted");
+  const first = trusted.ofFile("slot", { ...FILE }, file.derive);
+  const second = await trusted.ofInputs("aggregate", { at: 1 }, async () => inputs.derive());
+
+  assert.deepEqual([file.derived(), inputs.derived()], [0, 0]);
+  assert.equal(JSON.stringify(first), JSON.stringify(value));
+  assert.equal(JSON.stringify(second), JSON.stringify(value));
+  const tally = trusted.drain();
+  assert.deepEqual([tally.hits, tally.diskHits], [2, 2]);
+});
+
+test("a stored fact answers the content and the version it was stored for only", () => {
+  const store = memoryStore();
+  viewOver({ store, versions: { slot: "1" } }).ofFile("slot", FILE, () => 1);
+
+  for (const [versions, file] of [
+    [{ slot: "2" }, FILE],
+    [{ slot: "1" }, { ...FILE, content: "export const a = 2;\n" }],
+    [{ slot: "1" }, { ...FILE, path: "src/b.ts" }],
+  ] as const) {
+    const { derive, derived } = counting(2);
+    assert.equal(viewOver({ store, versions }).ofFile("slot", file, derive), 2);
+    assert.equal(derived(), 1, JSON.stringify([versions, file]));
+  }
+});
+
+test("a slot with no version, a derivation that fails and a value with no JSON are never stored", async () => {
+  const disk = { store: memoryStore(), versions: { slot: "1" } };
+  const facts = viewOver(disk);
+
+  facts.ofFile("unversioned", FILE, () => 1);
+  assert.throws(() => facts.ofFile("slot", FILE, () => { throw new Error("cut"); }));
+  await assert.rejects(facts.ofInputs("slot", { at: 1 }, async () => { throw new Error("cut"); }));
+  facts.ofFile("slot", FILE, () => undefined);
+
+  assert.deepEqual([...disk.store.entries], []);
+});
+
+test("a stored fact is counted as a hit of the disk tier and is then held in memory", () => {
+  const disk = { store: memoryStore(), versions: { slot: "1" } };
+  viewOver(disk).ofFile("slot", FILE, () => [1]);
+  const facts = viewOver(disk);
+
+  facts.ofFile("slot", FILE, () => [2]);
+  facts.ofFile("slot", FILE, () => [3]);
+
+  const tally = facts.drain();
+  assert.deepEqual([tally.hits, tally.misses, tally.diskHits, tally.admitted], [2, 0, 1, 1]);
 });

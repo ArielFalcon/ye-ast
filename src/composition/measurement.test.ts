@@ -371,8 +371,8 @@ test("an index discard is an index-cache line with the bytes freed and kept and 
 test("a reader call writes one derived-facts line with what it found and kept, and none when it touched no fact", async () => {
   const { lines, sink } = collecting();
   const tallies: DerivedFactsTally[] = [
-    { hits: 3, misses: 1, admitted: 1, admittedBytes: 40, evicted: 0, skipped: 0, factBytes: 120, retainedBytes: 900 },
-    { hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 120, retainedBytes: 900 },
+    { hits: 3, misses: 1, diskHits: 2, admitted: 1, admittedBytes: 40, evicted: 0, skipped: 0, factBytes: 120, retainedBytes: 900 },
+    { hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 120, retainedBytes: 900 },
   ];
   const facts = { drain: () => tallies.shift()! } as DerivedFacts;
   const reader = measuredDerivedFacts({ read: async () => "answer" }, facts, "import-origins", { sink, redaction });
@@ -380,7 +380,7 @@ test("a reader call writes one derived-facts line with what it found and kept, a
   assert.equal(await reader.read(), "answer");
   await reader.read();
 
-  assert.deepEqual(lines.map(recordOf), [{ event: "derived-facts", reader: "import-origins", hits: 3, misses: 1, admitted: 1, admitted_bytes: 40, evicted: 0, skipped: 0, fact_bytes: 120, retained_bytes: 900 }]);
+  assert.deepEqual(lines.map(recordOf), [{ event: "derived-facts", reader: "import-origins", hits: 3, misses: 1, disk_hits: 2, admitted: 1, admitted_bytes: 40, evicted: 0, skipped: 0, fact_bytes: 120, retained_bytes: 900 }]);
 });
 
 test("a tallied stage writes one line per query, before the query line, with its calls and their summed time", async () => {

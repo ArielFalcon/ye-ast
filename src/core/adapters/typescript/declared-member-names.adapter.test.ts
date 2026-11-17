@@ -661,7 +661,7 @@ test("given derived facts, the member names a file declares are derived once by 
     },
     ofInputs: (_slot, _inputs, derive) => derive(),
     fingerprint: (inputs) => JSON.stringify(inputs),
-    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+    drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };
   const file = { path: "src/a.ts", content: ["const fn = () => 1;", "export function run(list: Repo[]): void {", "  fn.call(undefined);", "  list.save();", "}"].join("\n") };
   const alone = await createTypeScriptMemberNames().memberNames(file);

@@ -267,7 +267,7 @@ A **derived-facts line**, one per call of a reader that found or derived a fact 
 no `cache` line each:
 
 ```json
-{"ye_ast":{"event":"derived-facts","reader":"import-origins","hits":1180,"misses":4,"admitted":4,"admitted_bytes":2210,"evicted":0,"skipped":0,"fact_bytes":1835008,"retained_bytes":9437184}}
+{"ye_ast":{"event":"derived-facts","reader":"import-origins","hits":1180,"misses":4,"disk_hits":0,"admitted":4,"admitted_bytes":2210,"evicted":0,"skipped":0,"fact_bytes":1835008,"retained_bytes":9437184}}
 ```
 
 `hits` and `misses` count the facts the call found kept and the ones it derived, `admitted` and `admitted_bytes` the

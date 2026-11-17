@@ -29,6 +29,9 @@ import { createWorkspaceQueries, createWorkspaceReadOperation } from "../core/ap
 import { createCapturedWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
 import { createCapturedDecisionQueries } from "../core/application/decisions/decision-queries.ts";
 import { createIndexCache } from "../core/adapters/codegraph/cached-index.adapter.ts";
+import { createDerivedFactStore } from "../core/adapters/fs/derived-fact-store.adapter.ts";
+import { STORED_DERIVED_FACT_VERSIONS } from "../core/domain/snapshot/stored-derived-facts.ts";
+import type { DerivedFactRetentionPolicy } from "../core/ports/derived-fact-store.port.ts";
 import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
@@ -99,6 +102,15 @@ const LIVE_RETENTION: LiveRetentionPolicy = { keepScopes: 3, unusedForMs: 14 * D
 /** What a host keeps of the full-index cache unless it overrides it (ADR-0027): the live tree's bound of unused time and of logical bytes. */
 export const INDEX_RETENTION: IndexRetentionPolicy = { unusedForMs: LIVE_RETENTION.unusedForMs, maxBytes: LIVE_RETENTION.maxBytes };
 
+/** What a host keeps of the stored derived facts unless it overrides it (ADR-0077 decision 9): the index cache's bound of unused time and of logical bytes, as a budget of its own. */
+export const DERIVED_FACT_RETENTION: DerivedFactRetentionPolicy = { ...INDEX_RETENTION };
+
+/** The version of the reader of each stored slot with the engines its derivations run on, so a new engine never reads what the old one stored (ADR-0077 decision 2). */
+function storedReaderVersions(engines: Readonly<Record<string, string>>): Readonly<Record<string, string>> {
+  const identity = JSON.stringify(engines);
+  return Object.fromEntries(Object.entries(STORED_DERIVED_FACT_VERSIONS).map(([slot, version]) => [slot, `${version}|${identity}`]));
+}
+
 export interface CompositionOptions {
   /** Directory that holds the temporary exports; the system temporary directory by default. */
   scratchRoot?: string;
@@ -122,6 +134,8 @@ export interface CompositionOptions {
   measure?: MeasurementSink;
   /** How long a kept full index may go unused and how many logical bytes the index cache may occupy; the live tree's bounds unless a host overrides them. */
   indexRetention?: IndexRetentionPolicy;
+  /** How long a stored derived fact may go unread and how many logical bytes they may occupy; the index cache's bounds unless a host overrides them. */
+  derivedFactRetention?: DerivedFactRetentionPolicy;
   /** How many live mirrors stay and for how long; the defaults of RFC-0010 "Retention" unless a host overrides them. */
   liveRetention?: LiveRetentionPolicy;
   /**
@@ -189,8 +203,12 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const reader = createFsSourceReader();
   const digest = createSha256Digest();
   const matcher = createPathMatcher();
-  const snapshotCache = { snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES, measurement === undefined ? undefined : measuredSnapshotCache(measurement), { floor: options.snapshotCacheBytes === undefined }) };
   const entrypointEngines = Object.fromEntries(ENTRYPOINT_ENGINES.map((name) => [name, installedVersion(name)]));
+  const derivedFactDisk = options.indexCache === undefined ? undefined : { store: createDerivedFactStore({ directory: options.indexCache, digest, retention: options.derivedFactRetention ?? DERIVED_FACT_RETENTION }), versions: storedReaderVersions(entrypointEngines) };
+  const snapshotCache = {
+    snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES, measurement === undefined ? undefined : measuredSnapshotCache(measurement), { floor: options.snapshotCacheBytes === undefined }),
+    ...(derivedFactDisk && { derivedFactDisk }),
+  };
   const budget = options.exportBudget && { budget: options.exportBudget };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };
   const graph = measurement === undefined ? createCodeGraph() : measuredGraph(createCodeGraph(), measurement);

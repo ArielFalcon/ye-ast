@@ -41,12 +41,12 @@ export interface SnapshotRetention {
   facts: DerivedFacts;
 }
 
-export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "digest">, identity: string, listing: object, trust: TrustMode): SnapshotRetention | undefined {
+export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "derivedFactDisk" | "digest">, identity: string, listing: object, trust: TrustMode): SnapshotRetention | undefined {
   const cache = deps.snapshotCache;
   if (cache === undefined) return undefined;
   let entry: string | undefined;
   return {
-    facts: createDerivedFacts(cache, deps.digest, trust),
+    facts: createDerivedFacts(cache, deps.digest, trust, deps.derivedFactDisk),
     lookup() {
       if (entry === undefined) {
         cache.beginRead();
