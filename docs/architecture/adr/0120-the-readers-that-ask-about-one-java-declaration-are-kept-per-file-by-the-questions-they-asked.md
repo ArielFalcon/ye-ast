@@ -35,7 +35,7 @@ anything (`provesBinding`), which ADR-0119 already answers from the index.
 ## Decision
 
 1. **Each reader is a per-file derivation**, kept by `DerivedFacts.ofReads` and stored on disk at version 1
-   (ADR-0117 decision 5): `java-declared-supertypes`, `java-implicit-chains`, `java-argument-counts`, `java-accepted-counts`, `java-implemented-declarations` and `java-receiver-fits`; the root origins of a file of sites follow the same rule under `java-root-origins` (RFC-0040 L13), and the root bindings under `java-root-bindings` (RFC-0040 L15). The subject is
+   (ADR-0117 decision 5): `java-declared-supertypes`, `java-implicit-chains`, `java-argument-counts`, `java-accepted-counts`, `java-implemented-declarations` and `java-receiver-fits`; the root origins of a file of sites follow the same rule under `java-root-origins` (RFC-0040 L13), the root bindings under `java-root-bindings` and the declared types under `java-declared-types` (RFC-0040 L15). Whether any file may make a value of a platform type run repository code, which the declared types read over every source, is kept per file under `java-opens-platform-types` and asked in source order until one file does. The subject is
    the file's path and content digest, the sorted distinct places asked of the file, and whether the build generates
    interfaces. The value is the answer for each place. The sites are asked of the file's own types and methods through
    the project (`typesOf`, a method by place), never by a scan of the project.

@@ -101,6 +101,8 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "java-declared-supertypes": [1, "b8ae346f455499547b6d9b411349b1f46826c212414f75bcccd21caa3d56d95c"],
   "java-root-origins": [1, "b143a99258135457f3739eb131887755ec6e559865bafe4b9ed73554922d3050"],
   "java-root-bindings": [1, "2c10462e845e2c3348bccdf8c552f52edd4625b9c6f3410dd699f93952d90813"],
+  "java-declared-types": [1, "ca83ebbb6ddfc18a3e70166b58a6fb5dee2b93f159d2289c6d7b48af2deb8142"],
+  "java-opens-platform-types": [1, "61693a10663b507ea9b8a64be73d0bf9ad1ecf7181ceb9edd763eb65e2b32763"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
   "ts-module-resolutions": [1, "06babd9d9388578f4fac7b2d6655e24b5df82a7f5c1aa5b6d5dec0c70e1125c9"],
 };
@@ -178,6 +180,10 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   const bindingFacts = recordingFacts((slot, value) => slot === "java-root-bindings" && record(slot, value));
   const useSite = (written: string, spelled: string) => ({ file: JAVA_FILE.path, line: 2, column: JAVA_FILE.content.split("\n")[1]!.indexOf(written) + 1, spelled, owner: { name: "run", line: 2, endLine: 2 } });
   await createJavaNameBindings(() => createJavaParser(holds), javaSources, javaSources.map(({ path }) => path), bindingFacts, hold).rootBindings([useSite("new B()", "B"), useSite("b.go()", "b"), useSite("Runnable", "Runnable")]);
+  const typedFacts = recordingFacts((slot, value) => (slot === "java-declared-types" || slot === "java-opens-platform-types") && record(slot, value));
+  const typed: SourceFile = { path: "src/main/java/app/Typed.java", content: "package app;\nimport java.util.List;\nclass Typed { void run(List<String> items, Object other) {} }\n" };
+  const typedSite = (spelled: string) => ({ file: typed.path, line: 3, column: typed.content.split("\n")[2]!.indexOf(spelled) + 1, spelled, owner: { name: "run", line: 3, endLine: 3 } });
+  for (const typedSources of [[JAVA_TARGET, typed], [JAVA_TARGET, typed, JAVA_FILE]]) await createJavaNameBindings(() => createJavaParser(holds), typedSources, typedSources.map(({ path }) => path), typedFacts, hold).declaredTypes([typedSite("List"), typedSite("Object")]);
   hold.release();
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));

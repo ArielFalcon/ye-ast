@@ -5,11 +5,12 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.ts";
-import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, ImportOrigins, ResolvedNameSite, UseSite } from "../../ports/import-origins.port.ts";
 import { createJavaRootBindings } from "./java-root-bindings.ts";
-import { createJavaDeclaredTypes } from "./java-declared-types.ts";
+import { createJavaDeclaredTypes, declaredTypeAt, opensPlatformTypes } from "./java-declared-types.ts";
 import { createJavaDispatchTargets, createJavaOutsideSupertypes } from "./java-dispatch-targets.ts";
-import { keptByFile, keptReads } from "./java-kept-reads.ts";
+import { keptByFile, keptFirstByFile, keptReads, type KeptReads } from "./java-kept-reads.ts";
+import { questions } from "./java-declaration-questions.ts";
 import { createJavaReceiverFits } from "./java-receiver-fits.ts";
 import { createJavaArgumentCounts, createJavaDeclaredSupertypes, createJavaImplementedDeclarations, createJavaImplicitChains, createJavaReceiverMethods, provesBinding, provesFromIndex } from "./java-receiver-methods.ts";
 import { declaredVariablesOnce, declaresAnyVariable, type DeclaredVariables } from "../tree-sitter/java-declared-variables.ts";
@@ -21,6 +22,10 @@ import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import { projectBuildIn } from "./api-delegates.ts";
 
 const ROOT_ORIGINS_SLOT = "java-root-origins";
+const DECLARED_TYPES_SLOT = "java-declared-types";
+/** Per file: whether a declaration or a value it writes may make a value of a platform type run repository code. */
+const OPENS_PLATFORM_TYPES_SLOT = "java-opens-platform-types";
+const UNKNOWN_TYPE: DeclaredType = { kind: "unknown" };
 const PLAIN_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 /** A package starts lowercase, so a qualified name whose first segment does is one. */
 const PACKAGE_SEGMENT = /^[a-z]/;
@@ -55,7 +60,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources, build, reads)(sites, signal),
-    declaredTypes: createJavaDeclaredTypes(parser, sources, paths, build),
+    declaredTypes: reads === undefined ? createJavaDeclaredTypes(parser, sources, paths, build) : async (sites, signal) => (unreadJvm || sites.length === 0 || signal?.aborted ? sites.map(() => UNKNOWN_TYPE) : keptDeclaredTypes(reads, { parser, sources, build, over: "sources" }, sites)),
     dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold, build, libraries),
     receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold, build, reads),
     implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build, reads),
@@ -87,6 +92,24 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
     },
   };
 }
+
+/**
+ * `declaredTypes` kept (ADR-0120): unknown while a source is unread, asked of the index, or while a file opens platform
+ * types to repository code, kept per file and asked in source order until one does; otherwise each file of sites kept by
+ * the questions its derivation asked.
+ */
+async function keptDeclaredTypes(reads: KeptReads, reading: Omit<Parameters<typeof keptByFile>[1], "slot">, sites: readonly UseSite[]): Promise<DeclaredType[]> {
+  const index = await reads.index();
+  if ((JSON.parse(index.answer(questions.unread())) as { files: readonly unknown[] }).files.length > 0) return sites.map(() => UNKNOWN_TYPE);
+  const opening = await keptFirstByFile(reads, { ...reading, slot: OPENS_PLATFORM_TYPES_SLOT }, reading.sources.map(({ path }) => path), (opens: boolean) => opens, ({ project, files }, path) => {
+    const file = files.get(path);
+    return file !== undefined && opensPlatformTypes(file, project);
+  });
+  if (opening === true) return sites.map(() => UNKNOWN_TYPE);
+  return [...(await keptByFile<UseSite, DeclaredType>(reads, { ...reading, slot: DECLARED_TYPES_SLOT }, sites, declaredPlaceOf, UNKNOWN_TYPE, ({ project, files }, places) => places.map((site) => declaredTypeAt(site, files.get(site.file), project))))];
+}
+
+const declaredPlaceOf = ({ line, column, spelled }: UseSite): string => JSON.stringify([line, column, spelled]);
 
 /** Where a site is rooted, as kept: the origin and its marks, or `null` where the scoping does not settle it. */
 type Root = { origin: ImportOrigin; bare?: true; pastRoot?: true } | null;
