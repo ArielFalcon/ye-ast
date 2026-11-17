@@ -183,6 +183,12 @@ with the digest of `ct.sym`, and one it could not use (unreadable, without its r
 file states as a literal) is a `build-output` cut. Nothing is shipped from a JDK, and no answer's steps or links change yet
 ([ADR-0063](docs/architecture/adr/0063-a-jdk-the-host-declares-is-the-library-signature-source.md)).
 
+Every command, `serve`, `mcp` and `init` accept `--cache <dir>` once: the directory ye-ast keeps its index cache, its
+derived facts (`derived-facts/`) and the MCP answer files (`answers/`) in, instead of `$XDG_CACHE_HOME/ye-ast`. It wins
+over the environment, `init --cache ...` prints a registration that carries it, and a symbolic link, another account's
+directory or one open to the group or others is refused as a usage error
+([ADR-0077](docs/architecture/adr/0077-derived-facts-persist-by-content-in-ye-asts-own-store.md), decision 6).
+
 <details open>
 <summary><b>Claude Code</b></summary>
 
