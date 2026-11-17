@@ -139,6 +139,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
     const { facts: kept, hold: held } = reading;
     const index = await reading.index();
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
+    let projectOf: ReturnType<typeof heldProject> | undefined;
     const byFile = Map.groupBy(sites.entries(), ([, site]) => site.file);
     for (const [path, entries] of byFile) {
       if (signal?.aborted) throw new DeadlineCut(results);
@@ -148,7 +149,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       const subject = { path, content, sites: places, generatesInterfaces: build.generatesInterfaces === true, generated };
       const placeIndex = new Map(places.map(([line, column, member], at) => [callKey(line, column, member), at]));
       const readings = await kept.ofReads(SITES_SLOT, subject, index.answerIfKnown, async (record) => {
-        const { project, files } = await heldProject(held, parser, sources, build);
+        const { project, files } = await (projectOf ??= heldProject(held, parser, sources, build));
         const asked = (question: string): string => {
           const answer = index.answer(question);
           record(question, answer);

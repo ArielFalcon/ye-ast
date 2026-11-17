@@ -61,19 +61,20 @@ export async function keptByFile<S extends { file: string }, A>(
   if (sites.length === 0) return [];
   const index = await kept.index();
   const results: A[] = sites.map(() => unknown);
+  let project: ReturnType<typeof heldProject> | undefined;
   for (const [path, entries] of Map.groupBy(sites.entries(), ([, site]) => site.file)) {
     const content = index.answer(questions.file(path));
     if (content === "") continue;
     const places = [...new Map(entries.map(([, site]) => [placeOf(site), site])).entries()].sort(([a], [b]) => byText(a, b));
     const subject = { path, content, places: places.map(([place]) => place), generatesInterfaces: reading.build.generatesInterfaces === true };
     const answers = await kept.facts.ofReads(reading.slot, subject, index.answerIfKnown, async (record) => {
-      const { project, files } = await heldProject(kept.hold, reading.parser, reading.sources, reading.build, reading.over);
+      const { project: over, files } = await (project ??= heldProject(kept.hold, reading.parser, reading.sources, reading.build, reading.over));
       const asked = (question: string): string => {
         const answer = index.answer(question);
         record(question, answer);
         return answer;
       };
-      return project.reading((question) => void asked(question), () => derive({ project, files, asked }, places.map(([, site]) => site)));
+      return over.reading((question) => void asked(question), () => derive({ project: over, files, asked }, places.map(([, site]) => site)));
     });
     const at = new Map(places.map(([place], position) => [place, position]));
     for (const [position, site] of entries) results[position] = answers[at.get(placeOf(site))!]!;
