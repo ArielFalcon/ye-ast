@@ -441,7 +441,11 @@ manifest beside the baselines.
 
    ```bash
    node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>]
+   node --import tsx scripts/latency-bench.ts --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]
    ```
+
+   `--quick` asks `callers` and `outline` of one repository, unchanged and after an edit, five times each, so an
+   integration batch is compared with the same cells of a full run in a few minutes.
 5. **The transport harness**, a script: the real environment is a host over stdio, so this is the only step that
    exercises `serve` and `mcp`, and the only one that provokes the failures nobody should discover in production:
    missing store, schema outside range (`src/core/adapters/codegraph/store-version.ts:4`), incomplete index, deadline,

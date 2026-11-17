@@ -6,12 +6,15 @@
  *
  *   node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir>
  *     [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>]
+ *   node --import tsx scripts/latency-bench.ts --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]
  *
  * Scenarios: `unchanged` (interleaved rounds of every family on a warm live process), `edit-idle` (an edit, 2 s idle,
  * then the call), `edit-now` (an edit, then the call at once), `new-process` (the first call of a new process over the
  * warm disk cache), `three-servers` (three processes on one clone ask at once), `revision` (a first-parent sha sequence
  * on an untrusted clone, first and repeated call per sha) and `rss-slope` (`--edits` edits, each followed by the next
- * family's call). Every live scenario first runs one round that warms the process (`first-round`). Writes
+ * family's call). Every live scenario first runs one round that warms the process (`first-round`). `--quick` asks
+ * `callers` and `outline` of one repository, unchanged and after an edit, 5 times each: the check of an integration
+ * batch, against the same cells of a full run. Writes
  * `<out>/latency-report.json` and `<out>/latency-report.md`; exits 1 when a call wrote no query line.
  */
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -23,8 +26,9 @@ import { atSnapshot, corpusRepositories, toolCallOf, type CorpusRepository, type
 import { isolatedEnvironment, startMcp, type McpSession } from "./latency-session.ts";
 import { cellSummary, cellTable, sampleOf, slope, type CallSample, type CellSummary } from "./latency-stats.ts";
 
-const USAGE = "usage: node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>]";
+const USAGE = "usage: node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>] | --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]";
 const FAMILIES = ["callers", "trace", "impact", "outline", "importers", "entrypoints", "workspace"] as const;
+const QUICK = { families: ["callers", "outline"], scenarios: ["unchanged", "edit-now"], repetitions: 5 } as const;
 const SCENARIOS = ["unchanged", "edit-idle", "edit-now", "new-process", "three-servers", "revision", "rss-slope"] as const;
 const IDLE_MS = 2_000;
 
@@ -35,6 +39,7 @@ interface Options {
   repos: string[];
   out: string;
   scenarios: Set<Scenario>;
+  families: readonly string[];
   repetitions: number;
   edits: number;
   revisions: number;
@@ -52,20 +57,25 @@ function parseOptions(): Options {
       edits: { type: "string", default: "200" },
       revisions: { type: "string", default: "3" },
       engine: { type: "string", default: resolve(import.meta.dirname, "..") },
+      quick: { type: "boolean", default: false },
     },
   });
-  const scenarios = values.scenarios.split(",");
+  if (values.quick && (values.repo?.length !== 1 || process.argv.some((argument) => /^--(scenarios|repetitions|edits|revisions)\b/u.test(argument)))) {
+    process.stderr.write(`${USAGE}\n`);
+    process.exit(2);
+  }
+  const scenarios = values.quick ? [...QUICK.scenarios] : values.scenarios.split(",");
   const counts = [values.repetitions, values.edits, values.revisions].map(Number);
   if (values.corpus === undefined || values.repo === undefined || values.out === undefined || !scenarios.every((name) => (SCENARIOS as readonly string[]).includes(name)) || !counts.every((count) => Number.isInteger(count) && count >= 1)) {
     process.stderr.write(`${USAGE}\n`);
     process.exit(2);
   }
-  return { corpus: resolve(values.corpus), repos: values.repo, out: resolve(values.out), scenarios: new Set(scenarios as Scenario[]), repetitions: counts[0]!, edits: counts[1]!, revisions: counts[2]!, engine: resolve(values.engine) };
+  return { corpus: resolve(values.corpus), repos: values.repo, out: resolve(values.out), scenarios: new Set(scenarios as Scenario[]), families: values.quick ? QUICK.families : FAMILIES, repetitions: values.quick ? QUICK.repetitions : counts[0]!, edits: counts[1]!, revisions: counts[2]!, engine: resolve(values.engine) };
 }
 
 /** The call of each bench family: the repository's first gate query of that family, or the family with no argument when it needs none. */
-function familyCalls(repo: CorpusRepository): ToolCall[] {
-  return FAMILIES.flatMap((family) => {
+function familyCalls(repo: CorpusRepository, families: readonly string[]): ToolCall[] {
+  return families.flatMap((family) => {
     for (const query of repo.queries) {
       const call = toolCallOf(query.argv);
       if ("tool" in call && call.family === family) return [call];
@@ -125,7 +135,7 @@ async function benchRepository(options: Options, repo: CorpusRepository, recorde
   for (const directory of ["cache", "config", "tmp"]) mkdirSync(join(home, directory), { recursive: true });
   const env = isolatedEnvironment(home);
   const cache = privateDirectory(join(scratch, "cache"));
-  const calls = familyCalls(repo);
+  const calls = familyCalls(repo, options.families);
   const live: Snapshot = { kind: "live" };
   const log = (line: string) => process.stderr.write(`bench ${repo.name}: ${line}\n`);
   log(`scratch ${scratch}`);
