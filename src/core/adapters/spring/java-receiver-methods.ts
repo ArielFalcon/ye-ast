@@ -13,7 +13,7 @@ import { javaReceiverBindings, statedType } from "../tree-sitter/java-receiver-b
 import { annotationAt, CALL_REWRITING_ANNOTATIONS, isAnonymous, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
-import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, writtenSimpleName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 import { indexWrites, projectWrites, type FilesWriting } from "./java-written-names.ts";
 import { javaDeclarationIndex, type JavaDeclarationIndex } from "./java-declaration-index.ts";
@@ -664,10 +664,10 @@ export function createResolver(project: JavaProject, generated = false, writes: 
     let known = unplacedBelowOf.get(type);
     if (known === undefined) {
       known =
-        writes("supertype", type.name).some((file) => project.typesOf(file).some((placed) => unsettledGaps(declaredHierarchy(placed)).some((gap) => lastSegment(gap.name) === type.name && !isOutsideSupertype(gap)))) ||
+        writes("supertype", type.name).some((file) => project.typesOf(file).some((placed) => unsettledGaps(declaredHierarchy(placed)).some((gap) => writtenSimpleName(gap.name) === type.name && !isOutsideSupertype(gap)))) ||
         writes("unplaced-supertype", type.name).some((file) =>
           unplacedSupertypes(file).some(({ supertype, scope }) => {
-            if (lastSegment(typeNodeName(supertype)) !== type.name) return false;
+            if (writtenSimpleName(typeNodeName(supertype)) !== type.name) return false;
             const found = resolve(supertype, file, project, scope, supertype, true);
             return found?.kind === "repository" && found.type !== undefined ? found.type === type : found?.kind !== "platform" && found?.kind !== "library";
           }),
@@ -1270,7 +1270,6 @@ function namesAnyDynamicImplementation(file: JavaFile, project: JavaProject): bo
   return false;
 }
 
-const lastSegment = (written: string): string => written.split(".").at(-1) ?? "";
 
 /** How many methods of the name a type body declares. */
 function declaredMethods(body: Node, name: string): number {

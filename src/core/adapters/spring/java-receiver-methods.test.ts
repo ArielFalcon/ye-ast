@@ -730,6 +730,19 @@ test("a class below the receiver's type through a type between them is among the
   assert.deepEqual(await methodAt([port, mid, leaf, call], "findById"), { kind: "unproven", candidates: [place(leaf, 4), place(port, 4)], open: true });
 });
 
+test("a supertype qualified with spaces or a line break places the types below it like one written without them", async () => {
+  const port = java("Port.java", ["package app;", "", "interface Port extends com.lib.Outside<String, Long> {", "  String findById(Long id);", "}"]);
+  const call = use("port.findById(1L)", [], "Port port");
+  const spaced = java("Leaf.java", ["package app;", "", "class Leaf implements app . Port {", "  public String findById(Long id) { return null; }", "}"]);
+  const mid = java("Mid.java", ["package app;", "", "interface Mid extends app.", "    Port {}"]);
+  const below = java("Low.java", ["package app;", "", "class Low implements Mid {", "  public String findById(Long id) { return null; }", "}"]);
+  const anonymous = java("Wire.java", ["package app;", "", "class Wire {", "  Object m() { return new app . Port() { public String findById(Long id) { return null; } }; }", "}"]);
+
+  assert.deepEqual(await methodAt([port, spaced, call], "findById"), { kind: "unproven", candidates: [place(spaced, 4), place(port, 4)], open: true });
+  assert.deepEqual(await methodAt([port, mid, below, call], "findById"), { kind: "unproven", candidates: [place(below, 4), place(port, 4)], open: true });
+  assert.deepEqual(await methodAt([port, anonymous, call], "findById"), { kind: "unproven" });
+});
+
 test("a type whose supertype the sources leave unsettled under the name of the receiver's type may stand below it", async () => {
   const problem = java("Problem.java", ["package app;", "", "class Problem extends Exception {", "  void setCode(String code) {}", "}"]);
   const first = javaIn("a", "Problem.java", ["package a;", "", "public class Problem {}"]);

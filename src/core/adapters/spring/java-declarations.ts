@@ -5,7 +5,7 @@ import { constantNamesOf } from "./java-ambiguous-names.ts";
 import type { JavaMarker } from "./java-declaration-questions.ts";
 import { CALL_REWRITING_ANNOTATIONS, DYNAMIC_IMPLEMENTATIONS, FUNCTION_VALUES, isAnonymous, isAspect, supertypesOf } from "./java-declared-types.ts";
 import { withJavaSources } from "./java-project.ts";
-import { createJavaProject, isTypeDeclaration, modifierWords, supertypeClauses, typeNodeName, type JavaFile, type TypeDecl, type TypeKind } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, modifierWords, supertypeClauses, typeNodeName, writtenSimpleName, type JavaFile, type TypeDecl, type TypeKind } from "./java-symbols.ts";
 
 /** How a source reads: its declarations and bodies, its declarations only (each syntax error lies in a member body), no syntax tree, or declarations that cannot be listed. */
 export type DeclarationState = { state: "read" } | { state: "declarations-only"; line: number } | { state: "unparsed"; line: number } | { state: "unreadable" };
@@ -108,10 +108,9 @@ export function declaredType(type: TypeDecl): DeclaredType {
 
 function annotationNames(declaration: Node): string[] {
   const modifiers = declaration.namedChildren.find((child) => child?.type === "modifiers");
-  return (modifiers?.namedChildren ?? []).flatMap((child) => (child?.type === "marker_annotation" || child?.type === "annotation" ? [simpleName(child.childForFieldName("name")?.text ?? "")] : []));
+  return (modifiers?.namedChildren ?? []).flatMap((child) => (child?.type === "marker_annotation" || child?.type === "annotation" ? [writtenSimpleName(child.childForFieldName("name")?.text ?? "")] : []));
 }
 
-const simpleName = (written: string): string => written.split(".").at(-1) ?? "";
 
 export function bodyOf(file: JavaFile, types: readonly TypeDecl[]): BodySummary {
   const placed = new Set(types.map((type) => type.node.id));
@@ -126,8 +125,8 @@ export function bodyOf(file: JavaFile, types: readonly TypeDecl[]): BodySummary 
       const written = node.namedChildren.at(-1)?.text;
       if (written !== undefined) references.add(written);
     }
-    if ((isTypeDeclaration(node) && !placed.has(node.id)) || isAnonymous(node)) for (const supertype of supertypesOf(node)) unplaced.add(simpleName(typeNodeName(supertype)));
-    if ((node.type === "marker_annotation" || node.type === "annotation") && CALL_REWRITING_ANNOTATIONS.has(simpleName(node.childForFieldName("name")?.text ?? ""))) markers.add("call-rewriting");
+    if ((isTypeDeclaration(node) && !placed.has(node.id)) || isAnonymous(node)) for (const supertype of supertypesOf(node)) unplaced.add(writtenSimpleName(typeNodeName(supertype)));
+    if ((node.type === "marker_annotation" || node.type === "annotation") && CALL_REWRITING_ANNOTATIONS.has(writtenSimpleName(node.childForFieldName("name")?.text ?? ""))) markers.add("call-rewriting");
     if (isAspect(node)) markers.add("aspect");
     if ((node.type === "identifier" || node.type === "type_identifier") && DYNAMIC_IMPLEMENTATIONS.has(node.text)) markers.add("dynamic-implementation");
     for (const child of node.namedChildren) if (child !== null) pending.push(child);

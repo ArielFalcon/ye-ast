@@ -304,6 +304,11 @@ export function typeNodeName(node: Node): string {
   return (node.type === "generic_type" ? node.namedChildren[0] : node)?.text ?? "";
 }
 
+/** The simple name a written type name ends with; the spaces and line breaks Java allows inside a qualified name are not part of it. */
+export function writtenSimpleName(written: string): string {
+  return written.replace(/\s+/g, "").split(".").at(-1) ?? "";
+}
+
 function interfaceNodes(type: TypeDecl): Node[] {
   const clause =
     type.kind === "interface"

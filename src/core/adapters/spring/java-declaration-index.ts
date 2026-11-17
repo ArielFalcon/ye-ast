@@ -3,7 +3,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { BUILD_PARTS, JAVA_DECLARATIONS_SLOT, JAVA_MARKERS, NAMING_KINDS, PACKAGE_QUESTIONS, type BuildPart, type JavaMarker, type NamingKind, type PackageQuestion } from "./java-declaration-questions.ts";
 import { declarationsOf, type BodySummary, type DeclaredType, type DeclarationState, type JavaDeclarations } from "./java-declarations.ts";
-import { claimedPlatformPackage } from "./java-symbols.ts";
+import { claimedPlatformPackage, writtenSimpleName } from "./java-symbols.ts";
 
 export interface DeclarationIndexInputs {
   /** What the build states about the sources (ADR-0062). */
@@ -123,7 +123,7 @@ export function namingsOf(files: readonly { path: string; types: readonly Declar
   const add = (kind: NamingKind, name: string, path: string) => (kinds[kind].get(name) ?? kinds[kind].set(name, new Set()).get(name)!).add(path);
   for (const { path, types, body } of files) {
     for (const type of types) {
-      for (const supertype of type.supertypes) add("supertype", simpleName(supertype.name), path);
+      for (const supertype of type.supertypes) add("supertype", writtenSimpleName(supertype.name), path);
       for (const annotation of type.annotations) add("annotation", annotation, path);
       for (const constant of type.constantNames) add("constant", constant, path);
     }
@@ -145,6 +145,3 @@ function prefixesOf(packageName: string): string[] {
   return parts.map((_, end) => parts.slice(0, end + 1).join("."));
 }
 
-function simpleName(written: string): string {
-  return written.split(".").at(-1) ?? "";
-}

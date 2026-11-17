@@ -56,6 +56,7 @@ const JAVA_CALLBACKS: SourceFile = {
     "",
   ].join("\n"),
 };
+const JAVA_SPACED: SourceFile = { path: "src/main/java/app/Spaced.java", content: ["package app;", "class Spaced implements app . Port, app.", "    Store { Object o = new java . lang . Thread() {}; }", ""].join("\n") };
 const JAVA_AMBIGUOUS: SourceFile = { path: "src/main/java/app/Ambiguous.java", content: ["package app;", "import first.*;", "import second.*;", "class Ambiguous implements UserDetailsService {}", ""].join("\n") };
 const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export function run(redact: () => void): void {", "  redact();", "}", ""].join("\n") };
 const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };
@@ -77,7 +78,7 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "ts-module-statements": [1, "91ab9359a95e086f838319423bdedbe521677be9a9aeeeaa9559d89865c9aaa7"],
   "ts-default-declaration": [1, "bb5c1e3feab5ef3908224d5f2c0eabde6442b0d5202265d2d7b2f4aee3b13de8"],
   "java-receiver-bindings": [1, "90990e5ddeb91598c35caee6778aaeb4bcfbeca882230eda67aed1a064c6760d"],
-  "java-declarations": [1, "c071c93f19ce4e2529f88d5ec16c4e6d215754db03c734a36c5eca20db082d54"],
+  "java-declarations": [2, "59a853a37051542aa9e4d64ea5e394852d0052252bfd57bff9ea9ac6ccdd9b5e"],
   "java-relations": [1, "44a95dcd724d82e01cf726296313a3daebdeb01f5dda377fb39806c7dd0b85c7"],
   "java-entrypoints": [1, "3a63c07df1763ffeacea0e437ac9a1ada4f10d0de462ec6f50ca063ea72c1cb0"],
   "java-callbacks": [1, "31e796b313e5ab7c1a14d463c85c1e147f377e0585c86f8d0742b4d0fbc8eaf9"],
@@ -121,7 +122,7 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   await origins.replacedRoots();
   await createModuleDependenciesReader().extract([IMPORTER, LATER], { facts });
   await createJavaReceiverMethods(createJavaParser, [JAVA_FILE], [JAVA_FILE.path], facts)([{ file: JAVA_FILE.path, line: 2, column: 36, member: "go" }]);
-  javaDeclarationIndex(facts, await createJavaParser(), [JAVA_FILE], { generatesInterfaces: false, unreadJvm: false });
+  javaDeclarationIndex(facts, await createJavaParser(), [JAVA_FILE, JAVA_SPACED], { generatesInterfaces: false, unreadJvm: false });
   const holds = createJavaTreeHolds();
   const hold = holds.open();
   const javaSources = [JAVA_FILE, JAVA_TARGET, JAVA_CONTROLLER, JAVA_WEB_CONFIG, JAVA_CALLBACKS, JAVA_AMBIGUOUS];
