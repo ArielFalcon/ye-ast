@@ -355,6 +355,56 @@ What it settles:
 - A configuration, contract or generator edit derives every file: they are in the subject in full. A lookup of a
   configuration property as a recorded question would narrow that and is not built.
 
+### The callback walk per file (2026-11-17)
+
+Same backend, the stdio MCP, live, `callers`, p50 of five rounds (three for the second first call), one machine, host loaded
+by other sessions, so read the stage figures and not the wall of a call: the unchanged rows differ by host load alone
+(their `entrypoints` and `relations` stages are 0 ms in both). Candidate (ADR-0118) against main a9686b329, measured in turn.
+
+| | Before | After |
+|---|---|---|
+| `entrypoints` stage, one edit | 914 ms | 619 ms |
+| `relations` stage, one edit | 189 ms | 239 ms |
+| `receiver-methods` stage, one edit | 656 ms | 797 ms |
+| First call of a process, warm disk: `entrypoints` | 1,296 ms | 486 ms |
+| First call of a process, warm disk: `relations` | 433 ms | 485 ms |
+| First call of a process, empty cache: `entrypoints` | 3,164 ms | 3,570 ms |
+| `callers`, unchanged (stages 0 ms in both) | 6,567 / 6,666 ms | 7,226 / 7,222 ms |
+
+The answer is the bytes of the whole-project walk: the Spring routes of four Java repositories (1,210, 136, 109 and 64
+sources; 224,908 bytes of findings for the largest) are equal between the tree before and the candidate, cold and kept, and
+a kept read after one edit equals a cold read of the edited sources. One edit derives three entries (the file's
+declarations, entrypoints and callbacks).
+
+What it settles:
+
+- The one-edit `entrypoints` stage falls by 0.3 s and the first call of a process with a warm disk by 0.8 s, because a
+  read that finds no Java change no longer builds the held project for the stage: every file hits and none is parsed.
+- What the stage still pays after one edit (0.6 s) is the held project a miss needs (a parse of every source and a project
+  build, about 0.5 s in this host's load) and the derivation of the changed file. `receiver-methods` and `relations`
+  build the same project in the same call, so it is paid once by whichever stage misses first: M5 is the only unit left
+  that lowers it, and it needs the per-file walk of M4 first, because `receiver-methods` still reads every tree.
+- The first call with an empty cache pays about 0.4 s more for the third slot it writes.
+
+### M4: what is left of `receiver-methods` (2026-11-17)
+
+`receiver-methods` is kept as one `ofInputs` entry over the whole listing and the asked sites, so any edit derives every
+asked site (656 ms for 13 calls). Its per-file form reads the project through these places in
+`java-receiver-methods.ts`, each of which becomes a recorded question before a derivation per file of sites is sound:
+
+| Global read | Where | Becomes |
+|---|---|---|
+| `provesBinding`: every source read, no dynamic implementation, no call-rewriting annotation anywhere | `provesBinding` (`namesAnyDynamicImplementation`, `rewritesCalls` over every file) | P8 and P7 for `dynamic-implementation` and `call-rewriting` (both markers are in the index) |
+| `readUnplacedBelow`: the supertypes of every anonymous and local class, and every unsettled supertype name | `readUnplacedBelow` | P6 `unplaced-supertype` for the name of the type and of each type below it, then P1 of each path answered |
+| `isReferenced`: a method reference naming the method anywhere | `isReferenced` | P6 `method-reference` for the name |
+| The types below a type: every type whose declared hierarchy includes it | `runnableAmong` (`project.types.filter(declaredHierarchy(other)...)`) | P6 `supertype` for the type's simple name, then the hierarchy of each path answered, each recorded |
+| A type by qualified name, a package listing, the types of the site's file | `project.types.find(fqn)`, `project.types.some(package)`, `project.types.filter(file)` | P3, P4 and `typesOf(path)` |
+| `methodsByPlace` over every type | `methodsByPlace` (shared with the dispatch readers) | a lookup by the file of the site |
+
+The index holds every marker and naming kind these need, so the unit adds no primitive. It is larger than the three
+before it: the resolver is about 670 lines, every site of the table changes how it reads, and an answer that differs in a
+byte moves `callers`, so it is its own unit with the whole-project answer kept as the differential reference.
+
 ## Open questions
 
 | # | Question | Recommendation |
@@ -365,5 +415,5 @@ What it settles:
 | 4 | Do the `ofReads` entries persist on disk? | Yes, as M6, after the memory tier is measured. They are per-file derivations, not the whole answers ADR-0077 keeps out. Done (ADR-0117) |
 | 5 | May a migrated derivation call `everyFile()`? | No. The three measured derivations reach zero; other readers stay on a frozen list |
 | 6 | Does the gate gain the pass warmed on the parent commit? | Yes, for units that touch `ofReads`. It is the only proof over real changes |
-| 7 | Is M5 built? | Not before the callback walk is per file: after M3 that walk reads every tree at each run of the stage, so parsing on demand saves nothing ("M3 and M6" above) |
+| 7 | Is M5 built? | Not before `receiver-methods` is per file: the callback walk is per file since ADR-0118, so the entrypoints stage builds no project when nothing changed, but `receiver-methods` still reads every tree ("The callback walk per file" above) |
 | 8 | Does the TypeScript program get the same surface? | Not here. `ofReads` names no language and can serve it; the checker hands out objects this RFC does not wrap |
