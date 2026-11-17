@@ -359,3 +359,16 @@ test("a dotted dependency coordinate holding a keyword inside a word is kept, an
   }
   assert.equal(sanitizeText(`${coordinate}:token=${secret}`).text.includes(secret), false);
 });
+
+test("an email that starts where the previous one's domain ended is redacted too", () => {
+  assert.equal(sanitizeText("a@b.com.x@y.org and p@q.rs").text, "[REDACTED][REDACTED] and [REDACTED]");
+});
+
+test("a data URI that starts where the previous one's payload ended stays whole, and the text between them is still redacted", () => {
+  const payload = "A".repeat(45);
+  assert.equal(sanitizeText(`data:x;base64,data:ab@c.de data:a;base64,${payload}`).text, `data:x;base64,data:[REDACTED] data:a;base64,${payload}`);
+});
+
+test("a token whose first segment repeats the JWT prefix is redacted from the first prefix", () => {
+  assert.equal(sanitizeText("xeyJeyJab.cd.ef").text, "x[REDACTED]");
+});

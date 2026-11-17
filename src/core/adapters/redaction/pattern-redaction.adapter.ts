@@ -30,10 +30,11 @@ function isModelModeSecretValue(match: string): boolean {
 
 /* A keyword inside a lowercase word of a dotted group followed by `:artifact:version` is a dependency coordinate (`io.jsonwebtoken:jjwt-api:0.11.5`), not an assignment. The exemption sits in the pattern, not in a skip, so a keyword later in the same token is still found. A name that starts at the keyword (`db.password=`), a camelCase word (`app.clientSecret:`), any other separator, a value that is not a lowercase artifact followed by `:` (`app.authtoken:S3cret`), and a quoted or spaced value keep the rule. */
 const CREDENTIAL_KEYWORD = "(?:api[_-]?key|token|secret|password|passwd|pwd)";
-const DOTTED_COORDINATE = `(?<=\\.[\\w-]*[a-z0-9])(?-i:(?=[a-z]))${CREDENTIAL_KEYWORD}(?-i::[a-z0-9][a-z0-9._-]*:[\\w.-])`;
+const DOTTED_COORDINATE = `(?=(?-i:(?=[a-z]))${CREDENTIAL_KEYWORD}(?-i::[a-z0-9][a-z0-9._-]*:[\\w.-]))(?<=\\.[\\w-]*[a-z0-9])`;
 const API_KEY_ASSIGNMENT = new RegExp(`(?!${DOTTED_COORDINATE})${CREDENTIAL_KEYWORD}[\\"']?\\s*[:=]\\s*(?:"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\\S+)`, "gi");
 
-const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skip?: (m: string, offset: number, text: string) => boolean; modelSkip?: (m: string) => boolean }> = [
+/* Each pattern reads a run once: a start that cannot match fails at once (a gate before the keyword, a lookbehind that leaves a run to its first start), never after rereading the run from every start. */
+const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skipIn?: (text: string) => (m: string, offset: number) => boolean; modelSkip?: (m: string) => boolean }> = [
   { name: "slack-webhook", p: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g },
   { name: "stripe-key", p: /\b(?:sk|pk)_(?:test|live)_[A-Za-z0-9]+\b/g },
   { name: "aws-access-key", p: /\bAKIA[0-9A-Z]{16}\b/g },
@@ -44,18 +45,21 @@ const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skip?: (m: string,
   { name: "url-credentials", p: /(?<=:\/\/)[^\s:/@]+:[^\s:/@]+(?=@)/g },
   /* Bearer tokens in command output. Bare-value capture is greedy `\S+` so an embedded quote inside the secret is not leaked; redactPreservingTrailingQuote re-emits a trailing quote only when it is unbalanced (belongs to enclosing prose). Quoted branches are escape-aware. */
   { name: "bearer-token", p: /(?:Authorization|auth)\s*[:=]\s*Bearer\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi },
-  { name: "jwt", p: /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g },
+  { name: "jwt", p: /(?<!eyJ[A-Za-z0-9_-]*?)eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g },
   { name: "private-key-pem", p: /-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g },
   { name: "api-key-query", p: /\b[?&](?:token|key|api_key|api-key|apiKey|secret)=[^&\s]+/gi },
   { name: "generic-credential", p: /(?:credential|auth_token|access_key)[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi },
-  { name: "env-credential", p: /\b[A-Z][A-Z0-9_]*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|PWD|CRED|CREDENTIAL)[A-Z0-9_]*[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/g },
+  { name: "env-credential", p: /\b(?=[A-Z][A-Z0-9_]*[\"']?\s*[:=])[A-Z][A-Z0-9_]*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|PWD|CRED|CREDENTIAL)[A-Z0-9_]*[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/g },
   { name: "api-key-assignment", p: API_KEY_ASSIGNMENT, modelSkip: (m) => !isModelModeSecretValue(m) },
-  /* base64-encoded secrets (>40 chars), with data-URI filter. skip: a run of pure hex is a git SHA / digest, not a secret. */
+  /* base64-encoded secrets (>40 chars), with data-URI filter. skipIn: a run of pure hex is a git SHA / digest, not a secret. */
   {
-    /* Negative lookbehinds exclude lockfile integrity hashes (`sha512-<base64>`): their body is not a secret. skip still drops pure-hex runs (git SHAs). */
+    /* Negative lookbehinds exclude lockfile integrity hashes (`sha512-<base64>`): their body is not a secret. skipIn still drops pure-hex runs (git SHAs). */
     name: "base64-secret",
     p: /(?<![A-Za-z0-9+/=])(?<!sha1-)(?<!sha256-)(?<!sha384-)(?<!sha512-)[A-Za-z0-9+/=]{40,}(?![A-Za-z0-9+/=])/g,
-    skip: (m, offset, text) => /^[0-9a-f]+$/i.test(m) || isPathLikeRun(m, pathTokenAt(text, offset, m.length)),
+    skipIn: (text) => {
+      const isPathLike = pathLikeRunReader(text);
+      return (m, offset) => /^[0-9a-f]+$/i.test(m) || isPathLike(m, offset);
+    },
   },
 ];
 
@@ -71,15 +75,6 @@ function isIdentifierShape(m: string): boolean {
   if (!CASE_TRANSITION_RE.test(m)) return false;
   const segments = m.match(WORD_SEGMENT_RE) ?? [];
   return segments.length > 0 && segments.every((s) => s.length >= 2) && segments.some((s) => s.length >= 3);
-}
-
-/** The run of path characters a match sits in: a path continues through the `-`, `.` and `_` the pattern stops at. */
-function pathTokenAt(text: string, offset: number, length: number): string {
-  let start = offset;
-  while (start > 0 && PATH_CHARACTER.test(text[start - 1] ?? "")) start--;
-  let end = offset + length;
-  while (end < text.length && PATH_CHARACTER.test(text[end] ?? "")) end++;
-  return text.slice(start, end);
 }
 
 /** A segment long enough to be an encoded secret and shaped like one: both cases and a digit. */
@@ -105,13 +100,32 @@ function isSourceFilename(segment: string): boolean {
   return isIdentifierShape(stem.replace(/[Vv]?\d+/g, ""));
 }
 
-/** Whether the match is code: a path of at least three segments (absolute or relative), or a camelCase identifier. */
-function isPathLikeRun(match: string, token: string): boolean {
-  if (match.includes("+") || match.includes("=")) return false;
-  if (!token.includes("/")) return isIdentifierShape(match);
+/** Whether a token holding a `/` is a path of at least three segments (absolute or relative) with no encoded segment. */
+function isPathToken(token: string): boolean {
   if (token.length < 40) return false;
   const segments = token.split("/").filter((segment) => segment !== "");
   return segments.length >= 3 && segments.every((segment) => segment.length <= 80) && !segments.some(isBase64Segment);
+}
+
+/** Whether a match of `text` is code: a path token (it continues through the `-`, `.` and `_` the pattern stops at) or a camelCase identifier. A token is read and judged once for all the matches inside it. */
+function pathLikeRunReader(text: string): (match: string, offset: number) => boolean {
+  let start = 0;
+  let end = 0;
+  let hasSlash = false;
+  let isPath = false;
+  return (match, offset) => {
+    if (match.includes("+") || match.includes("=")) return false;
+    if (offset < start || offset + match.length > end) {
+      start = offset;
+      while (start > 0 && PATH_CHARACTER.test(text[start - 1] ?? "")) start--;
+      end = offset + match.length;
+      while (end < text.length && PATH_CHARACTER.test(text[end] ?? "")) end++;
+      const token = text.slice(start, end);
+      hasSlash = token.includes("/");
+      isPath = hasSlash && isPathToken(token);
+    }
+    return hasSlash ? isPath : isIdentifierShape(match);
+  };
 }
 
 /* Greedy `\S+` may swallow a trailing quote that is the secret's own character or that belongs to enclosing prose. If that quote already appears in the body, it is part of the secret; if not, re-emit it so surrounding markup is not corrupted. */
@@ -129,14 +143,64 @@ const INTERNAL_HOST_PATTERNS: RegExp[] = [
 ];
 
 /* PII: email only. Broader patterns (phone numbers) would wreck diffs/code with false positives; an email is distinctive enough to redact safely. */
-const PII_PATTERNS: RegExp[] = [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g];
+const EMAIL_LOCAL_CHARACTER = /[A-Za-z0-9._%+-]/;
+const EMAIL_DOMAIN = /[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/y;
+const WORD_CHARACTER = /\w/;
+
+function startsWord(text: string, index: number): boolean {
+  return WORD_CHARACTER.test(text[index - 1] ?? "") !== WORD_CHARACTER.test(text[index] ?? "");
+}
+
+/** Redacts `local@domain`, reading each run of local-part characters once. */
+function redactEmails(text: string): string {
+  let redacted = "";
+  let copied = 0;
+  for (let at = text.indexOf("@"); at !== -1; at = text.indexOf("@", Math.max(at + 1, copied))) {
+    let start = at;
+    while (start > copied && EMAIL_LOCAL_CHARACTER.test(text[start - 1] ?? "")) start--;
+    while (start < at && !startsWord(text, start)) start++;
+    if (start === at) continue;
+    EMAIL_DOMAIN.lastIndex = at + 1;
+    const domain = EMAIL_DOMAIN.exec(text);
+    if (!domain) continue;
+    redacted += text.slice(copied, start) + REDACTED;
+    copied = at + 1 + domain[0].length;
+  }
+  return redacted + text.slice(copied);
+}
 
 const NO_SECRETS: ByValueRedaction = (text) => ({ text, count: 0 });
 
 /** The name the by-value pass reports under in a detection. */
 const BY_VALUE_PATTERN = "run-secret";
 
-const DATA_URI_RE = /data:[^;]+;base64,[A-Za-z0-9+/=]+/gi;
+const DATA_PREFIX = /data:/gi;
+const DATA_PREFIX_LENGTH = "data:".length;
+const BASE64_PAYLOAD = /;base64,[A-Za-z0-9+/=]+/iy;
+
+/** Replaces each `data:<type>;base64,<payload>`; a prefix without a payload after its first `;` fails every prefix before that `;`. */
+function replaceDataUris(text: string, replace: (uri: string) => string): string {
+  let replaced = "";
+  let copied = 0;
+  let from = 0;
+  for (;;) {
+    DATA_PREFIX.lastIndex = from;
+    const prefix = DATA_PREFIX.exec(text);
+    if (!prefix) break;
+    const semicolon = text.indexOf(";", prefix.index + DATA_PREFIX_LENGTH);
+    if (semicolon === -1) break;
+    BASE64_PAYLOAD.lastIndex = semicolon;
+    const payload = semicolon > prefix.index + DATA_PREFIX_LENGTH ? BASE64_PAYLOAD.exec(text) : null;
+    if (!payload) {
+      from = semicolon;
+      continue;
+    }
+    from = semicolon + payload[0].length;
+    replaced += text.slice(copied, prefix.index) + replace(text.slice(prefix.index, from));
+    copied = from;
+  }
+  return replaced + text.slice(copied);
+}
 
 /** The caller's secrets by value first, then the named patterns, internal hosts and email. Data URIs are kept. */
 export function sanitizeText(input: string, mode: RedactionMode = "issue", byValue: ByValueRedaction = NO_SECRETS): { text: string; detection: SecretDetection } {
@@ -148,15 +212,16 @@ export function sanitizeText(input: string, mode: RedactionMode = "issue", byVal
   let totalRedactions = valued.count;
 
   const dataUris: string[] = [];
-  out = out.replace(DATA_URI_RE, (m) => {
-    dataUris.push(m);
+  out = replaceDataUris(out, (uri) => {
+    dataUris.push(uri);
     return `__SANITIZER_DATAURI_${dataUris.length - 1}__`;
   });
 
-  for (const { name, p, skip, modelSkip } of NAMED_SECRET_PATTERNS) {
+  for (const { name, p, skipIn, modelSkip } of NAMED_SECRET_PATTERNS) {
     let redactions = 0;
+    const skip = skipIn?.(out);
     out = out.replace(p, (m, offset: number) => {
-      if (skip?.(m, offset, out)) return m;
+      if (skip?.(m, offset)) return m;
       if (mode === "model" && modelSkip?.(m)) return m;
       redactions++;
       return redactPreservingTrailingQuote(m);
@@ -170,7 +235,7 @@ export function sanitizeText(input: string, mode: RedactionMode = "issue", byVal
   out = out.replace(/__SANITIZER_DATAURI_(\d+)__/g, (_, i) => dataUris[Number(i)] ?? "");
 
   for (const p of INTERNAL_HOST_PATTERNS) out = out.replace(p, REDACTED);
-  for (const p of PII_PATTERNS) out = out.replace(p, REDACTED);
+  out = redactEmails(out);
 
   return { text: out, detection: { redacted: totalRedactions > 0, patterns: matchedPatterns, count: totalRedactions } };
 }
@@ -178,17 +243,18 @@ export function sanitizeText(input: string, mode: RedactionMode = "issue", byVal
 /** True when a named pattern still finds a secret, with the same skip decisions as `sanitizeText`. */
 export function containsSecrets(text: string, mode: RedactionMode = "issue"): boolean {
   if (!text) return false;
-  const masked = text.replace(DATA_URI_RE, "");
-  for (const { p, skip, modelSkip } of NAMED_SECRET_PATTERNS) {
+  const masked = replaceDataUris(text, () => "");
+  for (const { p, skipIn, modelSkip } of NAMED_SECRET_PATTERNS) {
     p.lastIndex = 0;
-    const conditional = skip !== undefined || (mode === "model" && modelSkip !== undefined);
+    const conditional = skipIn !== undefined || (mode === "model" && modelSkip !== undefined);
     if (!conditional) {
       if (p.test(masked)) return true;
       continue;
     }
+    const skip = skipIn?.(masked);
     for (const found of masked.matchAll(p)) {
       const m = found[0];
-      if (skip?.(m, found.index ?? 0, masked)) continue;
+      if (skip?.(m, found.index ?? 0)) continue;
       if (mode === "model" && modelSkip?.(m)) continue;
       return true;
     }
