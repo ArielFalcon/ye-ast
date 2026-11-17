@@ -85,17 +85,20 @@ interface Controller {
 }
 
 /** The operations of every contract document in the repository, by `operationId`; two documents may declare one name. */
-interface ContractIndex {
+interface ContractOperations {
   byOperationId: ReadonlyMap<string, readonly ContractOperation[]>;
   /** A document the reader could not parse, as the item that reports it. */
   faults: readonly Finding<never>[];
+}
+
+interface ContractIndex extends ContractOperations {
   /** The routes of a contract whose servers disagree on the path: their base path is not known. */
   undecided: WeakSet<object>;
 }
 
 const NO_CONTRACTS: ContractRoutes = { operations: () => [] };
 
-function contractIndex(operations: readonly Finding<ContractOperation>[]): ContractIndex {
+function contractIndex(operations: readonly Finding<ContractOperation>[]): ContractOperations {
   const byOperationId = new Map<string, ContractOperation[]>();
   const faults: Finding<never>[] = [];
   for (const finding of operations) {
@@ -109,7 +112,7 @@ function contractIndex(operations: readonly Finding<ContractOperation>[]): Contr
     if (held === undefined) byOperationId.set(operationId, [finding.value]);
     else held.push(finding.value);
   }
-  return { byOperationId, faults, undecided: new WeakSet() };
+  return { byOperationId, faults };
 }
 
 export function createSpringRoutesExtractor(parser: JavaParser, contracts: ContractRoutes = NO_CONTRACTS): EntrypointExtractor {
@@ -127,7 +130,7 @@ const javaSourcesOf = <T extends { path: string }>(sources: readonly T[]): T[] =
 /** What the derivation of one Java file reads that is not the Java project: the configuration of the modules, the contract operations the repository holds and the source generator its build declares. */
 interface RoutesEnvironment {
   configurations: (file: JavaFile) => Configuration;
-  contracts: ContractIndex;
+  contracts: ContractOperations;
   operations: readonly Finding<ContractOperation>[];
   generator: Evidence | undefined;
   configurationFiles: readonly SourceFile[];
