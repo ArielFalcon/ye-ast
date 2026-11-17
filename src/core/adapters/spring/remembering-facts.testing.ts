@@ -1,4 +1,8 @@
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+
+export const java = (name: string, lines: readonly string[], directory = "app"): SourceFile => ({ path: `src/main/java/${directory}/${name}.java`, content: `${lines.join("\n")}\n` });
+export const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ ...file, content: file.content.replace(...replace) });
 
 /** Derived facts in memory: what each derivation did is listed in `derived` (`slot path`) and in `reads` (`hit` and `miss` of `ofReads`, in all and by slot). */
 export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: { hits: number; misses: number }; readsOf: (slot: string) => { hits: number; misses: number } } {

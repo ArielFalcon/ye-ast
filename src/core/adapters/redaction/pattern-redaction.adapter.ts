@@ -28,14 +28,14 @@ function isModelModeSecretValue(match: string): boolean {
   return isHighEntropyBareToken(value);
 }
 
-/* A keyword inside a lowercase word of a dotted group followed by `:artifact:version` is a dependency coordinate (`io.jsonwebtoken:jjwt-api:0.11.5`), not an assignment. The exemption sits in the pattern, not in a skip, so a keyword later in the same token is still found. A name that starts at the keyword (`db.password=`), a camelCase word (`app.clientSecret:`), any other separator, a value that is not a lowercase artifact followed by `:` (`app.authtoken:S3cret`), and a quoted or spaced value keep the rule. */
+/* A keyword inside a lowercase word of a dotted `group:artifact:version` coordinate (`io.jsonwebtoken:jjwt-api:0.11.5`) is not an assignment; a keyword later in the same token still is. */
 const CREDENTIAL_KEYWORD = "(?:api[_-]?key|token|secret|password|passwd|pwd)";
 const DOTTED_COORDINATE = `(?=(?-i:(?=[a-z]))${CREDENTIAL_KEYWORD}(?-i::[a-z0-9][a-z0-9._-]*:[\\w.-]))(?<=\\.[\\w-]*[a-z0-9])`;
 const API_KEY_ASSIGNMENT = new RegExp(`(?!${DOTTED_COORDINATE})${CREDENTIAL_KEYWORD}[\\"']?\\s*[:=]\\s*(?:"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\\S+)`, "gi");
 
 const PRIVATE_KEY_END_PREFIX = "-----END ";
 
-/** The length of the text up to the last end `end` matches: a header after it has no end to reach, and its lazy body would reread the rest of the text from every such header. The end is searched backwards because two ends may share their dashes. */
+/** The length of the text up to the last end `end` matches, searched backwards because two ends may share their dashes. */
 function lengthToLastEnd(end: RegExp): (text: string) => number {
   return (text) => {
     for (let at = text.lastIndexOf(PRIVATE_KEY_END_PREFIX); at !== -1; at = at === 0 ? -1 : text.lastIndexOf(PRIVATE_KEY_END_PREFIX, at - 1)) {

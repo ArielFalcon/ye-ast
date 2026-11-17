@@ -4,11 +4,9 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImplementingSite } from "../../ports/import-origins.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
-import { rememberingFacts } from "./remembering-facts.testing.ts";
+import { java, rememberingFacts } from "./remembering-facts.testing.ts";
 
 const SLOT = "java-outside-supertypes";
-const java = (name: string, lines: readonly string[]): SourceFile => ({ path: `src/main/java/app/${name}.java`, content: `${lines.join("\n")}\n` });
-
 const API = java("Api", ["package app;", "", "public class Api {", "  public String get(String key) { return key; }", "  public static String make(String key) { return key; }", "}"]);
 const SUB = java("Sub", ["package app;", "", "public class Sub extends Api implements java.util.function.Supplier<String> {", "  public String get() { return \"\"; }", "}"]);
 const UNRELATED = java("Unrelated", ["package app;", "", "class Unrelated {", "  int count() { return 1; }", "}"]);

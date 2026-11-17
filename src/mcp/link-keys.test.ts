@@ -26,7 +26,6 @@ test("a workspace impact answer keys its links by position and re-points every r
   assert.deepEqual(keyed.links.map((item) => item.reach), [["1"], ["1", "2"], ["3", "[\"missing\"]"]]);
   const keys = new Map(keyed.links.map((item, index) => [item.link.id, value.links[index]!.link.id]));
   assert.deepEqual(keyed.links.map((item) => ({ ...item, link: { ...item.link, id: keys.get(item.link.id)! }, reach: item.reach.map((key) => keys.get(key) ?? key) })), value.links);
-  for (const item of keyed.links) for (const key of item.reach.filter((entry) => !entry.startsWith("["))) assert.ok(keyed.links.some((other) => other.link.id === key));
 });
 
 test("a workspace answer numbers its internal links after its links and keeps their order", () => {

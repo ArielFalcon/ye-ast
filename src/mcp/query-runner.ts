@@ -19,6 +19,7 @@ import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-quer
 import type { ConsequencesFault, ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { repositoryCatalog, RepositoryBinding, RepositoryTargetFault } from "./repository-targeting.ts";
+import { isRecord } from "./full-projection.ts";
 import { callersRecovery, entrypointRecovery, impactRecovery, type Recovery } from "./recovery.ts";
 import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type SemanticArguments, type SemanticQuery, type SemanticQueryOf } from "./query-schema.ts";
 import type { EvidenceComposition, PublicRead, PublicWorkspaceValue, QueryFamily, SourcePayload } from "../core/ports/evidence-composition.port.ts";
@@ -263,7 +264,7 @@ export function changedPointers(original: unknown, published: unknown): string[]
       before.forEach((item, index) => visit(item, after[index], `${pointer}/${index}`));
       return;
     }
-    if (isRecord(before) && isRecord(after) && !Array.isArray(before) && !Array.isArray(after)) {
+    if (isRecord(before) && isRecord(after)) {
       const keys = Object.keys(after);
       const originalKeys = new Set(Object.keys(before));
       if (keys.length !== originalKeys.size || keys.some((key) => !originalKeys.has(key))) return void changed.push(pointer);
@@ -274,10 +275,6 @@ export function changedPointers(original: unknown, published: unknown): string[]
   };
   visit(original, published, "");
   return changed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
 }
 
 function replayChanged(fault: ImpactFault | WorkspaceFault): QueryFault {

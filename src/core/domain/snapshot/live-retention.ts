@@ -89,3 +89,9 @@ export function retentionDiscards(sweep: LiveSweep, current: string, policy: Liv
   if (discarded.length === 0 && sweep.debris.length === 0) return NONE;
   return { scopes: discarded, debris: [...new Set(sweep.debris)].sort(compareText) };
 }
+
+/** The unlocked entries of a store with no scope count, by usage alone, that the policy removes; `current` always stays. */
+export function usageDiscards(usage: ReadonlyMap<string, { bytes: number; lastUsedMs: number | null }>, current: string, policy: Omit<LiveRetentionPolicy, "keepScopes">, nowMs: number): readonly string[] {
+  const scopes = [...usage].map(([scope, { bytes, lastUsedMs }]) => ({ scope, bytes, lastUsedMs, locked: false, versionsMatch: true }));
+  return retentionDiscards({ scopes, debris: [] }, current, { keepScopes: Number.POSITIVE_INFINITY, ...policy }, nowMs).scopes;
+}

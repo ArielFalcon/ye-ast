@@ -4,11 +4,9 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ReceiverFitSite } from "../../ports/import-origins.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
-import { rememberingFacts } from "./remembering-facts.testing.ts";
+import { java, edited, rememberingFacts } from "./remembering-facts.testing.ts";
 
 const SLOT = "java-receiver-fits";
-const java = (name: string, lines: readonly string[]): SourceFile => ({ path: `src/main/java/app/${name}.java`, content: `${lines.join("\n")}\n` });
-
 const MAPPER = java("Mapper", ["package app;", "", "public interface Mapper<S, T> {", "  T convert(S source);", "}"]);
 const TYPES = java("Types", ["package app;", "", "class Tax {}", "class Rate {}", "class Cat {}", "class Entry {}"]);
 const TAX_MAPPER = java("TaxMapper", ["package app;", "", "public class TaxMapper implements Mapper<Tax, Rate> {", "", "  public Rate convert(int source) { return null; }", "  public Rate convert(Tax source) { return null; }", "}"]);
@@ -37,7 +35,6 @@ async function readKept(facts: ReturnType<typeof rememberingFacts>, sources: rea
 
 const cold = (sources: readonly SourceFile[], paths = sources.map(({ path }) => path)) => createJavaNameBindings(createJavaParser, sources, paths).receiverFits!(SITES);
 const turn = (facts: ReturnType<typeof rememberingFacts>) => facts.readsOf(SLOT);
-const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ ...file, content: file.content.replace(...replace) });
 const replacing = (file: SourceFile, next: SourceFile) => SOURCES.map((each) => (each === file ? next : each));
 
 test("the receiver fits kept per file of calls answer the bytes of a read without facts, and an edit of a file no call read derives none", async () => {

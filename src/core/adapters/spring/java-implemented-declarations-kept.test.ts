@@ -4,11 +4,9 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImplementingSite } from "../../ports/import-origins.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
-import { rememberingFacts } from "./remembering-facts.testing.ts";
+import { java, edited, rememberingFacts } from "./remembering-facts.testing.ts";
 
 const SLOT = "java-implemented-declarations";
-const java = (name: string, lines: readonly string[], directory = "app"): SourceFile => ({ path: `src/main/java/${directory}/${name}.java`, content: `${lines.join("\n")}\n` });
-
 const STORE = java("Store", ["package app;", "", "public interface Store {", "  void save(String value);", "}"]);
 const DISK = java("Disk", ["package app;", "", "import app.wide.*;", "", "public class Disk implements Store, Wide {", "  public void save(String value) {}", "}"]);
 const TOOL = java("Tool", ["package app;", "", "public class Tool {", "  public void use() {}", "}"]);
@@ -32,7 +30,6 @@ async function readKept(facts: ReturnType<typeof rememberingFacts>, sources: rea
 
 const cold = (sources: readonly SourceFile[], sites = SITES, paths = sources.map(({ path }) => path)) => createJavaNameBindings(createJavaParser, sources, paths).implementedDeclarations!(sites);
 const turn = (facts: ReturnType<typeof rememberingFacts>) => facts.readsOf(SLOT);
-const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ ...file, content: file.content.replace(...replace) });
 const replacing = (file: SourceFile, next: SourceFile) => SOURCES.map((each) => (each === file ? next : each));
 
 test("the implemented declarations kept per file answer the bytes of a read without facts, and an edit of a file no site read derives none", async () => {

@@ -4,11 +4,9 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ConstructedClassSite } from "../../ports/import-origins.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
-import { rememberingFacts } from "./remembering-facts.testing.ts";
+import { java, edited, rememberingFacts } from "./remembering-facts.testing.ts";
 
 const SLOT = "java-implicit-chains";
-const java = (name: string, lines: readonly string[], directory = "app"): SourceFile => ({ path: `src/main/java/${directory}/${name}.java`, content: `${lines.join("\n")}\n` });
-
 const PARENT = java("Parent", ["package app;", "", "public class Parent {", "  public Parent() {}", "}"]);
 const CHILD = java("Child", ["package app;", "", "class Child extends Parent {}"]);
 const PLAIN = java("Plain", ["package app;", "", "public class Plain {}"]);
@@ -35,7 +33,6 @@ async function readKept(facts: ReturnType<typeof rememberingFacts>, sources: rea
 
 const cold = (sources: readonly SourceFile[], sites = SITES, paths = sources.map(({ path }) => path)) => createJavaNameBindings(createJavaParser, sources, paths).implicitChains!(sites);
 const turn = (facts: ReturnType<typeof rememberingFacts>) => facts.readsOf(SLOT);
-const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ ...file, content: file.content.replace(...replace) });
 const replacing = (file: SourceFile, next: SourceFile) => SOURCES.map((each) => (each === file ? next : each));
 
 test("the implicit chains kept per file answer the bytes of a read without facts, and an edit of a file no chain read derives none", async () => {

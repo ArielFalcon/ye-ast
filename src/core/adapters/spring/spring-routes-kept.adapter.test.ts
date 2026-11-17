@@ -5,7 +5,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { ContractOperation, ContractRoutes } from "../../ports/contract-routes.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
-import { rememberingFacts } from "./remembering-facts.testing.ts";
+import { edited, rememberingFacts } from "./remembering-facts.testing.ts";
 import { createSpringRoutesExtractor } from "./spring-routes.adapter.ts";
 
 const WEB = "import org.springframework.web.bind.annotation.*;";
@@ -41,7 +41,6 @@ async function readKept(facts: ReturnType<typeof rememberingFacts>, files: reado
 
 const cold = async (files: readonly SourceFile[], contracts?: ContractRoutes) => (await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files)).findings;
 const plain = (findings: unknown): unknown => JSON.parse(JSON.stringify(findings));
-const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ ...file, content: file.content.replace(...replace) });
 const turn = (facts: ReturnType<typeof rememberingFacts>) => facts.readsOf("java-entrypoints");
 const routesOf = (findings: readonly Finding<unknown>[]) => findings.flatMap((finding) => (finding.status === "complete" && (finding.value as { kind: string }).kind === "http-route" ? [(finding.value as { path: string }).path] : [])).sort();
 

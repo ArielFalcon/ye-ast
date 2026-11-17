@@ -5,7 +5,7 @@ import { EXIT_CODE } from "../cli/main.ts";
 import { repositoryCatalog, type RepositoryBinding } from "../mcp/repository-targeting.ts";
 import { createMcpServer } from "../mcp/server.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
-import { cacheDirectoryRefusal } from "./cache-directory-refusal.ts";
+import { hostWithCache } from "./cache-directory-refusal.ts";
 import type { ProcessHost } from "./process-host.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { javaSourcesDeclared, jdkDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
@@ -60,12 +60,11 @@ export async function runMcp(commandLine: readonly string[], host: ProcessHost):
     host.err(USAGE);
     return EXIT_CODE.usage;
   }
-  const refusal = taken.directory === undefined ? null : await cacheDirectoryRefusal(taken.directory);
-  if (refusal !== null) {
-    host.err(refusal);
+  const served = await hostWithCache(host, taken.directory);
+  if (typeof served === "string") {
+    host.err(served);
     return EXIT_CODE.usage;
   }
-  const served = taken.directory === undefined ? host : host.withCache(taken.directory);
   let launchRoot: string | undefined;
   const queries = served.queries({ trustRecord: true, ...(outputs.length > 0 && { buildOutputs: (repo: string) => (repo === launchRoot ? outputs : undefined) }) });
   const canonical = async (path: string) => queries.canonicalRepositoryRoot(resolve(host.cwd, path), host.signal);

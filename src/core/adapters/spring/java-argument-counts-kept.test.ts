@@ -4,12 +4,10 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImplementingSite, ReceiverCallSite } from "../../ports/import-origins.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
-import { rememberingFacts } from "./remembering-facts.testing.ts";
+import { java, edited, rememberingFacts } from "./remembering-facts.testing.ts";
 
 const ARGUMENTS = "java-argument-counts";
 const ACCEPTED = "java-accepted-counts";
-const java = (name: string, lines: readonly string[]): SourceFile => ({ path: `src/main/java/app/${name}.java`, content: `${lines.join("\n")}\n` });
-
 const TOOL = java("Tool", ["package app;", "", "public class Tool {", "  public Tool(int size) {}", "  public void use(String... names) {}", "  public void use(int a, int b) {}", "}"]);
 const FIRST = java("First", ["package app;", "", "class First {", "  void run(Tool tool) { tool.use(1, 2); new Tool(3); }", "}"]);
 const SECOND = java("Second", ["package app;", "", "class Second {", "  void run(Tool tool) { tool.use(\"a\", \"b\", \"c\"); }", "}"]);
@@ -40,7 +38,6 @@ async function readKept<A>(facts: Facts, sources: readonly SourceFile[], ask: (r
 const counts = (sites = CALLS) => (reading: ReturnType<typeof createJavaNameBindings>) => reading.argumentCounts!(sites);
 const accepted = (sites = DECLARED) => (reading: ReturnType<typeof createJavaNameBindings>) => reading.acceptedCounts!(sites);
 const cold = <A>(sources: readonly SourceFile[], ask: (reading: ReturnType<typeof createJavaNameBindings>) => Promise<A>, paths = sources.map(({ path }) => path)) => ask(createJavaNameBindings(createJavaParser, sources, paths));
-const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ ...file, content: file.content.replace(...replace) });
 const replacing = (file: SourceFile, next: SourceFile) => SOURCES.map((each) => (each === file ? next : each));
 
 test("the argument counts kept per file answer the bytes of a read without facts, and an edit of a file without sites derives none", async () => {

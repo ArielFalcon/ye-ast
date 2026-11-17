@@ -1,7 +1,7 @@
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { privateToOwner } from "../../domain/shared/private-to-owner.ts";
-import { retentionDiscards } from "../../domain/snapshot/live-retention.ts";
+import { usageDiscards } from "../../domain/snapshot/live-retention.ts";
 import type { DerivedFactRetentionPolicy, DerivedFactStore } from "../../ports/derived-fact-store.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import { DEBRIS_STALE_MS } from "../../ports/live-mirror.port.ts";
@@ -74,9 +74,7 @@ export function createDerivedFactStore(deps: DerivedFactStoreDeps): DerivedFactS
           else if (now() - status.mtimeMs > DEBRIS_STALE_MS) rmSync(join(root, path), { force: true });
         }
       }
-      const scopes = [...usage].map(([scope, { bytes, lastUsedMs }]) => ({ scope, bytes, lastUsedMs, locked: false, versionsMatch: true }));
-      const discards = retentionDiscards({ scopes, debris: [] }, current, { keepScopes: Number.POSITIVE_INFINITY, ...deps.retention }, now());
-      for (const scope of discards.scopes) rmSync(join(root, scope), { force: true });
+      for (const scope of usageDiscards(usage, current, deps.retention, now())) rmSync(join(root, scope), { force: true });
     } catch {
       return;
     }

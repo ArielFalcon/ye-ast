@@ -2,7 +2,7 @@ import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, utimes, wri
 import { join } from "node:path";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { privateToOwner } from "../../domain/shared/private-to-owner.ts";
-import { retentionDiscards } from "../../domain/snapshot/live-retention.ts";
+import { usageDiscards } from "../../domain/snapshot/live-retention.ts";
 import { ANSWER_FILE_NAMES, type AnswerFiles, type AnswerFolder, type AnswerRetentionPolicy } from "../../ports/answer-files.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import { DEBRIS_STALE_MS } from "../../ports/live-mirror.port.ts";
@@ -78,9 +78,7 @@ export function createAnswerFiles(deps: AnswerFilesDeps): AnswerFiles {
           else if (item.name.startsWith(BUILD_PREFIX) && now() - (await lstat(join(root, path))).mtimeMs > DEBRIS_STALE_MS) await rm(join(root, path), { recursive: true, force: true });
         }
       }
-      const scopes = [...usage].map(([scope, { bytes, lastUsedMs }]) => ({ scope, bytes, lastUsedMs, locked: false, versionsMatch: true }));
-      const discards = retentionDiscards({ scopes, debris: [] }, current, { keepScopes: Number.POSITIVE_INFINITY, ...deps.retention }, now());
-      for (const scope of discards.scopes) await rm(join(root, scope), { recursive: true, force: true });
+      for (const scope of usageDiscards(usage, current, deps.retention, now())) await rm(join(root, scope), { recursive: true, force: true });
     } catch {
       return;
     }

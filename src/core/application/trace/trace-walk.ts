@@ -12,7 +12,7 @@ import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { DeclaredType, DispatchTargets, ImplementedDeclarations, ImplicitChain, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchTargets, ImplementedDeclarations, ImplicitChain, ImportOrigins, MethodPlace, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, placedBetween, placedMember, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -260,6 +260,12 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
   /** Whether a declaration can run on a value of `receiver` or of a type below it: a type of its lineage or one below it declares it. */
   const runsFor = (receiver: GraphSymbol, declaration: GraphSymbol): boolean =>
     navigation.ownersOf(declaration).some((owner) => inLineage(receiver, owner) || isBelow(owner, new Set([receiver.id])));
+  /** What a value of `receiver` can run among `declarations`; all of them when it can run none of them or the receiver is not known. */
+  const runnableBy = <T extends GraphSymbol>(receiver: GraphSymbol | undefined, declarations: readonly T[], none = false): readonly T[] => {
+    if (receiver === undefined) return declarations;
+    const kept = declarations.filter((declaration) => runsFor(receiver, declaration));
+    return kept.length > 0 || none ? kept : declarations;
+  };
   /**
    * The methods of the same name that any type below `owners` declares: a re-declaration in an interface counts, since a
    * body or a type below it may still replace the call. One whose language pack proves the supertype methods it implements
@@ -274,7 +280,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const implemented = await input.implemented();
     return below.filter((method) => {
       const answer = implemented.get(method.id);
-      return answer === undefined || answer.kind === "unknown" || answer.declarations.some((place) => place.file === symbol.file && symbol.startLine <= place.nameLine && place.nameLine <= symbol.endLine);
+      return answer === undefined || answer.kind === "unknown" || placesDeclaration(answer.declarations, symbol);
     });
   };
   const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[], subReason: CutSubReason, cause: readonly string[] = []): Cut =>
@@ -317,25 +323,19 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     if (!CALLABLE_KINDS.includes(symbol.kind)) return undefined;
     const declared = await declaredOf(symbol);
     const owners = navigation.ownersOf(symbol);
-    /** What a value of `receiver` can run among `declarations`; all of them when it can run none of them or the receiver is not known. */
-    const runnable = <T extends GraphSymbol>(declarations: readonly T[], none = false): readonly T[] => {
-      if (receiver === undefined) return declarations;
-      const kept = declarations.filter((declaration) => runsFor(receiver, declaration));
-      return kept.length > 0 || none ? kept : declarations;
-    };
     if (declared === undefined) {
       const interfaces = owners.filter((owner) => owner.kind === "interface");
-      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, runnable(await implementationsBelow(symbol, interfaces)), "unproven") };
+      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, runnableBy(receiver, await implementationsBelow(symbol, interfaces)), "unproven") };
     }
     if (!declared.body) {
       const [targets] = await origins.dispatchTargets([{ file: symbol.file, line: symbol.startLine, name: symbol.name }], signal);
       const placed = targets === undefined ? undefined : placedBodies(targets);
-      const bodies = placed === undefined ? undefined : runnable(placed);
-      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, runnable(await implementationsBelow(symbol, owners)), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven", targets?.kind === "unknown" ? targets.cause : undefined) };
+      const bodies = placed === undefined ? undefined : runnableBy(receiver, placed);
+      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, runnableBy(receiver, await implementationsBelow(symbol, owners)), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven", targets?.kind === "unknown" ? targets.cause : undefined) };
       return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies, "several-bodies"), alternatives: bodies };
     }
     if (!declared.overridable) return undefined;
-    const overriders = runnable(await implementationsBelow(symbol, owners), true);
+    const overriders = runnableBy(receiver, await implementationsBelow(symbol, owners), true);
     return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders, "overridable") };
   };
   /** The declarations an `unproven` reading offers, each placed by the index; none when it offers none or one is not placed. */
@@ -347,7 +347,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
   /** Whether the language packs prove `method` overrides or implements `other`. */
   const overrides = async (method: GraphSymbol, other: GraphSymbol): Promise<boolean> => {
     const answer = (await input.implemented?.())?.get(method.id);
-    return answer?.kind === "declarations" && answer.declarations.some((place) => place.file === other.file && other.startLine <= place.nameLine && place.nameLine <= other.endLine);
+    return answer?.kind === "declarations" && placesDeclaration(answer.declarations, other);
   };
   /**
    * What a call can run among the declarations its reading offers, which are every repository declaration it can run: those
@@ -358,8 +358,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
    */
   const runsOnly = async (offered: { declarations: readonly GraphSymbol[]; open: boolean } | undefined, receiver: GraphSymbol | undefined): Promise<{ to: GraphSymbol; candidates?: undefined } | { to?: undefined; candidates: readonly GraphSymbol[] } | undefined> => {
     if (offered === undefined) return undefined;
-    const kept = receiver === undefined ? offered.declarations : offered.declarations.filter((declaration) => runsFor(receiver, declaration));
-    const among = kept.length > 0 ? kept : offered.declarations;
+    const among = runnableBy(receiver, offered.declarations);
     if (offered.open) return { candidates: among };
     const withBody = new Set<GraphNodeId>();
     for (const declaration of among) if ((await declaredOf(declaration))?.body === true) withBody.add(declaration.id);
@@ -643,12 +642,12 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       const name = callee.form === "computed" ? reference.name : callee.name;
       if (binding.kind === "declared") return void typed.push({ reference, name: binding.member, named: [], declared: binding });
       if (binding.kind === "declaration") {
-        if (binding.link === "own-member") return void children.push({ ...childAt(binding.target, reference.line, reference.column, reference.name, "own-member"), thisCall: true });
+        if (binding.link === "own-member") return void children.push(thisMarked(childAt(binding.target, reference.line, reference.column, reference.name, "own-member"), true));
         if (binding.link === "chain" && isClassKind(binding.target.kind)) return chainedToSupplied(reference);
         const instantiated = reference.kind === "instantiates" && isClassKind(binding.target.kind);
         const constructors = instantiated ? await acceptingArguments(await constructorsOf(binding.target), { file: reference.file, line: reference.line, column: reference.column, name: binding.target.name }) : [binding.target];
         if (constructors.length !== 1) return void cuts.push(unresolvedAt(reference, constructors.length > 0 ? constructors : [binding.target], "constructor-unsettled"));
-        return void children.push({ ...childAt(constructors[0]!, reference.line, reference.column, reference.name, "call"), ...(isThisCall(reference.name) && !instantiated ? { thisCall: true as const } : {}) });
+        return void children.push(thisMarked(childAt(constructors[0]!, reference.line, reference.column, reference.name, "call"), !instantiated && isThisCall(reference.name)));
       }
       if (binding.kind === "receiver") return settleReceiver(reference, name, binding.candidates, binding.proof, binding.target, false, () => undefined, binding.declaration);
       if (binding.kind === "outside") {
@@ -1018,6 +1017,11 @@ function memoizedBy<A, K, V>(keyOf: (argument: A) => K, derive: (argument: A) =>
 function isThisCall(spelling: string): boolean {
   const [receiver, member, ...rest] = compactSpelling(spelling).split(".");
   return member === undefined || (rest.length === 0 && (receiver === "this" || receiver === "super"));
+}
+
+/** Whether one of `places` names `declaration`: its name line sits inside the declaration's lines of the same file. */
+function placesDeclaration(places: readonly MethodPlace[], declaration: GraphSymbol): boolean {
+  return places.some((place) => place.file === declaration.file && declaration.startLine <= place.nameLine && place.nameLine <= declaration.endLine);
 }
 
 function thisMarked(child: Child, thisCall: boolean): Child {

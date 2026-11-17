@@ -4,11 +4,9 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ReceiverCallSite } from "../../ports/import-origins.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
-import { rememberingFacts } from "./remembering-facts.testing.ts";
+import { java, edited, rememberingFacts } from "./remembering-facts.testing.ts";
 
 const SLOT = "java-receiver-sites";
-const java = (name: string, lines: readonly string[]): SourceFile => ({ path: `src/main/java/app/${name}.java`, content: `${lines.join("\n")}\n` });
-
 const BASE = java("Base", ["package app;", "", "public class Base {", "  public void touch() {}", "}"]);
 const STORE = java("Store", ["package app;", "", "public interface Store extends com.lib.Outside<String> {", "  void save(String value);", "}"]);
 const DISK = java("Disk", ["package app;", "", "public class Disk extends Base implements Store {", "  public void save(String value) {}", "}"]);
@@ -38,7 +36,6 @@ async function readKept(facts: ReturnType<typeof rememberingFacts>, sources: rea
 
 const cold = async (sources: readonly SourceFile[], sites = SITES) => createJavaNameBindings(createJavaParser, sources, sources.map(({ path }) => path)).receiverMethods(sites);
 const turn = (facts: ReturnType<typeof rememberingFacts>) => facts.readsOf(SLOT);
-const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ ...file, content: file.content.replace(...replace) });
 const without = (...files: SourceFile[]) => SOURCES.filter((file) => !files.includes(file));
 
 test("the receiver methods kept per file of sites answer the bytes of a read without facts, and an edit of a file no site read derives none", async () => {

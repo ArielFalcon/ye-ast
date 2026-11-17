@@ -14,3 +14,9 @@ export async function cacheDirectoryRefusal(directory: string): Promise<string |
   const refusal = privateToOwner({ symbolicLink: status.isSymbolicLink(), uid: status.uid, mode: status.mode }, ownerUid);
   return refusal === null ? null : createPatternRedaction().redact(`ye-ast: --cache refused: ${directory} ${refusal}`);
 }
+
+/** The host serving from the `--cache` directory, the host itself without one, or the line that refuses the directory. */
+export async function hostWithCache<Host extends { withCache(directory: string): Host }>(host: Host, directory: string | undefined): Promise<Host | string> {
+  if (directory === undefined) return host;
+  return (await cacheDirectoryRefusal(directory)) ?? host.withCache(directory);
+}
