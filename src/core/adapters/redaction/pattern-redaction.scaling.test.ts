@@ -19,6 +19,7 @@ const SHAPES: Array<{ name: string; unit: string; prefix?: string }> = [
   { name: "base64-looking segments of one dotted path", unit: `${BASE64_LOOKING}.` },
   { name: "long words joined by underscores", unit: "someVeryLongCamelCaseIdentifierNameThatIsFortyChars_" },
   { name: "private key headers repeated without an end", unit: "-----BEGIN A PRIVATE KEY-----" },
+  { name: "PKCS#8 private key headers repeated without an end", unit: "-----BEGIN PRIVATE KEY-----" },
 ];
 
 function build(shape: { unit: string; prefix?: string }, length: number): string {

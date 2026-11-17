@@ -345,3 +345,20 @@ test("model mode redacts a quoted credential of several words whole", () => {
     assert.doesNotMatch(out, /amber|falcon|river|twelve/, out);
   }
 });
+
+test("a PKCS#8 private key, whose header names no algorithm, is redacted like one that names it", () => {
+  const lines = ["MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7s4Lq0Yx1Zt2w", "Kq9Lm3Nd8Pz2Rt6Vw1Xy4Ab7Cd0Ef3Gh6Ij9Kl2Mn5Op8Qr1St4Uv7Wx0Yz3Ab6C", "nX4u0a9Lk2Qw8Er5Ty1Ui7O="];
+  for (const header of ["PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "RSA PRIVATE KEY"]) {
+    const key = `-----BEGIN ${header}-----\n${lines.join("\n")}\n-----END ${header}-----`;
+    for (const mode of ["issue", "model"] as const) {
+      const out = sanitizeText(`key:\n${key}\nend`, mode).text;
+      assert.deepEqual(lines.filter((line) => out.includes(line)), [], `${header} ${mode}`);
+      assert.equal(containsSecrets(key, mode), true, `${header} ${mode}`);
+    }
+  }
+});
+
+test("a PKCS#8 end written inside another key's body never ends that key early", () => {
+  const key = "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\nTAILSECRETTAIL\n-----END RSA PRIVATE KEY-----";
+  for (const mode of ["issue", "model"] as const) assert.equal(sanitizeText(key, mode).text.includes("TAILSECRETTAIL"), false, mode);
+});

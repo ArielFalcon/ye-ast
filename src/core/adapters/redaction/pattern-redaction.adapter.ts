@@ -33,17 +33,18 @@ const CREDENTIAL_KEYWORD = "(?:api[_-]?key|token|secret|password|passwd|pwd)";
 const DOTTED_COORDINATE = `(?=(?-i:(?=[a-z]))${CREDENTIAL_KEYWORD}(?-i::[a-z0-9][a-z0-9._-]*:[\\w.-]))(?<=\\.[\\w-]*[a-z0-9])`;
 const API_KEY_ASSIGNMENT = new RegExp(`(?!${DOTTED_COORDINATE})${CREDENTIAL_KEYWORD}[\\"']?\\s*[:=]\\s*(?:"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\\S+)`, "gi");
 
-const PRIVATE_KEY_END = /-----END [A-Z ]+PRIVATE KEY-----/y;
 const PRIVATE_KEY_END_PREFIX = "-----END ";
 
-/** The length of the text up to the last private key end: a header after it has no end to reach, and its lazy body would reread the rest of the text from every such header. The end is searched backwards because two ends may share their dashes. */
-function lengthToLastPrivateKeyEnd(text: string): number {
-  for (let at = text.lastIndexOf(PRIVATE_KEY_END_PREFIX); at !== -1; at = at === 0 ? -1 : text.lastIndexOf(PRIVATE_KEY_END_PREFIX, at - 1)) {
-    PRIVATE_KEY_END.lastIndex = at;
-    const end = PRIVATE_KEY_END.exec(text);
-    if (end) return at + end[0].length;
-  }
-  return 0;
+/** The length of the text up to the last end `end` matches: a header after it has no end to reach, and its lazy body would reread the rest of the text from every such header. The end is searched backwards because two ends may share their dashes. */
+function lengthToLastEnd(end: RegExp): (text: string) => number {
+  return (text) => {
+    for (let at = text.lastIndexOf(PRIVATE_KEY_END_PREFIX); at !== -1; at = at === 0 ? -1 : text.lastIndexOf(PRIVATE_KEY_END_PREFIX, at - 1)) {
+      end.lastIndex = at;
+      const found = end.exec(text);
+      if (found) return at + found[0].length;
+    }
+    return 0;
+  };
 }
 
 /* Each pattern reads a run once: a start that cannot match fails at once (a gate before the keyword, a lookbehind that leaves a run to its first start), never after rereading the run from every start. `readsPrefix` is the length of the text a pattern can match in. */
@@ -59,7 +60,9 @@ const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; readsPrefix?: (tex
   /* Bearer tokens in command output. Bare-value capture is greedy `\S+` so an embedded quote inside the secret is not leaked; redactPreservingTrailingQuote re-emits a trailing quote only when it is unbalanced (belongs to enclosing prose). Quoted branches are escape-aware. */
   { name: "bearer-token", p: /(?:Authorization|auth)\s*[:=]\s*Bearer\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi },
   { name: "jwt", p: /(?<!eyJ[A-Za-z0-9_-]*?)eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g },
-  { name: "private-key-pem", p: /-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g, readsPrefix: lengthToLastPrivateKeyEnd },
+  { name: "private-key-pem", p: /-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g, readsPrefix: lengthToLastEnd(/-----END [A-Z ]+PRIVATE KEY-----/y) },
+  /* A PKCS#8 key names no algorithm in its header. It is a pattern of its own, after the one above, so the blocks that one pairs are never paired otherwise. */
+  { name: "private-key-pkcs8", p: /-----BEGIN PRIVATE KEY-----[\s\S]+?-----END PRIVATE KEY-----/g, readsPrefix: lengthToLastEnd(/-----END PRIVATE KEY-----/y) },
   { name: "api-key-query", p: /\b[?&](?:token|key|api_key|api-key|apiKey|secret)=[^&\s]+/gi },
   { name: "generic-credential", p: /(?:credential|auth_token|access_key)[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi },
   { name: "env-credential", p: /\b(?=[A-Z][A-Z0-9_]*[\"']?\s*[:=])[A-Z][A-Z0-9_]*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|PWD|CRED|CREDENTIAL)[A-Z0-9_]*[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/g },
