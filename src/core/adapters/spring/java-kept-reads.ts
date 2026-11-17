@@ -21,7 +21,7 @@ export function keptReads(facts: DerivedFacts, hold: ParseHold, parser: () => Pr
 }
 
 /** The project a derivation reads and the files by path that project holds, with the question-asking function that records its reads. */
-export interface FileReading {
+interface FileReading {
   project: JavaProject;
   files: ReadonlyMap<string, JavaFile>;
   asked(question: string): string;
