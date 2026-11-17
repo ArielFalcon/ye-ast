@@ -59,6 +59,7 @@ interface CacheOverrides {
   retention?: IndexRetentionPolicy;
   discards?: IndexDiscard[];
   isAlive?: (pid: number) => boolean;
+  now?: () => number;
 }
 
 function cacheOf(graph: CodeGraph, overrides: CacheOverrides = {}): IndexCache {
@@ -71,7 +72,7 @@ function cacheOf(graph: CodeGraph, overrides: CacheOverrides = {}): IndexCache {
     ...(overrides.retention && { retention: overrides.retention }),
     ...(overrides.discards && { onDiscard: (discard: IndexDiscard) => void overrides.discards!.push(discard) }),
     ...(overrides.isAlive && { isAlive: overrides.isAlive }),
-    now: () => NOW,
+    now: overrides.now ?? (() => NOW),
   });
 }
 
@@ -416,4 +417,55 @@ test("a build directory untouched for longer than the debris bound is removed by
   assert.ok(!names.includes(".build-killed"));
   assert.ok(names.includes(".build-fresh"));
   assert.ok(names.includes(".build-writing"));
+});
+
+test("a reuse within the sweep interval measures nothing, so an expired index waits for a build or for the interval", async () => {
+  const { graph } = fakeGraph();
+  let clock = NOW;
+  const cache = cacheOf(graph, { retention: RETENTION, now: () => clock });
+  const expired = await keyOfContent(cache, "content-expired");
+  const reused = await keyOfContent(cache, "content-reused");
+  ageEntry(expired, 15);
+
+  const again = await cache.obtain(request("content-reused"));
+  assert.ok(again.ok);
+  again.value.store.close();
+  assert.ok(entryNames().includes(expired));
+
+  clock = NOW + DEBRIS_STALE_MS;
+  const later = await cache.obtain(request("content-reused"));
+  assert.ok(later.ok);
+  later.value.store.close();
+  assert.deepEqual(entryNames(), [reused]);
+});
+
+test("the first obtain of a process sweeps even when it reuses, so debris and expired indexes do not wait for a build", async () => {
+  const { graph } = fakeGraph();
+  const first = cacheOf(graph, { retention: RETENTION });
+  const expired = await keyOfContent(first, "content-expired");
+  const reused = await keyOfContent(first, "content-reused");
+  ageEntry(expired, 15);
+
+  const restarted = cacheOf(graph, { retention: RETENTION });
+  const again = await restarted.obtain(request("content-reused"));
+  assert.ok(again.ok);
+  again.value.store.close();
+
+  assert.deepEqual(entryNames(), [reused]);
+});
+
+test("an interval no longer than the debris bound is kept when the policy expires indexes sooner", async () => {
+  const { graph } = fakeGraph();
+  let clock = NOW;
+  const cache = cacheOf(graph, { retention: { unusedForMs: 1000, maxBytes: 1024 * 1024 }, now: () => clock });
+  const expired = await keyOfContent(cache, "content-expired");
+  const reused = await keyOfContent(cache, "content-reused");
+  ageEntry(expired, 1);
+
+  clock = NOW + 1000;
+  const again = await cache.obtain(request("content-reused"));
+  assert.ok(again.ok);
+  again.value.store.close();
+
+  assert.deepEqual(entryNames(), [reused]);
 });

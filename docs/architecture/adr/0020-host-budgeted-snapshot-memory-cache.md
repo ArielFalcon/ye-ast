@@ -15,6 +15,8 @@
   from one file or from named inputs, keyed by content)
 - Amended by: [ADR-0112](0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) (decision 3: under
   the default budget an admission does not evict what the latest reads used)
+- Amended by: [ADR-0123](0123-a-commit-listing-is-kept-by-its-sha-and-the-index-cache-sweeps-when-it-builds-or-once-per-interval.md) (decision 4: the listing of a full sha is kept by the sha and read again
+  only when it is not kept)
 - Related: [ADR-0006](0006-qayaba-graph-state-per-run.md), [ADR-0010](0010-trust-modes.md),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0006](../rfc/0006-configuration.md)
 

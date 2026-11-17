@@ -70,7 +70,7 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
     );
   }
 
-  async function produce(entry: string, { snapshot, signal, prepare }: Parameters<IndexCache["obtain"]>[0]): Promise<Result<IndexedSnapshot, CodeGraphFault>> {
+  async function produce(entry: string, { snapshot, signal, prepare }: Parameters<IndexCache["obtain"]>[0], onBuilt: () => void): Promise<Result<IndexedSnapshot, CodeGraphFault>> {
     for (const directory of [deps.directory, indexes]) {
       const reachable = await reachableByOthers(directory);
       if (reachable !== null) return unavailable(reachable);
@@ -85,6 +85,7 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
       if (prepared !== undefined && !prepared.ok) return prepared;
       const built = await deps.graph.index(snapshot, building, signal);
       if (!built.ok) return built;
+      onBuilt();
       const { versions: _versions, ...summary } = built.value;
       await writeFile(join(building, SUMMARY_FILE), JSON.stringify(summary));
 
@@ -171,7 +172,19 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
     return now() - Math.max(...newest) > DEBRIS_STALE_MS;
   }
 
-  /** Removes the indexes the policy names and the build directories a killed build left, once per obtain; it never fails the obtain it follows. */
+  /**
+   * The sweep measures every entry, so it runs after an obtain that built one (the one change this process makes that the
+   * byte cap acts on), on the first obtain of the process (debris and expiry of what an earlier one left), and then once
+   * per interval of the clock: the debris bound, or the policy's expiry when that is shorter. An index another process
+   * built is seen at most one interval later.
+   */
+  let sweptAt: number | undefined;
+  function sweepDue(built: boolean): boolean {
+    if (deps.retention === undefined) return false;
+    return built || sweptAt === undefined || now() - sweptAt >= Math.min(DEBRIS_STALE_MS, deps.retention.unusedForMs);
+  }
+
+  /** Removes the indexes the policy names and the build directories a killed build left; it never fails the obtain it follows. */
   async function sweep(current: string): Promise<void> {
     if (deps.retention === undefined) return;
     try {
@@ -183,7 +196,8 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
         else if (item.name.startsWith(BUILD_PREFIX) && (await abandoned(item.name).catch(() => false))) await rm(join(indexes, item.name), { recursive: true, force: true });
       }
       const scopes = [...usage].map(([scope, { bytes, lastUsedMs }]) => ({ scope, bytes, lastUsedMs, locked: leased.has(scope), versionsMatch: true }));
-      const discards = retentionDiscards({ scopes, debris: [] }, current, { keepScopes: Number.POSITIVE_INFINITY, ...deps.retention }, now());
+      const at = now();
+      const discards = retentionDiscards({ scopes, debris: [] }, current, { keepScopes: Number.POSITIVE_INFINITY, ...deps.retention }, at);
       let retained = scopes.reduce((sum, scope) => sum + scope.bytes, 0);
       for (const key of discards.scopes) {
         if (!(await discard(key))) continue;
@@ -191,6 +205,7 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
         retained -= entryBytes;
         deps.onDiscard?.({ entryBytes, retainedBytes: retained });
       }
+      sweptAt = at;
     } catch {
       return;
     }
@@ -210,13 +225,14 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
       return unavailable(error);
     }
     const lease = await takeLease(key);
-    const result = await produce(entry, request);
+    let built = false;
+    const result = await produce(entry, request, () => void (built = true));
     if (!result.ok) {
       lease?.release();
       return result;
     }
     await touch(entry);
-    await sweep(key);
+    if (sweepDue(built)) await sweep(key);
     const { store } = result.value;
     return { ok: true, value: { ...result.value, store: Object.assign(Object.create(store) as typeof store, { close: () => { store.close(); lease?.release(); } }) } };
   }
