@@ -26,9 +26,10 @@ export interface DerivedFacts {
   /**
    * What `derive` answers from `subject` and from the answers to the questions it records through `record`, in order; kept
    * until one of those answers differs. `answerNow` answers a question of the current snapshot, so a kept value is
-   * reused when the same questions give the same answers. A derivation that throws is kept for nobody.
+   * reused when the same questions give the same answers; a question it cannot answer (`undefined`) is a difference.
+   * A derivation that throws is kept for nobody.
    */
-  ofReads<T>(slot: string, subject: object, answerNow: (question: string) => string, derive: (record: (question: string, answer: string) => void) => Promise<T>): Promise<T>;
+  ofReads<T>(slot: string, subject: object, answerNow: (question: string) => string | undefined, derive: (record: (question: string, answer: string) => void) => Promise<T>): Promise<T>;
   /** A short name of `inputs`, equal for equal inputs, to name a large input in many `ofInputs` calls. */
   fingerprint(inputs: object): string;
   drain(): DerivedFactsTally;

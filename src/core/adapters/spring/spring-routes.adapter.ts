@@ -267,7 +267,7 @@ async function keptByReads(
   for (const { path } of sources) {
     if (unreadPaths.has(path)) continue;
     const subject = { path, content: index.answer(questions.file(path)), environment: environmentKey };
-    reading.files.push(await facts.ofReads(ROUTES_SLOT, subject, (question) => index.answer(question), async (record) => {
+    reading.files.push(await facts.ofReads(ROUTES_SLOT, subject, index.answerIfKnown, async (record) => {
       const { project, files: held } = await heldOver();
       return project.reading((question) => void record(question, index.answer(question)), () => routesOfFile(held.get(path)!, project, environment));
     }));

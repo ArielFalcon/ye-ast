@@ -3,7 +3,7 @@ import test from "node:test";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaProject, scopeOf, type JavaProject } from "./java-symbols.ts";
 import { questions } from "./java-declaration-questions.ts";
-import { javaDeclarationIndex, type JavaDeclarationIndex } from "./java-declaration-index.ts";
+import { javaDeclarationIndex, UnknownDeclarationQuestionError, type JavaDeclarationIndex } from "./java-declaration-index.ts";
 import { declarationsOf } from "./java-declarations.ts";
 import { withJavaSources } from "./java-project.ts";
 import { rememberingFacts } from "./remembering-facts.testing.ts";
@@ -80,6 +80,15 @@ test("the index answers each primitive question with sorted plain data, an empty
   assert.deepEqual(JSON.parse(index.answer(questions.unread())), { files: [["app/Broken.java", "unparsed"]], unreadJvm: false });
   assert.equal(index.answer(questions.build("claimed")), "[]");
   assert.deepEqual(index.unread().map(({ path, state }) => [path, state.state]), [["app/Broken.java", "unparsed"]]);
+});
+
+test("a question outside the vocabulary has no answer, in each of its parts, and asking it is a typed error", async () => {
+  const index = await indexOf([IMPL, BASE]);
+  for (const outside of ["gone|Q", "", "naming|bogus|Base", "naming|toString|Base", "package|bogus|app", "marked|bogus", "build|bogus"]) {
+    assert.equal(index.answerIfKnown(outside), undefined, outside);
+    assert.throws(() => index.answer(outside), UnknownDeclarationQuestionError, outside);
+  }
+  for (const known of [questions.file("app/Base.java"), questions.naming("supertype", "Base"), questions.package("typed", "app"), questions.marked("aspect"), questions.build("generatesInterfaces"), questions.unread(), questions.listing()]) assert.equal(index.answerIfKnown(known), index.answer(known), known);
 });
 
 test("a file that appears changes the answers about the names it declares and no other answer", async () => {

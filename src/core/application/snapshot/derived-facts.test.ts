@@ -274,6 +274,26 @@ test("a derivation stored on disk answers its reader version and its subject onl
   }
 });
 
+test("a stored derivation that recorded a question the snapshot cannot answer is derived again and replaced, in memory and on disk", async () => {
+  const disk = { store: memoryStore(), versions: { slot: "1" } };
+  const forged = JSON.stringify({ value: { forged: true }, reads: [["gone|Q", "x"]] });
+  const counted = counting({ derived: true });
+  const answerNow = (question: string): string | undefined => (question === "declaring|A" ? "[]" : undefined);
+  const read = (facts = viewOver(disk)) => facts.ofReads("slot", { path: "a" }, answerNow, async (record) => (record("declaring|A", "[]"), counted.derive()));
+  await read();
+  const [key] = [...disk.store.entries.keys()];
+  disk.store.entries.set(key!, forged);
+
+  const memory = viewOver(disk);
+  assert.deepEqual(await read(memory), { derived: true });
+  assert.equal(counted.derived(), 2);
+  assert.deepEqual(await read(memory), { derived: true });
+  assert.equal(counted.derived(), 2);
+  assert.equal(disk.store.entries.get(key!)!.includes("forged"), false);
+  assert.deepEqual(await read(viewOver(disk)), { derived: true });
+  assert.equal(counted.derived(), 2);
+});
+
 test("a derivation of a slot with no version, and one that throws, are never stored", async () => {
   const disk = { store: memoryStore(), versions: { slot: "1" } };
   await readsOver(disk, { answers: {} }, "unversioned").read();

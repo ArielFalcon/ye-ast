@@ -93,7 +93,10 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     },
     async ofReads(slot, subject, answerNow, derive) {
       const address = addressOf(slot, subject);
-      const stillHolds = (entry: ReadsEntry): boolean => entry.reads.every(([question, answer]) => named(answerNow(question)) === answer);
+      const stillHolds = (entry: ReadsEntry): boolean => entry.reads.every(([question, answer]) => {
+        const now = answerNow(question);
+        return now !== undefined && named(now) === answer;
+      });
       const inMemory = cache.getFact(address.key) as ReadsEntry | undefined;
       const stored = inMemory === undefined ? storedJson(address) : undefined;
       const entry = inMemory ?? (stored === undefined ? undefined : (JSON.parse(stored) as ReadsEntry));

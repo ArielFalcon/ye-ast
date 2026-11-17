@@ -1,7 +1,7 @@
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { JAVA_DECLARATIONS_SLOT, type JavaMarker, type NamingKind } from "./java-declaration-questions.ts";
+import { BUILD_PARTS, JAVA_DECLARATIONS_SLOT, JAVA_MARKERS, NAMING_KINDS, PACKAGE_QUESTIONS, type BuildPart, type JavaMarker, type NamingKind, type PackageQuestion } from "./java-declaration-questions.ts";
 import { declarationsOf, type DeclarationState, type JavaDeclarations } from "./java-declarations.ts";
 import { claimedPlatformPackage } from "./java-symbols.ts";
 
@@ -17,10 +17,22 @@ export interface DeclarationIndexInputs {
  * answer is plain, sorted data, compared as a string.
  */
 export interface JavaDeclarationIndex {
+  /** The answer to a question the vocabulary names; any other question is an `UnknownDeclarationQuestionError`. */
   answer(question: string): string;
+  /** What a derivation kept earlier asks of a snapshot that may not know the question: `undefined` when the vocabulary does not name it. */
+  answerIfKnown(question: string): string | undefined;
   /** The sources not read in full, in the order of the sources: unparsed, read for their declarations only, or with declarations that cannot be listed. */
   unread(): readonly { path: string; state: DeclarationState }[];
 }
+
+export class UnknownDeclarationQuestionError extends Error {
+  constructor(readonly question: string) {
+    super("the declaration index does not answer this question");
+    this.name = "UnknownDeclarationQuestionError";
+  }
+}
+
+const isOf = <T extends string>(vocabulary: readonly T[], word: string | undefined): word is T => vocabulary.includes(word as T);
 
 interface Located {
   path: string;
@@ -37,11 +49,11 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
     return () => (built ??= build());
   };
   const declaredBy = lazily(() => grouped(entries.flatMap(({ path, entry }) => entry.types.map((type) => [type.fqn, path] as const))));
-  const named = lazily(() => grouped(entries.flatMap(({ path, entry }) => entry.types.map((type) => [type.name, JSON.stringify([type.fqn, path])] as const))));
+  const namedTypes = lazily(() => grouped(entries.flatMap(({ path, entry }) => entry.types.map((type) => [type.name, JSON.stringify([type.fqn, path])] as const))));
   const packages = lazily(() => new Set(inProject.flatMap(({ entry }) => prefixesOf(entry.header.packageName))));
   const typedPackages = lazily(() => new Set(entries.flatMap(({ entry }) => (entry.types.length > 0 ? [entry.header.packageName] : []))));
   const naming = lazily(() => {
-    const kinds: Record<NamingKind, Map<string, Set<string>>> = { supertype: new Map(), "unplaced-supertype": new Map(), "method-reference": new Map(), annotation: new Map(), constant: new Map() };
+    const kinds = Object.fromEntries(NAMING_KINDS.map((kind) => [kind, new Map<string, Set<string>>()])) as Record<NamingKind, Map<string, Set<string>>>;
     const add = (kind: NamingKind, name: string, path: string) => (kinds[kind].get(name) ?? kinds[kind].set(name, new Set()).get(name)!).add(path);
     for (const { path, entry } of entries) {
       for (const type of entry.types) {
@@ -60,47 +72,51 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
   const unreadAnswer = lazily(() => JSON.stringify({ files: entries.filter(({ entry }) => entry.state !== "read").map(({ path, entry }) => [path, entry.state]).sort(([a], [b]) => (a! < b! ? -1 : a! > b! ? 1 : 0)), unreadJvm: inputs.unreadJvm }));
 
   const answers = new Map<string, string>();
-  const answerOf = (question: string): string => {
+  const answerOf = (question: string): string | undefined => {
     const [kind = "", ...rest] = question.split("|");
     const argument = rest.join("|");
+    const [which, ...named] = rest;
+    const name = named.join("|");
     switch (kind) {
       case "file":
-        return byPath.get(argument)?.content ?? "";
+        return rest.length > 0 ? (byPath.get(argument)?.content ?? "") : undefined;
       case "declarations":
-        return byPath.get(argument)?.declarationsDigest ?? "";
+        return rest.length > 0 ? (byPath.get(argument)?.declarationsDigest ?? "") : undefined;
       case "declaring":
-        return list(declaredBy().get(argument) ?? []);
-      case "package": {
-        const [which = "", ...name] = rest;
-        return String(which === "prefix" ? packages().has(name.join("|")) : typedPackages().has(name.join("|")));
-      }
+        return rest.length > 0 ? list(declaredBy().get(argument) ?? []) : undefined;
+      case "package":
+        return isOf<PackageQuestion>(PACKAGE_QUESTIONS, which) ? String(which === "prefix" ? packages().has(name) : typedPackages().has(name)) : undefined;
       case "named":
-        return `[${(named().get(argument) ?? []).toSorted().join(",")}]`;
-      case "naming": {
-        const [which = "", ...name] = rest;
-        return list(naming()[which as NamingKind].get(name.join("|")) ?? []);
-      }
+        return rest.length > 0 ? `[${(namedTypes().get(argument) ?? []).toSorted().join(",")}]` : undefined;
+      case "naming":
+        return isOf<NamingKind>(NAMING_KINDS, which) ? list(naming()[which].get(name) ?? []) : undefined;
       case "marked":
-        return list(marked().get(argument as JavaMarker) ?? []);
+        return isOf<JavaMarker>(JAVA_MARKERS, argument) ? list(marked().get(argument) ?? []) : undefined;
       case "unread":
-        return unreadAnswer();
+        return rest.length === 0 ? unreadAnswer() : undefined;
       case "build":
-        return argument === "claimed" ? claimed() : String(inputs.generatesInterfaces);
+        return isOf<BuildPart>(BUILD_PARTS, argument) ? (argument === "claimed" ? claimed() : String(inputs.generatesInterfaces)) : undefined;
       case "listing":
-        return listing();
+        return rest.length === 0 ? listing() : undefined;
       default:
-        throw new Error(`unknown question: ${question}`);
+        return undefined;
     }
+  };
+  const answerIfKnown = (question: string): string | undefined => {
+    let answer = answers.get(question);
+    if (answer === undefined) {
+      answer = answerOf(question);
+      if (answer !== undefined) answers.set(question, answer);
+    }
+    return answer;
   };
 
   return {
     unread: () => entries.filter(({ entry }) => entry.state !== "read").map(({ path, entry }): { path: string; state: DeclarationState } => ({ path, state: entry })),
+    answerIfKnown,
     answer: (question) => {
-      let answer = answers.get(question);
-      if (answer === undefined) {
-        answer = answerOf(question);
-        answers.set(question, answer);
-      }
+      const answer = answerIfKnown(question);
+      if (answer === undefined) throw new UnknownDeclarationQuestionError(question);
       return answer;
     },
   };
