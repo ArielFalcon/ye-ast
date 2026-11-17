@@ -42,7 +42,7 @@ async function readKept(facts: ReturnType<typeof rememberingFacts>, files: reado
 const cold = async (files: readonly SourceFile[], contracts?: ContractRoutes) => (await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files)).findings;
 const plain = (findings: unknown): unknown => JSON.parse(JSON.stringify(findings));
 const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ ...file, content: file.content.replace(...replace) });
-const turn = (facts: ReturnType<typeof rememberingFacts>) => ({ hits: facts.reads.hits, misses: facts.reads.misses });
+const turn = (facts: ReturnType<typeof rememberingFacts>) => facts.readsOf("java-entrypoints");
 const routesOf = (findings: readonly Finding<unknown>[]) => findings.flatMap((finding) => (finding.status === "complete" && (finding.value as { kind: string }).kind === "http-route" ? [(finding.value as { path: string }).path] : [])).sort();
 
 test("the entrypoints kept per file answer the bytes a cold read gives, and a second read of the same sources derives none", async () => {
@@ -166,7 +166,7 @@ test("a route of a contract whose servers disagree on the path keeps its base pa
   const route = first.find((finding) => finding.status === "complete" && (finding.value as { kind: string }).kind === "http-route");
   assert.equal((route as { value: { basePath: { status: string } } }).value.basePath.status, "unknown");
   assert.deepEqual(plain(await readKept(facts, sources, undecided)), plain(first));
-  assert.equal(facts.reads.hits, 2);
+  assert.equal(facts.readsOf("java-entrypoints").hits, 2);
 });
 
 test("a read with the hold alone derives over the held project, keeps nothing and gives the bytes of a cold read", async () => {
@@ -203,4 +203,62 @@ test("the derivation of one file enumerates no type of the project: a read of an
   const derivation = text.slice(text.indexOf("function routesOfFile"), text.indexOf("interface RoutesReading")) + text.slice(text.indexOf("function natsListenersIn"), text.indexOf("function unreadable"));
   assert.ok(derivation.length > 1000);
   assert.doesNotMatch(derivation, /\bproject\.types\b/);
+});
+
+const SECURITY = "org.springframework.security.core.userdetails.UserDetailsService";
+const USERS_BASE = source("UsersBase", `abstract class UsersBase { public Object loadUserByUsername(String name) { return null; } }`);
+const USERS = source("Users", `@org.springframework.stereotype.Service class Users extends UsersBase implements ${SECURITY} {}`);
+const ANONYMOUS = source("Anonymous", `class Anonymous { Object service = new ${SECURITY}() {}; }`);
+const CALLBACKS = [MAIN, USERS_BASE, USERS, ANONYMOUS, PLAIN];
+const callbacksDerived = (facts: ReturnType<typeof rememberingFacts>) => facts.derived.filter((entry) => entry.startsWith("java-callbacks ")).map((entry) => (JSON.parse(entry.slice("java-callbacks ".length)) as { path: string }).path.split("/").at(-1));
+const callbackHandlers = (findings: readonly Finding<unknown>[]) => findings.flatMap((finding) => (finding.status === "complete" && (finding.value as { kind: string }).kind === "callback" ? [(finding.value as { handler: { symbol: string } }).handler.symbol] : []));
+
+test("the callbacks kept per file answer the bytes a cold read gives, and a second read of the same sources derives none", async () => {
+  const facts = rememberingFacts();
+  const first = await readKept(facts, CALLBACKS);
+  assert.deepEqual(plain(first), plain(await cold(CALLBACKS)));
+  assert.deepEqual(callbackHandlers(first), ["UsersBase.loadUserByUsername"]);
+  assert.ok(first.some((finding) => finding.status === "unknown" && finding.evidence.some((place) => place.via === SECURITY)));
+  assert.deepEqual(callbacksDerived(facts).toSorted(), ["Anonymous.java", "Main.java", "Plain.java", "Users.java", "UsersBase.java"]);
+  const derived = facts.derived.length;
+  assert.deepEqual(plain(await readKept(facts, CALLBACKS)), plain(first));
+  assert.equal(facts.derived.length, derived);
+});
+
+test("an edit to a file no callback derivation read derives the callbacks of that file alone", async () => {
+  const facts = rememberingFacts();
+  await readKept(facts, CALLBACKS);
+  const sources = CALLBACKS.map((file) => (file === PLAIN ? edited(PLAIN, ["int count;", "int count = 1;"]) : file));
+  facts.derived.length = 0;
+  assert.deepEqual(plain(await readKept(facts, sources)), plain(await cold(sources)));
+  assert.deepEqual(callbacksDerived(facts), ["Plain.java"]);
+});
+
+test("an edit to the base class whose body a registered type inherits derives that type's callbacks and the base, and no other file", async () => {
+  const facts = rememberingFacts();
+  await readKept(facts, CALLBACKS);
+  const sources = CALLBACKS.map((file) => (file === USERS_BASE ? edited(USERS_BASE, ["loadUserByUsername", "loadUser"]) : file));
+  facts.derived.length = 0;
+  const after = await readKept(facts, sources);
+  assert.deepEqual(plain(after), plain(await cold(sources)));
+  assert.deepEqual(callbackHandlers(after), []);
+  assert.deepEqual(callbacksDerived(facts).toSorted(), ["Users.java", "UsersBase.java"]);
+});
+
+test("a supertype that appears and settles a name a registered type left unsettled derives that type's callbacks", async () => {
+  const facts = rememberingFacts();
+  const unsettled = [MAIN, source("Lonely", `@org.springframework.stereotype.Service class Lonely extends Missing implements ${SECURITY} {}`), PLAIN];
+  const before = await readKept(facts, unsettled);
+  assert.ok(before.some((finding) => finding.status === "unknown"));
+  const sources = [...unsettled, source("Missing", `abstract class Missing { public Object loadUserByUsername(String name) { return null; } }`)];
+  facts.derived.length = 0;
+  const after = await readKept(facts, sources);
+  assert.deepEqual(plain(after), plain(await cold(sources)));
+  assert.deepEqual(callbackHandlers(after), ["Missing.loadUserByUsername"]);
+  assert.deepEqual(callbacksDerived(facts).toSorted(), ["Lonely.java", "Missing.java"]);
+});
+
+test("the callbacks of one file are read over its own declarations and their ancestors, never the whole hierarchy of the project", () => {
+  const text = readFileSync(new URL("./callbacks.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(text, /\bproject\.types\b|readHierarchy|\bHierarchy\b/);
 });

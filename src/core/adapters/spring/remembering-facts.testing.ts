@@ -1,14 +1,17 @@
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 
-/** Derived facts in memory: what each derivation did is listed in `derived` (`slot path`) and in `reads` (`hit` and `miss` of `ofReads`). */
-export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: { hits: number; misses: number } } {
+/** Derived facts in memory: what each derivation did is listed in `derived` (`slot path`) and in `reads` (`hit` and `miss` of `ofReads`, in all and by slot). */
+export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: { hits: number; misses: number }; readsOf: (slot: string) => { hits: number; misses: number } } {
   const kept = new Map<string, string>();
   const entries = new Map<string, string>();
   const derived: string[] = [];
   const reads = { hits: 0, misses: 0 };
+  const bySlot = new Map<string, { hits: number; misses: number }>();
+  const tallyOf = (slot: string) => bySlot.get(slot) ?? bySlot.set(slot, { hits: 0, misses: 0 }).get(slot)!;
   return {
     derived,
     reads,
+    readsOf: (slot) => ({ ...tallyOf(slot) }),
     ofFile(slot, file, derive) {
       const key = JSON.stringify([slot, file.path, file.content]);
       if (!kept.has(key)) {
@@ -30,9 +33,11 @@ export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: {
       const entry = entries.has(key) ? (JSON.parse(entries.get(key)!) as { value: never; reads: [string, string][] }) : undefined;
       if (entry !== undefined && entry.reads.every(([question, answer]) => answerNow(question) === answer)) {
         reads.hits++;
+        tallyOf(slot).hits++;
         return entry.value;
       }
       reads.misses++;
+      tallyOf(slot).misses++;
       derived.push(`${slot} ${JSON.stringify(subject)}`);
       const recorded = new Map<string, string>();
       const value = await derive((question, answer) => void recorded.set(question, answer));

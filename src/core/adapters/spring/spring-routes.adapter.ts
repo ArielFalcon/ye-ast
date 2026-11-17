@@ -1,5 +1,5 @@
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
-import type { Entrypoint, FrameworkCallback } from "../../domain/entrypoints/entrypoint.ts";
+import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import { httpRouteName, requestMethodOf, type BasePath, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
@@ -18,11 +18,10 @@ import { delegateMethodsOf, sourceGeneratorIn } from "./api-delegates.ts";
 import { basePathOf, configurationsOf, type Configuration } from "./application-config.ts";
 import { spanOf, subjectOf, unknown, unknownAt, type MappedEntrypoint, type MappedRoute } from "./findings.ts";
 import { foreignEndpointsOf } from "./foreign-endpoints.ts";
-import { callbacksOf } from "./callbacks.ts";
+import { callbacksOfFile, mergeCallbacks, type FileCallbacks } from "./callbacks.ts";
 import { pathVariableTypesOf } from "./route-parameter-types.ts";
 import { variableOfSegment } from "../../domain/entrypoints/route-parameter.ts";
 import { INVOKED_CONTRACTS } from "./invoked-contracts.ts";
-import { readHierarchy } from "./java-dispatch-targets.ts";
 import { listenersOf, unreadBaseOf } from "./listeners.ts";
 import { natsListenersOf } from "./nats-listeners.ts";
 import { registeredJobsOf } from "./registered-jobs.ts";
@@ -185,8 +184,8 @@ interface RoutesReading {
   files: FileRoutes[];
 }
 
-/** The entrypoints of the sources: the reading of each file in order, then the base path of each route and the callbacks, which read the whole project. */
-function mergeRoutes(sources: readonly SourceFile[], environment: RoutesEnvironment, reading: RoutesReading, callbacks: Finding<FrameworkCallback>[]): Finding<Entrypoint>[] {
+/** The entrypoints of the sources: the reading of each file in order, then the base path of each route and the callbacks of each file. */
+function mergeRoutes(sources: readonly SourceFile[], environment: RoutesEnvironment, reading: RoutesReading, callbacks: readonly FileCallbacks[]): Finding<Entrypoint>[] {
   const undecided = new WeakSet<object>();
   const findings: Finding<MappedEntrypoint>[] = [...reading.unparsed, ...environment.contracts.faults, ...reading.unreadable];
   for (const read of reading.files) {
@@ -198,12 +197,7 @@ function mergeRoutes(sources: readonly SourceFile[], environment: RoutesEnvironm
   const basePaths = inPathOrder([...reading.files.flatMap((read) => read.basePathCalls), ...reading.files.flatMap((read) => read.basePathSources)]);
   const applications = new Set(reading.files.flatMap((read) => read.applicationResources));
   const entrypoints = sortFindings(withPathPrefixes(findings, prefixes));
-  return sortFindings([...withBasePaths(entrypoints, sources, applications, basePaths, undecided), ...callbacks]);
-}
-
-/** The callbacks the project's declarations register: every declaration's supertypes are read, so they are derived at each run of the stage. */
-function callbacksOver(project: JavaProject, parsed: readonly JavaFile[]): Finding<FrameworkCallback>[] {
-  return callbacksOf(project, INVOKED_CONTRACTS, createSpringAnnotations(project), readHierarchy(parsed, project));
+  return sortFindings([...withBasePaths(entrypoints, sources, applications, basePaths, undecided), ...mergeCallbacks(callbacks, INVOKED_CONTRACTS)]);
 }
 
 function routesOver(sources: readonly SourceFile[], parsed: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject, environment: RoutesEnvironment, view?: NatsView): Finding<Entrypoint>[] {
@@ -213,7 +207,7 @@ function routesOver(sources: readonly SourceFile[], parsed: readonly JavaFile[],
     unreadable: project.unreadable.map((file) => unreadable(file.path, 1)),
     files: readable.map((file) => routesOfFile(file, project, environment, view)),
   };
-  return mergeRoutes(sources, environment, reading, callbacksOver(project, parsed));
+  return mergeRoutes(sources, environment, reading, parsed.map((file) => callbacksOfFile(file, project, INVOKED_CONTRACTS, createSpringAnnotations(project))));
 }
 
 export function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
@@ -245,8 +239,9 @@ async function extractHeld(parser: JavaParser, files: readonly SourceFile[], con
 }
 
 const ROUTES_SLOT = "java-entrypoints";
+const CALLBACKS_SLOT = "java-callbacks";
 
-/** The entrypoints of each Java file, kept by the questions its derivation asked of the declaration index and the answers it got (ADR-0117). */
+/** The entrypoints and the callbacks of each Java file, each kept by the questions its derivation asked of the declaration index and the answers it got (ADR-0117, ADR-0118). */
 async function keptByReads(
   parser: JavaParser,
   files: readonly SourceFile[],
@@ -258,6 +253,7 @@ async function keptByReads(
   const index = javaDeclarationIndex(facts, parser, sources, { generatesInterfaces: false, unreadJvm: false });
   const unread = index.unread();
   const unreadPaths = new Set(unread.map(({ path }) => path));
+  const unparsedPaths = new Set(unread.filter(({ state }) => state.state === "unparsed" || state.state === "declarations-only").map(({ path }) => path));
   const environmentKey = facts.fingerprint({ configurations: environment.configurationFiles.map(({ path, content }) => [path, content]), operations: environment.operations, generator: environment.generator ?? null });
   const reading: RoutesReading = {
     unparsed: unread.flatMap(({ path, state }) => (state.state === "unparsed" || state.state === "declarations-only" ? [unreadable(path, state.line)] : [])),
@@ -272,8 +268,16 @@ async function keptByReads(
       return project.reading((question) => void record(question, index.answer(question)), () => routesOfFile(held.get(path)!, project, environment));
     }));
   }
-  const { project, parsed } = await heldOver();
-  return mergeRoutes(files, environment, reading, callbacksOver(project, parsed));
+  const callbacks: FileCallbacks[] = [];
+  for (const { path } of sources) {
+    if (unparsedPaths.has(path)) continue;
+    const subject = { path, content: index.answer(questions.file(path)) };
+    callbacks.push(await facts.ofReads(CALLBACKS_SLOT, subject, index.answerIfKnown, async (record) => {
+      const { project, files: held } = await heldOver();
+      return project.reading((question) => void record(question, index.answer(question)), () => callbacksOfFile(held.get(path)!, project, INVOKED_CONTRACTS, createSpringAnnotations(project)));
+    }));
+  }
+  return mergeRoutes(files, environment, reading, callbacks);
 }
 
 function withLibraries(parsed: readonly JavaFile[], libraries: readonly LibrarySource[], environment: RoutesEnvironment, parse: ParseJava): NatsView {

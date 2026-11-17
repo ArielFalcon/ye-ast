@@ -464,6 +464,22 @@ export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): H
   return "reason" in globalVeto(files, project) ? undefined : readHierarchy(files, project);
 }
 
+/** One supertype clause of a declaration, resolved by the strict reading; `type` is set when it names a repository type. */
+export interface SupertypeClause {
+  node: Node;
+  name: string;
+  resolved: ReturnType<typeof resolve>;
+  type: TypeDecl | undefined;
+}
+
+export function supertypeClausesOf(declaration: Node, file: JavaFile, project: JavaProject): SupertypeClause[] {
+  const scope = enclosingType(declaration.parent ?? declaration, file, project);
+  return supertypesOf(declaration).map((node) => {
+    const resolved = resolve(node, file, project, scope, node, true);
+    return { node, name: simpleName(node), resolved, type: resolved?.kind === "repository" ? resolved.type : undefined };
+  });
+}
+
 export function readHierarchy(files: readonly JavaFile[], project: JavaProject, libraries?: LibraryReading): Hierarchy {
   const placed = new Map(project.types.map((type) => [type.node.id, type]));
   const subtypes = new Map<TypeDecl, TypeDecl[]>();
@@ -480,7 +496,6 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject, 
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
       if (FUNCTION_VALUES.has(node.type)) values.push({ file, node });
       if (isTypeDeclaration(node) || isAnonymous(node)) {
-        const scope = enclosingType(node.parent ?? node, file, project);
         const declared = placed.get(node.id);
         const superclass = node.type === "class_declaration" ? node.childForFieldName("superclass")?.namedChildren[0] : undefined;
         const types: TypeDecl[] = [];
@@ -488,16 +503,14 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject, 
         const clauses: { name: string; place: string }[] = [];
         const fqns: string[] = [];
         const unresolved: string[] = [];
-        for (const supertype of supertypesOf(node)) {
-          const resolved = resolve(supertype, file, project, scope, supertype, true);
-          const type = resolved?.kind === "repository" ? resolved.type : undefined;
+        for (const { node: supertype, name, resolved, type } of supertypeClausesOf(node, file, project)) {
           if (type !== undefined) types.push(type);
           else if (resolved?.kind !== "platform") {
-            names.push(simpleName(supertype));
-            clauses.push({ name: simpleName(supertype), place: causeAt(file.path, supertype, "unsettled-supertype") });
+            names.push(name);
+            clauses.push({ name, place: causeAt(file.path, supertype, "unsettled-supertype") });
           }
           if (resolved?.kind === "platform" || resolved?.kind === "library") fqns.push(resolved.fqn);
-          else if (resolved === undefined || (resolved.kind === "repository" && type === undefined)) unresolved.push(simpleName(supertype));
+          else if (resolved === undefined || (resolved.kind === "repository" && type === undefined)) unresolved.push(name);
           if (declared !== undefined && supertype.id === superclass?.id) superclasses.set(declared, type ?? "outside");
           if (declared !== undefined && type === undefined) outside.add(declared);
         }

@@ -65,7 +65,7 @@ test("a second process answers the relations and the entrypoints of every file f
   assert.equal(warm.answer, cold.answer);
   assert.ok(warm.answer.includes("/v1/orders"));
   assert.equal(warm.tally.misses, 0);
-  assert.equal(warm.tally.diskHits, SOURCES.length * 3);
+  assert.equal(warm.tally.diskHits, SOURCES.length * 4);
 });
 
 test("a third process after an edit derives the files whose recorded answers changed and answers the others from disk", async () => {
@@ -85,5 +85,5 @@ test("a reader version bump discards what the old version stored", async () => {
   await readInNewProcess(directory, SOURCES);
   const bumped = await readInNewProcess(directory, SOURCES, { ...STORED_DERIVED_FACT_VERSIONS, "java-relations": 2, "java-entrypoints": 2 });
   assert.equal(bumped.tally.misses, SOURCES.length * 2);
-  assert.equal(bumped.tally.diskHits, SOURCES.length);
+  assert.equal(bumped.tally.diskHits, SOURCES.length * 2);
 });
