@@ -208,7 +208,7 @@ Each unit starts with the ADR that amends ADR-0114 decision 1 or ADR-0115 decisi
 | M1 | The `java-declarations` slot, the snapshot index and `JavaQueries` over them; the composites answer as today; K5 becomes a lookup. No reader changes its key | none by itself | unchanged |
 | M2 | `DerivedFacts.ofReads`; `relations` per file | 2,268 ms | one file derived, 1,339 verified |
 | M3 | `entrypoints` per file, on the held project | 1,751 ms, and one parse of every source per read | one file derived |
-| M4 | `receiver-methods` per file of sites, with `provesBinding`, `unplacedBelow`, `isReferenced` as queries | 788 ms | the files of the asked sites verified |
+| M4 | `receiver-methods` per file of sites, with `provesBinding`, `unplacedBelow`, `isReferenced` as queries (done, ADR-0119) | 788 ms | the files of the asked sites verified |
 | M5 | The held project parses a file when `syntaxOf` asks for it | part of the 6,200 ms an unchanged call pays; M0 says how much | only the files a derivation reads are parsed |
 | M6 | The entries of `ofReads` in the disk tier | the same stages in a fresh process | |
 
@@ -386,24 +386,58 @@ What it settles:
   that lowers it, and it needs the per-file walk of M4 first, because `receiver-methods` still reads every tree.
 - The first call with an empty cache pays about 0.4 s more for the third slot it writes.
 
-### M4: what is left of `receiver-methods` (2026-11-17)
+### M4: `receiver-methods` per file of sites (2026-11-17)
 
-`receiver-methods` is kept as one `ofInputs` entry over the whole listing and the asked sites, so any edit derives every
-asked site (656 ms for 13 calls). Its per-file form reads the project through these places in
-`java-receiver-methods.ts`, each of which becomes a recorded question before a derivation per file of sites is sound:
+Same backend (1,173 read sources), the stdio MCP, live, `callers`, p50 of five rounds, two repetitions of each block with a
+fresh cache, host loaded by other sessions (load average 5 to 9), so read the stage figures; candidate (ADR-0119) against main
+dea58a893, measured in turn. The held project was counted by an event placed in a scratch copy of both trees, not committed.
 
-| Global read | Where | Becomes |
+| | Before | After |
 |---|---|---|
-| `provesBinding`: every source read, no dynamic implementation, no call-rewriting annotation anywhere | `provesBinding` (`namesAnyDynamicImplementation`, `rewritesCalls` over every file) | P8 and P7 for `dynamic-implementation` and `call-rewriting` (both markers are in the index) |
-| `readUnplacedBelow`: the supertypes of every anonymous and local class, and every unsettled supertype name | `readUnplacedBelow` | P6 `unplaced-supertype` for the name of the type and of each type below it, then P1 of each path answered |
-| `isReferenced`: a method reference naming the method anywhere | `isReferenced` | P6 `method-reference` for the name |
-| The types below a type: every type whose declared hierarchy includes it | `runnableAmong` (`project.types.filter(declaredHierarchy(other)...)`) | P6 `supertype` for the type's simple name, then the hierarchy of each path answered, each recorded |
-| A type by qualified name, a package listing, the types of the site's file | `project.types.find(fqn)`, `project.types.some(package)`, `project.types.filter(file)` | P3, P4 and `typesOf(path)` |
-| `methodsByPlace` over every type | `methodsByPlace` (shared with the dispatch readers) | a lookup by the file of the site |
+| `receiver-methods` stage, one edit | 627 ms | 58 ms |
+| `callers`, one edit | 8,130 ms | 7,492 ms |
+| `callers`, unchanged (`relations` and `entrypoints` 0 ms, `receiver-methods` 14 to 15 ms in both) | 6,073 ms | 6,040 ms |
+| First call of a process, warm disk: `receiver-methods` | 679 ms | 80 ms |
+| First call of a process, warm disk: `callers` | 8,298 ms | 7,796 ms |
+| First call of a process, empty cache: `receiver-methods` | 1,249 ms | 2,355 ms |
+| First call of a process, empty cache: `callers` | 15,937 ms | 16,894 ms |
+| Derived facts on disk after a cold call and ten edits | 54.4 MB | 56.6 MB |
 
-The index holds every marker and naming kind these need, so the unit adds no primitive. It is larger than the three
-before it: the resolver is about 670 lines, every site of the table changes how it reads, and an answer that differs in a
-byte moves `callers`, so it is its own unit with the whole-project answer kept as the differential reference.
+The global reads became questions as the table of this section named them: `provesBinding` asks `unread` and the marker
+`call-rewriting` and confirms each file the marker `dynamic-implementation` names with the project's resolution; the types below
+a type are found by `naming(supertype, name)` from the type's name down; what an anonymous or local class extends is
+`naming(unplaced-supertype, name)` confirmed in the files answered, and the supertype names a placed type leaves unsettled are
+`naming(supertype, name)` confirmed the same way; `isReferenced` is `naming(method-reference, name)`; a type by qualified name and a
+package with a declared type are `typesDeclaring` and `declaresTypesIn`. The resolver reads them through one function for every
+reader (`createResolver`), so `data-effects` and the call-site owner answer as before. The index needed no new primitive.
+
+The answers are the bytes of the whole-project reading. In process, over every call site of four repositories (625, 3,537, 6,162
+and 29,512 sites), the kept read, a second kept read, and kept reads after an edit of a small file, of the most mentioned type,
+of its removal and of its restoration give the digest of a read with no facts and equal the tree before it. Through the CLI,
+`callers` and `trace` over sampled symbols of the same four repositories (183 answers) are byte-equal between main and the
+candidate cold, kept, and after one edit against a cold read. After an edit of the most mentioned type of the 1,210-file backend
+231 of 624 files of sites derive and 393 verify; after an edit of a small file 6 derive and 618 verify.
+
+What it settles:
+
+- The one-edit stage falls by 0.57 s and the call by 0.64 s; an unchanged call is unaffected. The first call of a process with a
+  warm cache falls by 0.6 s in the stage.
+- The first call with an empty cache pays 1.1 s more in the stage: each file of sites reads through its own resolver, which
+  shares no hierarchy memo with the others, and writes its entry. It is the same price ADR-0116 and ADR-0117 took for the first
+  read of a process, paid once per cache.
+- A one-edit call still builds the held project (a parse of every source and a project build, 490 to 550 ms), and so does every
+  unchanged call and every first call of a process. It is no longer built by `receiver-methods`, `relations`, `entrypoints` or the
+  callbacks on a hit. The first reader to build it in each of those calls is `declaredSupertypes`
+  (`java-receiver-methods.ts`, `perPlacedType`), which is not kept per file and runs in every call; `implicitChains`,
+  `argumentCounts`, `implementedDeclarations`, `receiverFits`, `outsideSupertypes` and the dispatch readers use the same held
+  project, so each would build it if that reader did not.
+- M5 (parse on demand) therefore saves nothing yet: the 0.5 s it could remove is paid by readers that read the whole project in
+  every call. It would save at most that 0.5 s of 6.0 s (an unchanged call) and of 7.5 s (a one-edit call), and only after
+  `declaredSupertypes`, `implicitChains` and `argumentCounts` (the readers that ask about one declaration) and the dispatch readers
+  (which walk every tree) are kept per file by recorded reads. That is the next unit; M5 follows it.
+- The resolver reads that are left on the whole project are those of the readers above: `perPlacedType` filters the types of the
+  project by file and name, `enumConstantSupertypes` by file, `methodsByPlace` is built over every type for the dispatch readers, and
+  `java-imports.adapter.ts:69` asks whether a package holds a type.
 
 ## Open questions
 
@@ -415,5 +449,5 @@ byte moves `callers`, so it is its own unit with the whole-project answer kept a
 | 4 | Do the `ofReads` entries persist on disk? | Yes, as M6, after the memory tier is measured. They are per-file derivations, not the whole answers ADR-0077 keeps out. Done (ADR-0117) |
 | 5 | May a migrated derivation call `everyFile()`? | No. The three measured derivations reach zero; other readers stay on a frozen list |
 | 6 | Does the gate gain the pass warmed on the parent commit? | Yes, for units that touch `ofReads`. It is the only proof over real changes |
-| 7 | Is M5 built? | Not before `receiver-methods` is per file: the callback walk is per file since ADR-0118, so the entrypoints stage builds no project when nothing changed, but `receiver-methods` still reads every tree ("The callback walk per file" above) |
+| 7 | Is M5 built? | Not yet. `receiver-methods` is per file since ADR-0119, but the readers that ask about one declaration (`declaredSupertypes`, `implicitChains`, `argumentCounts`) and the dispatch readers still build the held project in every call, 0.5 s of 6 to 7.5 s ("M4" above); they come first |
 | 8 | Does the TypeScript program get the same surface? | Not here. `ofReads` names no language and can serve it; the checker hands out objects this RFC does not wrap |
