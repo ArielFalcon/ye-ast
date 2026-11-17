@@ -44,6 +44,8 @@ export interface FakeLive {
   touches: number;
   /** Whether the engine store opens; set it between queries to make the store behind a committed state unreachable. */
   openable: { value: boolean };
+  /** Readers the engine opened and closed. */
+  stores: { opened: number; closed: number };
   engine: {
     build: Result<IndexSummary, CodeGraphFault>;
     sync: Result<MirrorSyncSummary, CodeGraphFault>;
@@ -74,6 +76,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     debrisRemoved: [],
     touches: 0,
     openable: { value: true },
+    stores: { opened: 0, closed: 0 },
     engine: {
       build: { ok: true, value: SUMMARY },
       sync: { ok: true, value: { ...SUMMARY, filesFailed: [], filesUnparsed: [] } },
@@ -174,10 +177,11 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.syncs.push([...paths]);
       return fake.engine.sync;
     },
-    open: (() =>
-      fake.openable.value
-        ? { ok: true, value: { close: () => undefined } }
-        : { ok: false, fault: { kind: "store-unreadable", detail: "the store cannot be opened" } }) as CodeGraph["open"],
+    open: (() => {
+      if (!fake.openable.value) return { ok: false, fault: { kind: "store-unreadable", detail: "the store cannot be opened" } };
+      fake.stores.opened++;
+      return { ok: true, value: { close: () => void fake.stores.closed++ } };
+    }) as CodeGraph["open"],
   };
   fake.deps = { workingTree, mirror, graph, digest, versions: VERSIONS, retention: RETENTION, now: () => NOW };
   return fake;

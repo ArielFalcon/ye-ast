@@ -197,3 +197,31 @@ test("a failed tracked listing wins over a failed untracked one", async () => {
 
   assert.deepEqual(!listing.ok && listing.fault, { kind: "git-failed", detail: "exit 3" });
 });
+
+test("the object format is asked once per repository and again once its configuration file is rewritten", async () => {
+  let asked = 0;
+  const runner = recordingGit((args) => {
+    if (!args.includes("--show-object-format")) return healthy(args);
+    asked += 1;
+    return { code: 0, stdout: "sha1\n.git/config\n" };
+  });
+  const tree = createGitWorkingTree(runner);
+
+  valueOf(await tree.list(repo));
+  valueOf(await tree.list(repo));
+  assert.equal(asked, 1);
+
+  git("config", "user.name", "someone");
+  valueOf(await tree.list(repo));
+  assert.equal(asked, 2);
+});
+
+test("a repository created again at the same path with another object format is reported with it", async () => {
+  const tree = createGitWorkingTree();
+  assert.equal(valueOf(await tree.list(repo)).objectFormat, "sha1");
+
+  rmSync(join(repo, ".git"), { recursive: true, force: true });
+  git("init", "-q", "--object-format=sha256");
+
+  assert.equal(valueOf(await tree.list(repo)).objectFormat, "sha256");
+});
