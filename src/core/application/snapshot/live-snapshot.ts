@@ -2,7 +2,7 @@ import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { DeclaredScope, TrustMode } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
-import { snapshotRetention } from "./prepared-snapshot.ts";
+import { entrypointReadingOf, snapshotRetention } from "./prepared-snapshot.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import { ABORTED, extractSources, readSources, type CommitExtraction, type PreparedCommit, type ReadScope, type SnapshotReaderDeps } from "./read-snapshot.ts";
@@ -70,7 +70,7 @@ export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "e
         const result = await sources(signal);
         if (!result.ok) return result;
         if (retainedReading !== undefined) return { ok: true as const, value: { ...result.value, ...retainedReading } };
-        const answer = await extractSources(deps, result.value, signal, { ...(hold === undefined ? {} : { hold }), ...(retention === undefined ? {} : { facts: retention.facts }) });
+        const answer = await extractSources(deps, result.value, signal, entrypointReadingOf(hold, retention));
         if (answer.ok) retention?.keepExtraction(read, answer.value);
         return answer;
       })();

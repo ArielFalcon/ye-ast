@@ -5,7 +5,8 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
-import type { EntrypointExtraction, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { EntrypointExtraction, EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import { createDerivedFacts } from "./derived-facts.ts";
 import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type ReadScope, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
@@ -39,6 +40,11 @@ export interface SnapshotRetention {
   output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
   /** The derived facts of the files read under this snapshot's trust, kept by their content (ADR-0035). */
   facts: DerivedFacts;
+}
+
+/** What the extractor reads over: the hold that owns the sources it receives and the derived facts the snapshot cache keeps for them. */
+export function entrypointReadingOf(hold: ParseHold | undefined, retention: Pick<SnapshotRetention, "facts"> | undefined): EntrypointReading {
+  return { ...(hold === undefined ? {} : { hold }), ...(retention === undefined ? {} : { facts: retention.facts }) };
 }
 
 export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "derivedFactDisk" | "digest">, identity: string, listing: object, trust: TrustMode): SnapshotRetention | undefined {
@@ -141,7 +147,7 @@ export async function prepareCommit(
           if (!read.ok) return read;
           if (signal?.aborted) return ABORTED;
           if (extracted !== undefined) return { ok: true, value: extracted };
-          const answer = await extractSources(deps, read.value.kept, signal, { ...(hold === undefined ? {} : { hold }), ...(retention === undefined ? {} : { facts: retention.facts }) });
+          const answer = await extractSources(deps, read.value.kept, signal, entrypointReadingOf(hold, retention));
           if (answer.ok) {
             extracted = answer.value;
             retention?.keepExtraction(read.value.read, extracted);
