@@ -13,19 +13,21 @@ import { JavaEventReader } from "./event-call-sites.adapter.ts";
 import { JavaHttpReader } from "./http-call-sites.adapter.ts";
 import { createJavaProject, type JavaFile, type JavaProject } from "./java-symbols.ts";
 import { callSiteProofOf, type CallSiteProof } from "./java-call-site-owner.ts";
+import { javaCallsOf, type JavaCalls } from "./java-method-flow.ts";
+import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 
-/** A reader of one kind of call site, over a project the snapshot was parsed into once. */
+/** A reader of one kind of call site, over a project the snapshot was parsed into once and the calls every reader shares. */
 export interface JavaSiteReader {
   transport: CallSite["transport"];
-  read(project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string, includeNested: boolean | undefined, proof: CallSiteProof): CallSite[];
+  read(project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string, includeNested: boolean | undefined, proof: CallSiteProof, calls: () => JavaCalls): CallSite[];
 }
 
-const httpSites: JavaSiteReader = { transport: "http", read: (project, configuration, owned, repo, includeNested, proof) => new JavaHttpReader(project, configuration, owned, proof).sites(repo, includeNested) };
-const eventSites: JavaSiteReader = { transport: "event", read: (project, configuration, owned, repo, includeNested, proof) => new JavaEventReader(project, configuration, owned, proof).sites(repo, includeNested) };
+const httpSites: JavaSiteReader = { transport: "http", read: (project, configuration, owned, repo, includeNested, proof, calls) => new JavaHttpReader(project, configuration, owned, proof, calls()).sites(repo, includeNested) };
+const eventSites: JavaSiteReader = { transport: "event", read: (project, configuration, owned, repo, includeNested, proof, calls) => new JavaEventReader(project, configuration, owned, proof, calls()).sites(repo, includeNested) };
 
 /**
- * The call sites of one repository's Java sources: each source is parsed once, and every reader walks the one project
- * and the one configuration lookup built from it. Test sources are never call sites. A source of the repository the
+ * The call sites of one repository's Java sources: each source is parsed once, and every reader walks the one project,
+ * the one configuration lookup and the one reading of its calls built from it. Test sources are never call sites. A source of the repository the
  * parser rejects is one site whose target is `unknown` with `source-unreadable`, at the parser's fault line and under
  * the first reader's transport: none of its calls can be read.
  */
@@ -40,7 +42,9 @@ export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[]
     const transport = readers[0]?.transport;
     const unread = transport === undefined ? [] : unreadable.map((at): CallSite => ({ repo, file: at.path, line: at.line, symbol: basename(at.path, ".java"), transport, target: { status: "unknown", reason: "source-unreadable", evidence: [at] } }));
     const proof = callSiteProofOf(files, libraries, unreadable, unreadableLibraries, jdks);
-    const sites = readers.flatMap((reader) => reader.read(project, configuration, held, repo, includeNested, proof));
+    let calls: JavaCalls | undefined;
+    const sharedCalls = (): JavaCalls => (calls ??= javaCallsOf(project, new JavaValueEvaluator(project, configuration, proof), proof));
+    const sites = readers.flatMap((reader) => reader.read(project, configuration, held, repo, includeNested, proof, sharedCalls));
     for (const site of sites) if (site.diagnostic?.source === "not-read" && unreadableLibraries.length > 0) {
       site.diagnostic = { ...site.diagnostic, unreadableSources: unreadableLibraries };
     }

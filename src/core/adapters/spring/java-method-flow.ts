@@ -64,23 +64,41 @@ export function bindMethod(selection: MethodSelection, call: Node, scope: UrlSco
   };
 }
 
+/** The invocations of a project and, by the method each is written in, the methods it may select. */
+export interface JavaCalls {
+  readonly invocations: readonly Invocation[];
+  readonly edges: ReadonlyMap<number, readonly { call: Invocation; selections: MethodSelection[] }[]>;
+}
+
+/** The calls of `project` read once, so every reader that walks the project shares them. */
+export function javaCallsOf(project: JavaProject, text: FieldLookup, proof: CallSiteProof = NO_PROOF): JavaCalls {
+  const invocations = project.types.flatMap(invocationsOf);
+  const edges = new Map<number, { call: Invocation; selections: MethodSelection[] }[]>();
+  for (const call of invocations) {
+    if (call.member === undefined) continue;
+    const selections = methodsOf(call, project, text, call.type, proof);
+    const written = edges.get(call.member.id);
+    if (written === undefined) edges.set(call.member.id, [{ call, selections }]);
+    else written.push({ call, selections });
+  }
+  return { invocations, edges };
+}
+
 /** Reachable leaves grow monotonically over source methods; substitution stops at active methods. */
 export class JavaMethodFlow<T extends { invocation: Invocation }> {
-  readonly invocations: Invocation[];
+  readonly invocations: readonly Invocation[];
   private readonly leaves = new Map<number, T[]>();
   private readonly reachable = new Map<number, Set<T>>();
-  private readonly edges = new Map<number, { call: Invocation; selections: MethodSelection[] }[]>();
+  private readonly edges: JavaCalls["edges"];
   private readonly called = new Set<number>();
   private readonly roots = new Set<number>();
 
-  constructor(private readonly project: JavaProject, private readonly text: FieldLookup, leafOf: (call: Invocation) => T | undefined, private readonly proof: CallSiteProof = NO_PROOF) {
-    this.invocations = project.types.flatMap(invocationsOf);
+  constructor(private readonly project: JavaProject, private readonly text: FieldLookup, leafOf: (call: Invocation) => T | undefined, private readonly proof: CallSiteProof = NO_PROOF, calls: JavaCalls = javaCallsOf(project, text, proof)) {
+    this.invocations = calls.invocations;
+    this.edges = calls.edges;
     for (const call of this.invocations) {
       const leaf = leafOf(call);
       if (leaf !== undefined && call.member !== undefined) this.leaves.set(call.member.id, [...(this.leaves.get(call.member.id) ?? []), leaf]);
-      if (call.member === undefined) continue;
-      const selections = methodsOf(call, project, text, call.type, this.proof);
-      this.edges.set(call.member.id, [...(this.edges.get(call.member.id) ?? []), { call, selections }]);
     }
     for (const [method, leaves] of this.leaves) this.reachable.set(method, new Set(leaves));
     let changed = true;
