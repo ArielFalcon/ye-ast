@@ -189,6 +189,22 @@ test("reads stay one read each while no query is open, and an overlapping query 
   assert.deepEqual(["b1", "b2", "b3"].map((key) => cache.get(key) !== undefined), [true, true, true]);
 });
 
+test("queries that keep overlapping hold only what the open queries used, never everything since the overlap began", () => {
+  const floor = bytes("k1", empty) * 2;
+  const cache = createSnapshotDataCache(floor, undefined, { floor: true });
+  let open = cache.beginQuery();
+  for (let at = 1; at <= 12; at++) {
+    const next = cache.beginQuery();
+    cache.beginRead();
+    cache.put(`k${at}`, empty);
+    open();
+    open = next;
+  }
+  assert.deepEqual(["k1", "k2", "k3", "k4"].map((key) => cache.get(key) !== undefined), [false, false, false, false]);
+  assert.ok(cache.get("k12") !== undefined);
+  open();
+});
+
 test("a cap budget never holds more than its bytes, whatever the reads used", () => {
   const cap = bytes("a", empty) * 2;
   const cache = createSnapshotDataCache(cap);

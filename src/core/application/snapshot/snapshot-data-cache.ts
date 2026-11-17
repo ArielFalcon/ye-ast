@@ -19,7 +19,9 @@ const HELD_READS = 2;
  * `maxBytes` is a hard cap on the retained bytes. With `floor` it is instead the budget below which nothing is held
  * back: an admission still evicts least recently used entries, but never one the current read or the `HELD_READS` before
  * it used, so a working set larger than the budget is retained whole and the next read finds it (ADR-0112). All the
- * reads made while a query is open are one read, whatever the number of snapshots the query spans (ADR-0121).
+ * reads made while a query is open are one read, whatever the number of snapshots the query spans, and each query is
+ * its own read even when queries overlap: what was used since the oldest open query began is held until it ends, so
+ * the floor never holds more than the open queries used (ADR-0121).
  */
 export function createSnapshotDataCache(maxBytes: number, observe?: (event: SnapshotCacheEvent) => void, { floor = false }: { floor?: boolean } = {}): SnapshotDataCache {
   const entries = new Map<string, { payload: Uint8Array; size: number; fact: boolean; read: number }>();
@@ -29,9 +31,9 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
   let used = 0;
   let factBytes = 0;
   let read = 0;
-  let queries = 0;
-  let queryRead = false;
-  const held = (entry: { read: number }): boolean => floor && entry.read > 0 && entry.read >= read - HELD_READS;
+  const openQueries: number[] = [];
+  const heldFrom = (): number => Math.min(read - HELD_READS, ...openQueries);
+  const held = (entry: { read: number }, from: number): boolean => floor && entry.read > 0 && entry.read >= from;
   const release = (key: string): number => {
     const entry = entries.get(key)!;
     entries.delete(key);
@@ -50,9 +52,10 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
   /** Evicts least recently used entries until `size` fits, then holds the entry; answers how many entries it evicted. */
   const admit = (key: string, payload: Uint8Array, size: number, fact: boolean): number => {
     let evicted = 0;
+    const from = heldFrom();
     while (used + size > budget) {
       const oldest = entries.entries().next().value;
-      if (oldest === undefined || held(oldest[1])) break;
+      if (oldest === undefined || held(oldest[1], from)) break;
       const evictedBytes = release(oldest[0]);
       evicted++;
       observe?.({ outcome: "evicted", entryBytes: evictedBytes, retainedBytes: used });
@@ -64,17 +67,16 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
   };
   return {
     beginRead() {
-      if (queries > 0 && queryRead) return;
-      read++;
-      queryRead = queries > 0;
+      if (openQueries.length === 0) read++;
     },
     beginQuery() {
-      queries++;
+      openQueries.push(++read);
+      const began = read;
       let open = true;
       return () => {
         if (!open) return;
         open = false;
-        if (--queries === 0) queryRead = false;
+        openQueries.splice(openQueries.indexOf(began), 1);
       };
     },
     get(key) {

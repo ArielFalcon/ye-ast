@@ -52,9 +52,11 @@ default budget, main 3fd36839b, four identical calls in one process:
 1. ADR-0112 decisions 1 and 2 are amended. The floor holds the entries of the current read and the two reads before it,
    where all the reads made while a snapshot preparation is open are one read. A query of any number of member
    snapshots therefore keeps what every member used, and the reads before it are counted as before.
-2. The snapshot data cache gets `beginQuery()`, which returns the function that ends the query. While at least one
-   query is open, the reads that begin are one read; queries that overlap share that read until the last ends. A read
-   that begins while no query is open counts alone, as before, and ending a query twice ends it once.
+2. The snapshot data cache gets `beginQuery()`, which returns the function that ends the query. Each query is one read,
+   counted when it begins, and the reads that begin while a query is open count no further. Whatever was used since the
+   oldest open query began is held until that query ends, so queries that overlap without pause hold only what the
+   open queries used, never everything since the overlap began. A read that begins while no query is open counts
+   alone, as before, and ending a query twice ends it once.
 3. `withSnapshotPreparation` opens a query for the lifetime of its operation and ends it when the operation ends,
    whether it returns or throws. Nothing else opens one.
 4. An explicit `snapshotCacheBytes` keeps ADR-0020's meaning and the hard cap does not look at reads. Keys, the
@@ -70,6 +72,8 @@ default budget, main 3fd36839b, four identical calls in one process:
 - The process may hold, past the floor, the working sets of the current query and the two reads before it, as ADR-0112
   said for three reads. A query over many large members is one such working set: 154 MB on the measurement. A host
   that needs a bound sets `snapshotCacheBytes`.
+- What a read outside any preparation uses while a query is open is held until that query ends: bounded by the open
+  query's lifetime, and released when it ends.
 - A query that reads several snapshots without opening a preparation (a single repository's change query reads two)
   is counted as before; the first read of a query that opens one is counted when it begins.
 

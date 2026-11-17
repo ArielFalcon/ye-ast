@@ -152,6 +152,23 @@ test("a query that reads more snapshots than the floor holds keeps what each of 
   assert.equal(log.reads, 0);
 });
 
+test("a query that throws ends its query, so the reads after it age what it used", async () => {
+  const { deps, log, query } = setup();
+  deps.vcs.exportCommit = async (repo, _sha, _root, plan) => ({ ok: true, value: { files: [{ path: "src/app.ts", blob: repo, written: plan.write("src/app.ts") }], skipped: [] } });
+  const snapshotCache = createSnapshotDataCache(1, undefined, { floor: true });
+  const read = (repo: string) => withSnapshotPreparation({ ...deps, snapshotCache }, async (preparation) => {
+    assert.ok((await query({ preparation, snapshotCache }).map({ repo, repoId: repo, revision: "HEAD" })).ok);
+  });
+  await assert.rejects(withSnapshotPreparation({ ...deps, snapshotCache }, async (preparation) => {
+    assert.ok((await query({ preparation, snapshotCache }).map({ repo: "/m1", repoId: "/m1", revision: "HEAD" })).ok);
+    throw new TypeError("consumer");
+  }), TypeError);
+  for (const repo of ["/m2", "/m3", "/m4"]) await read(repo);
+  log.reads = 0;
+  await read("/m1");
+  assert.equal(log.reads, 1);
+});
+
 test("a failed export is not retained for the next consumer", async () => {
   const { deps, log, query, request } = setup();
   const original = deps.vcs.exportCommit;
