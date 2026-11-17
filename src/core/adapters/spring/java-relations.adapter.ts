@@ -137,8 +137,8 @@ function relationsOfFile(file: JavaFile, project: JavaProject, declared: Declare
   return { relations, unresolved, openConstants };
 }
 
-function assemble(files: readonly FileRelations[], cuts: readonly Cut[]): LanguageRelations {
-  return { relations: sortFindings(files.flatMap((file) => file.relations)), cuts, unresolved: [...files.flatMap((file) => file.unresolved), ...files.flatMap((file) => file.openConstants)] };
+function assemble(files: readonly FileRelations[]): LanguageRelations {
+  return { relations: sortFindings(files.flatMap((file) => file.relations)), cuts: [], unresolved: [...files.flatMap((file) => file.unresolved), ...files.flatMap((file) => file.openConstants)] };
 }
 
 const RELATIONS_SLOT = "java-relations";
@@ -183,7 +183,7 @@ async function keptByReads(
   } catch (error) {
     if (!(error instanceof Aborted)) throw error;
   }
-  return assemble(results, []);
+  return assemble(results);
 }
 
 export function createJavaRelations(parser: () => Promise<JavaParser>): LanguageRelationsReader {
@@ -212,7 +212,7 @@ export function createJavaRelations(parser: () => Promise<JavaParser>): Language
         } catch (error) {
           if (!(error instanceof Aborted)) throw error;
         }
-        return assemble(results, []);
+        return assemble(results);
       };
       const ofProject = (project: JavaProject): Declared => {
         const constantNames = repositoryConstantNames(project);
