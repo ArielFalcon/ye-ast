@@ -156,7 +156,7 @@ export function declarationsProject(parsed: ParsedJava, project: JavaProject, bu
   return parsed.declared.length === 0 ? project : createJavaProject([...parsed.files, ...parsed.declared], build);
 }
 
-function readSource(parser: JavaParser, source: SourceFile | LibrarySource, trees: JavaSyntaxTree[]): { file: JavaFile } | { unparsed: UnparsedSource; declared?: JavaFile } {
+export function readSource(parser: JavaParser, source: SourceFile | LibrarySource, trees: JavaSyntaxTree[]): { file: JavaFile } | { unparsed: UnparsedSource; declared?: JavaFile } {
   const path = "repo" in source ? libraryPath(source.repo, source.path) : source.path;
   try {
     const result = parser.parse(source, "declarations");
