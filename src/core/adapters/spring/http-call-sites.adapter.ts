@@ -1,5 +1,5 @@
 import type { UrlScope } from "./java-values.ts";
-import { JavaMethodFlow, reachedTarget, type Reading } from "./java-method-flow.ts";
+import { JavaMethodFlow, reachedTarget, type JavaCalls, type Reading } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import { requestMethodOf, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
@@ -53,6 +53,7 @@ export class JavaHttpReader {
     configuration: (file: JavaFile) => Configuration,
     private readonly owned: ReadonlySet<JavaFile>,
     private readonly proof: CallSiteProof = NO_PROOF,
+    private readonly calls?: JavaCalls,
   ) {
     this.annotations = createSpringAnnotations(project);
     this.text = new JavaValueEvaluator(project, configuration, proof);
@@ -60,7 +61,7 @@ export class JavaHttpReader {
 
   sites(repo: string, includeNested = false): CallSite[] {
     const found: CallSite[] = [];
-    const flow = new JavaMethodFlow<Request>(this.project, this.text, (call) => this.requestOf(call), this.proof);
+    const flow = new JavaMethodFlow<Request>(this.project, this.text, (call) => this.requestOf(call), this.proof, this.calls);
     for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
       if (!includeNested && flow.nested(invocation)) continue;
       const scope = this.scopeOf(invocation, new Map());

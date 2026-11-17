@@ -49,3 +49,14 @@ test("a library the parse left unread leaves the staged selection unproven", asy
 
   assert.deepEqual(await pipeline([PORT], [library("Bad.java", "class Bad { void broken( }")]), { proofs: [{ unparsed: [{ path: "(library)/lib/Bad.java", line: 1 }], unreadJvm: false }], unproven: [true] });
 });
+
+test("every reader of one pipeline walks the one reading of the project's calls", async () => {
+  const read: unknown[] = [];
+  const reader = (transport: JavaSiteReader["transport"]): JavaSiteReader => ({ transport, read: (...[, , , , , , calls]) => (read.push(calls()), []) });
+
+  javaCallSitesOf(await createJavaParser(), [PORT], [], "probe", [reader("http"), reader("event")]);
+
+  assert.equal(read.length, 2);
+  assert.equal(read[0], read[1]);
+  assert.ok((read[0] as { invocations: readonly unknown[] }).invocations.length > 0);
+});
