@@ -12,13 +12,14 @@ export interface SnapshotCacheEvent {
   retainedBytes: number;
 }
 
-/** The reads before the current one whose entries a floor budget never evicts: the base and the head of a change query. */
+/** The units (reads, or the queries that group reads) before the current one whose entries a floor budget never evicts: the base and the head of a change query. */
 const HELD_READS = 2;
 
 /**
  * `maxBytes` is a hard cap on the retained bytes. With `floor` it is instead the budget below which nothing is held
  * back: an admission still evicts least recently used entries, but never one the current read or the `HELD_READS` before
- * it used, so a working set larger than the budget is retained whole and the next read finds it (ADR-0112).
+ * it used, so a working set larger than the budget is retained whole and the next read finds it (ADR-0112). All the
+ * reads made while a query is open are one read, whatever the number of snapshots the query spans (ADR-0121).
  */
 export function createSnapshotDataCache(maxBytes: number, observe?: (event: SnapshotCacheEvent) => void, { floor = false }: { floor?: boolean } = {}): SnapshotDataCache {
   const entries = new Map<string, { payload: Uint8Array; size: number; fact: boolean; read: number }>();
@@ -28,6 +29,8 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
   let used = 0;
   let factBytes = 0;
   let read = 0;
+  let queries = 0;
+  let queryRead = false;
   const held = (entry: { read: number }): boolean => floor && entry.read > 0 && entry.read >= read - HELD_READS;
   const release = (key: string): number => {
     const entry = entries.get(key)!;
@@ -61,7 +64,18 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
   };
   return {
     beginRead() {
+      if (queries > 0 && queryRead) return;
       read++;
+      queryRead = queries > 0;
+    },
+    beginQuery() {
+      queries++;
+      let open = true;
+      return () => {
+        if (!open) return;
+        open = false;
+        if (--queries === 0) queryRead = false;
+      };
     },
     get(key) {
       const payload = lookup(key);

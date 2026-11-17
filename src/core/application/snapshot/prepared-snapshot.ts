@@ -13,18 +13,23 @@ import { ABORTED, extractSources, listExport, readSources, withScratch, type Com
 type Sources = Pick<CommitExtraction, "export" | "sources">;
 
 /** Retains only successful preparations, and the trees parsed from their sources, until every consumer of the operation has finished. */
-export function withSnapshotPreparation<T>(deps: Pick<SnapshotReaderDeps, "scratch" | "holds">, use: (preparation: SnapshotPreparation) => Promise<T>): Promise<T> {
+export function withSnapshotPreparation<T>(deps: Pick<SnapshotReaderDeps, "scratch" | "holds" | "snapshotCache">, use: (preparation: SnapshotPreparation) => Promise<T>): Promise<T> {
   return withScratch(deps, async ({ directory, keep, hold }) => {
     const held = new Map<string, { deps: SnapshotReaderDeps; value: PreparedCommit }>();
-    return use({
-      async obtain(key, deps, build) {
-        const previous = held.get(key);
-        if (previous && previous.deps.vcs === deps.vcs && previous.deps.reader === deps.reader && previous.deps.extractor === deps.extractor && (previous.deps.sourceSelection ?? isInMapScope) === (deps.sourceSelection ?? isInMapScope)) return { ok: true, value: previous.value };
-        const answer = await build(await directory(), keep, hold);
-        if (answer.ok) held.set(key, { deps, value: answer.value });
-        return answer;
-      },
-    });
+    const endQuery = deps.snapshotCache?.beginQuery();
+    try {
+      return await use({
+        async obtain(key, deps, build) {
+          const previous = held.get(key);
+          if (previous && previous.deps.vcs === deps.vcs && previous.deps.reader === deps.reader && previous.deps.extractor === deps.extractor && (previous.deps.sourceSelection ?? isInMapScope) === (deps.sourceSelection ?? isInMapScope)) return { ok: true, value: previous.value };
+          const answer = await build(await directory(), keep, hold);
+          if (answer.ok) held.set(key, { deps, value: answer.value });
+          return answer;
+        },
+      });
+    } finally {
+      endQuery?.();
+    }
   });
 }
 

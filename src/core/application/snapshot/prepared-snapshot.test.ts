@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createEntrypointQueries } from "../entrypoints/entrypoint-queries.ts";
 import { withSnapshotPreparation } from "./prepared-snapshot.ts";
+import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
 import type { EntrypointReading } from "../../ports/entrypoint-extractor.port.ts";
@@ -136,6 +137,21 @@ test("cancellation during a source read is retried by an independent consumer of
   });
 });
 
+test("a query that reads more snapshots than the floor holds keeps what each of them used, so the same query asked again reads nothing", async () => {
+  const { deps, log, query } = setup();
+  deps.vcs.exportCommit = async (repo, _sha, _root, plan) => ({ ok: true, value: { files: [{ path: "src/app.ts", blob: repo, written: plan.write("src/app.ts") }], skipped: [] } });
+  const snapshotCache = createSnapshotDataCache(1, undefined, { floor: true });
+  const members = ["/m1", "/m2", "/m3", "/m4", "/m5"];
+  const ask = () => withSnapshotPreparation({ ...deps, snapshotCache }, async (preparation) => {
+    for (const repo of members) assert.ok((await query({ preparation, snapshotCache }).map({ repo, repoId: repo, revision: "HEAD" })).ok);
+  });
+  await ask();
+  assert.equal(log.reads, members.length);
+  log.reads = 0;
+  await ask();
+  assert.equal(log.reads, 0);
+});
+
 test("a failed export is not retained for the next consumer", async () => {
   const { deps, log, query, request } = setup();
   const original = deps.vcs.exportCommit;
@@ -153,7 +169,7 @@ test("a failed export is not retained for the next consumer", async () => {
 
 function dataCache(): SnapshotDataCache {
   const entries = new Map<string, SnapshotData>();
-  return { beginRead: () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: () => ({ admitted: false, entryBytes: 0, evicted: 0 }), usage: () => ({ factBytes: 0, retainedBytes: 0 }) };
+  return { beginRead: () => {}, beginQuery: () => () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: () => ({ admitted: false, entryBytes: 0, evicted: 0 }), usage: () => ({ factBytes: 0, retainedBytes: 0 }) };
 }
 
 test("the extractor reads over the hold of the read that owns the sources and the facts the snapshot cache keeps for them", async () => {

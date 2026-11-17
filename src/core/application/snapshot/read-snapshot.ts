@@ -83,6 +83,8 @@ export interface FactAdmission {
 export interface SnapshotDataCache {
   /** Starts one snapshot read: the entries it and the reads before it use are what a floor budget keeps (ADR-0112). */
   beginRead(): void;
+  /** Groups the reads made until the returned function is called into one read, so a query over many snapshots holds what all of them used (ADR-0121). */
+  beginQuery(): () => void;
   get(key: string): SnapshotData | undefined;
   put(key: string, data: SnapshotData): void;
   /** A derived fact (ADR-0035), parsed afresh; facts share the budget and the eviction order and write no `cache` line. */

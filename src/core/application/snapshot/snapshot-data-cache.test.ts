@@ -147,6 +147,48 @@ test("a floor budget keeps what the current read and the two before it used past
   assert.deepEqual(read(["o1"]), [false]);
 });
 
+test("a floor budget holds what every read of an open query used, however many reads the query makes, and the first read after it counts again", () => {
+  const floor = bytes("a", empty) * 2;
+  const cache = createSnapshotDataCache(floor, undefined, { floor: true });
+  const members = ["m1", "m2", "m3", "m4", "m5"];
+  const end = cache.beginQuery();
+  for (const key of members) {
+    cache.beginRead();
+    cache.put(key, empty);
+  }
+  assert.deepEqual(members.map((key) => cache.get(key) !== undefined), [true, true, true, true, true]);
+  end();
+  end();
+  for (const key of ["n1", "n2", "n3"]) {
+    cache.beginRead();
+    cache.put(key, empty);
+  }
+  assert.deepEqual(members.map((key) => cache.get(key) !== undefined), [false, false, false, false, false]);
+});
+
+test("reads stay one read each while no query is open, and an overlapping query keeps the reads of both until the last ends", () => {
+  const floor = bytes("a", empty) * 2;
+  const cache = createSnapshotDataCache(floor, undefined, { floor: true });
+  const read = (key: string) => {
+    cache.beginRead();
+    cache.put(key, empty);
+  };
+  const first = cache.beginQuery();
+  read("a1");
+  const second = cache.beginQuery();
+  first();
+  first();
+  for (const key of ["a2", "a3", "a4"]) read(key);
+  assert.deepEqual(["a1", "a2", "a3", "a4"].map((key) => cache.get(key) !== undefined), [true, true, true, true]);
+  second();
+  const third = cache.beginQuery();
+  for (const key of ["b1", "b2", "b3"]) read(key);
+  third();
+  for (const key of ["c1", "c2"]) read(key);
+  assert.deepEqual(["a1", "a2", "a3", "a4"].map((key) => cache.get(key) !== undefined), [false, false, false, false]);
+  assert.deepEqual(["b1", "b2", "b3"].map((key) => cache.get(key) !== undefined), [true, true, true]);
+});
+
 test("a cap budget never holds more than its bytes, whatever the reads used", () => {
   const cap = bytes("a", empty) * 2;
   const cache = createSnapshotDataCache(cap);
