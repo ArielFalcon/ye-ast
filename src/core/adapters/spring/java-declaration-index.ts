@@ -2,7 +2,7 @@ import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { JAVA_DECLARATIONS_SLOT, type JavaMarker, type NamingKind } from "./java-declaration-questions.ts";
-import { declarationsOf, type JavaDeclarations } from "./java-declarations.ts";
+import { declarationsOf, type DeclarationState, type JavaDeclarations } from "./java-declarations.ts";
 import { claimedPlatformPackage } from "./java-symbols.ts";
 
 export interface DeclarationIndexInputs {
@@ -18,8 +18,8 @@ export interface DeclarationIndexInputs {
  */
 export interface JavaDeclarationIndex {
   answer(question: string): string;
-  /** Whether any source is not read in full: an unparsed source, one read for its declarations only, or one whose declarations cannot be listed. */
-  hasUnread(): boolean;
+  /** The sources not read in full, in the order of the sources: unparsed, read for their declarations only, or with declarations that cannot be listed. */
+  unread(): readonly { path: string; state: DeclarationState }[];
 }
 
 interface Located {
@@ -57,41 +57,51 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
   const marked = lazily(() => grouped(entries.flatMap(({ path, entry }) => entry.body.markers.map((marker) => [marker, path] as const))));
   const claimed = lazily(() => list(new Set(inProject.flatMap(({ entry }) => claimedPlatformPackage(entry.header.packageName) ?? []))));
   const listing = lazily(() => fingerprint({ listing: entries.map(({ path, entry }) => [path, entry.content]).sort(([a], [b]) => (a! < b! ? -1 : a! > b! ? 1 : 0)) }));
-  const unread = lazily(() => JSON.stringify({ files: entries.filter(({ entry }) => entry.state !== "read").map(({ path, entry }) => [path, entry.state]).sort(([a], [b]) => (a! < b! ? -1 : a! > b! ? 1 : 0)), unreadJvm: inputs.unreadJvm }));
+  const unreadAnswer = lazily(() => JSON.stringify({ files: entries.filter(({ entry }) => entry.state !== "read").map(({ path, entry }) => [path, entry.state]).sort(([a], [b]) => (a! < b! ? -1 : a! > b! ? 1 : 0)), unreadJvm: inputs.unreadJvm }));
+
+  const answers = new Map<string, string>();
+  const answerOf = (question: string): string => {
+    const [kind = "", ...rest] = question.split("|");
+    const argument = rest.join("|");
+    switch (kind) {
+      case "file":
+        return byPath.get(argument)?.content ?? "";
+      case "declarations":
+        return byPath.get(argument)?.declarationsDigest ?? "";
+      case "declaring":
+        return list(declaredBy().get(argument) ?? []);
+      case "package": {
+        const [which = "", ...name] = rest;
+        return String(which === "prefix" ? packages().has(name.join("|")) : typedPackages().has(name.join("|")));
+      }
+      case "named":
+        return `[${(named().get(argument) ?? []).toSorted().join(",")}]`;
+      case "naming": {
+        const [which = "", ...name] = rest;
+        return list(naming()[which as NamingKind].get(name.join("|")) ?? []);
+      }
+      case "marked":
+        return list(marked().get(argument as JavaMarker) ?? []);
+      case "unread":
+        return unreadAnswer();
+      case "build":
+        return argument === "claimed" ? claimed() : String(inputs.generatesInterfaces);
+      case "listing":
+        return listing();
+      default:
+        throw new Error(`unknown question: ${question}`);
+    }
+  };
 
   return {
-    hasUnread: () => entries.some(({ entry }) => entry.state !== "read") || inputs.unreadJvm,
-    answer(question) {
-      const [kind = "", ...rest] = question.split("|");
-      const argument = rest.join("|");
-      switch (kind) {
-        case "file":
-          return byPath.get(argument)?.content ?? "";
-        case "declarations":
-          return byPath.get(argument)?.declarationsDigest ?? "";
-        case "declaring":
-          return list(declaredBy().get(argument) ?? []);
-        case "package": {
-          const [which = "", ...name] = rest;
-          return String(which === "prefix" ? packages().has(name.join("|")) : typedPackages().has(name.join("|")));
-        }
-        case "named":
-          return `[${(named().get(argument) ?? []).toSorted().join(",")}]`;
-        case "naming": {
-          const [which = "", ...name] = rest;
-          return list(naming()[which as NamingKind].get(name.join("|")) ?? []);
-        }
-        case "marked":
-          return list(marked().get(argument as JavaMarker) ?? []);
-        case "unread":
-          return unread();
-        case "build":
-          return argument === "claimed" ? claimed() : String(inputs.generatesInterfaces);
-        case "listing":
-          return listing();
-        default:
-          throw new Error(`unknown question: ${question}`);
+    unread: () => entries.filter(({ entry }) => entry.state !== "read").map(({ path, entry }): { path: string; state: DeclarationState } => ({ path, state: entry })),
+    answer: (question) => {
+      let answer = answers.get(question);
+      if (answer === undefined) {
+        answer = answerOf(question);
+        answers.set(question, answer);
       }
+      return answer;
     },
   };
 }

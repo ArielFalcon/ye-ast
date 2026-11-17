@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaRelations } from "./java-relations.adapter.ts";
 import { heldJavaProject } from "./java-project.ts";
+import { rememberingFacts } from "./remembering-facts.testing.ts";
 
 const sources = [
   { path: "app/Target.java", content: "package app; class Target {}" },
@@ -355,4 +357,98 @@ test("a read of a constant the sources cannot settle is an unresolved use of its
 test("a type an annotation's argument names by its simple name is a reference of the annotated declaration's type", async () => {
   const answer = await createJavaRelations(createJavaParser).extract([KEYS, qualified("fx/use/Marked.java", "import fx.store.Keys;\nclass Marked {\n  @SuppressWarnings(Keys.CACHE) void read() {}\n  String plain() { return Keys.CACHE.trim(); }\n}")]);
   assert.deepEqual(referencesIn(answer).filter((entry) => typeof entry === "string" && entry.startsWith("Marked->")), ["Marked->Keys:4"]);
+});
+
+const KEPT_PARENT = { path: "app/Parent.java", content: "package app;\npublic class Parent { public static class Inner {} public static final String KEY = \"k\"; }\n" };
+const KEPT_FIRST = { path: "app/First.java", content: "package app;\nclass First extends Parent {\n  Inner inner;\n  Ghost ghost;\n  String key() { return KEY; }\n}\n" };
+const KEPT_SECOND = { path: "app/Second.java", content: "package app;\nclass Second extends Parent {\n  Inner inner;\n}\n" };
+const KEPT_OTHER = { path: "util/Other.java", content: "package util;\nimport static app.Parent.KEY;\nclass Other {\n  String text = KEY;\n  java.util.List<String> names;\n}\n" };
+const KEPT_PLAIN = { path: "util/Plain.java", content: "package util;\nclass Plain { String text; }\n" };
+const KEPT = [KEPT_PARENT, KEPT_FIRST, KEPT_SECOND, KEPT_OTHER, KEPT_PLAIN];
+
+async function readKept(facts: ReturnType<typeof rememberingFacts>, files: readonly { path: string; content: string }[], options: { completeSource?: boolean; signal?: AbortSignal } = {}) {
+  const holds = createJavaTreeHolds();
+  const hold = holds.open();
+  try {
+    return await createJavaRelations(() => createJavaParser(holds)).extract(files, { hold, facts, ...options });
+  } finally {
+    hold.release();
+  }
+}
+
+const cold = (files: readonly { path: string; content: string }[], options: { completeSource?: boolean } = {}) => createJavaRelations(createJavaParser).extract(files, options);
+const edited = (file: { path: string; content: string }, replace: [string, string]) => ({ ...file, content: file.content.replace(...replace) });
+const turn = (facts: ReturnType<typeof rememberingFacts>) => ({ hits: facts.reads.hits, misses: facts.reads.misses });
+
+test("the relations kept per file answer the bytes a cold read gives, and a second read of the same sources derives none", async () => {
+  const facts = rememberingFacts();
+  const first = await readKept(facts, KEPT);
+  assert.deepEqual(first, await cold(KEPT));
+  assert.ok(first.relations.length > 0 && first.unresolved.length > 0);
+  assert.deepEqual(turn(facts), { hits: 0, misses: KEPT.length });
+  assert.deepEqual(await readKept(facts, KEPT), first);
+  assert.deepEqual(turn(facts), { hits: KEPT.length, misses: KEPT.length });
+});
+
+test("an edit to a file no derivation read derives that file alone", async () => {
+  const facts = rememberingFacts();
+  await readKept(facts, KEPT);
+  const sources = [KEPT_PARENT, KEPT_FIRST, KEPT_SECOND, edited(KEPT_OTHER, ["java.util.List<String> names;", "java.util.List<String> names; int count;"]), KEPT_PLAIN];
+  assert.deepEqual(await readKept(facts, sources), await cold(sources));
+  assert.deepEqual(turn(facts), { hits: KEPT.length - 1, misses: KEPT.length + 1 });
+});
+
+test("an edit that moves a declaration another file's relation places derives the files that named it, and no other", async () => {
+  const facts = rememberingFacts();
+  await readKept(facts, KEPT);
+  const sources = [edited(KEPT_PARENT, ["package app;\n", "package app;\n// a line above the types\n"]), KEPT_FIRST, KEPT_SECOND, KEPT_OTHER, KEPT_PLAIN];
+  assert.deepEqual(await readKept(facts, sources), await cold(sources));
+  assert.deepEqual(turn(facts), { hits: 1, misses: KEPT.length + 4 });
+});
+
+test("a file that appears and declares a name a derivation asked about and found nowhere derives that file", async () => {
+  const facts = rememberingFacts();
+  const before = await readKept(facts, KEPT);
+  assert.ok(before.unresolved.some((use) => use.name === "Ghost"));
+  const sources = [...KEPT, { path: "app/Ghost.java", content: "package app;\nclass Ghost {}\n" }];
+  const after = await readKept(facts, sources);
+  assert.deepEqual(after, await cold(sources));
+  assert.ok(!after.unresolved.some((use) => use.name === "Ghost"));
+  assert.deepEqual(turn(facts), { hits: KEPT.length - 1, misses: KEPT.length + 2 });
+});
+
+test("a read that completeness bounds shares nothing with a complete read", async () => {
+  const facts = rememberingFacts();
+  const bounded = await readKept(facts, KEPT, { completeSource: false });
+  assert.deepEqual(bounded, await cold(KEPT, { completeSource: false }));
+  const complete = await readKept(facts, KEPT);
+  assert.deepEqual(complete, await cold(KEPT));
+  assert.notDeepEqual(complete, bounded);
+  assert.equal(facts.reads.misses, KEPT.length * 2);
+});
+
+test("a read an abort cut keeps nothing, so the next read answers in full", async () => {
+  const facts = rememberingFacts();
+  const aborted = new AbortController();
+  aborted.abort();
+  const cut = await readKept(facts, KEPT, { signal: aborted.signal });
+  assert.ok(cut.relations.length < (await cold(KEPT)).relations.length);
+  assert.deepEqual(await readKept(facts, KEPT), await cold(KEPT));
+});
+
+test("a source that does not parse answers its cut alone and derives no file", async () => {
+  const facts = rememberingFacts();
+  const sources = [...KEPT, { path: "app/Broken.java", content: "package app; class {" }];
+  const answer = await readKept(facts, sources);
+  assert.deepEqual(answer, await cold(sources));
+  assert.deepEqual(answer.relations, []);
+  assert.equal(answer.cuts.length, 1);
+  assert.deepEqual(turn(facts), { hits: 0, misses: 0 });
+});
+
+test("the derivation of one file enumerates no type of the project: a read of another file goes through a recorded question", () => {
+  const text = readFileSync(new URL("./java-relations.adapter.ts", import.meta.url), "utf8");
+  const derivation = text.slice(text.indexOf("function relationsOfFile"), text.indexOf("function assemble")) + text.slice(text.indexOf("async function keptByReads"), text.indexOf("export function createJavaRelations"));
+  assert.ok(derivation.length > 1000);
+  assert.doesNotMatch(derivation, /\bproject\.types\b/);
 });

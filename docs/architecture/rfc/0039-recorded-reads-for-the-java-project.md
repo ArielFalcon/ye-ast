@@ -277,6 +277,40 @@ What it settles:
 - `relations` over this backend yields 17,636 relations and 4,294 unresolved uses, the bytes M2 must reproduce.
 - Open question 7 is answered by these numbers: M5 is not built with M2.
 
+### M1 and M2: the index and `relations` per file (2026-11-17)
+
+Same backend, the stdio MCP, live, `callers`, p50 of five rounds after one edit (a method added to one implementation
+file) and of three unchanged rounds, candidate against the tree before it, one machine, measured in turn.
+
+| | Before | After |
+|---|---|---|
+| `relations` stage, one edit | 2,319 ms | 187 ms |
+| `callers`, one edit | 12,263 ms | 9,351 ms |
+| `callers`, unchanged | 6,885 ms | 6,301 ms |
+| `relations` stage, first call of a process | 2,199 ms | 3,187 ms |
+| `callers`, first call of a process | 16,146 ms | 16,114 ms |
+
+In process, over the same 1,210 sources (`relations` alone): cold with no facts 3.1 s; cold with the facts 3.9 s (the
+index of every source, then every file derived); unchanged 134 ms; one edit 701 ms, of which about 540 ms is the held
+project a miss needs and that the other stages build in the same call anyway. The kept answer is the bytes a cold read
+gives in each of the four reads (17,636 relations, 4,294 unresolved uses), and one edit derives one index entry and one
+file.
+
+What the memory tier holds for it: 1.8 MB for the 1,210 declaration entries, and 17.1 MB for the entries of the
+relations of every file, almost all of it the values (the findings and unresolved uses, as large as the retained stage
+output they sum to); the recorded questions are about 49,000 distinct pairs in all (40 per file: `declaring` 23,000,
+`naming` of a constant 12,500, `file` 7,700, `package` 3,800), about 3.6 MB.
+
+What it settles:
+
+- The one-edit stage falls by 2.1 s. The call falls by 2.9 s: the rest is spread over `entrypoints` (1.80 s to 1.66 s)
+  and `receiver-methods`, within the noise of a host other sessions load.
+- The first call of a process pays one more second: the index is derived for every source and the entries are written.
+  The entries of `java-declarations` persist on disk (ADR-0077), so a later process reads them instead of deriving; that
+  is not measured here. The entries of `ofReads` follow in M6.
+- Reads recorded per file are few (40 distinct pairs on average), so verifying them is not the cost: 187 ms for 1,209
+  verified entries and one derived.
+
 ## Open questions
 
 | # | Question | Recommendation |

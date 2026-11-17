@@ -79,7 +79,7 @@ test("the index answers each primitive question with sorted plain data, an empty
   assert.equal(index.answer(questions.marked("aspect")), "[]");
   assert.deepEqual(JSON.parse(index.answer(questions.unread())), { files: [["app/Broken.java", "unparsed"]], unreadJvm: false });
   assert.equal(index.answer(questions.build("claimed")), "[]");
-  assert.equal(index.hasUnread(), true);
+  assert.deepEqual(index.unread().map(({ path, state }) => [path, state.state]), [["app/Broken.java", "unparsed"]]);
 });
 
 test("a file that appears changes the answers about the names it declares and no other answer", async () => {
@@ -98,7 +98,6 @@ test("the platform packages the sources claim, the build and the JVM sources no 
   assert.equal(claiming.answer(questions.build("claimed")), '["org.springframework.boot."]');
   assert.equal(claiming.answer(questions.build("generatesInterfaces")), "true");
   assert.equal(JSON.parse(claiming.answer(questions.unread())).unreadJvm, true);
-  assert.equal(claiming.hasUnread(), true);
 });
 
 test("the index declares the types the project over the same sources declares", async () => {
@@ -138,7 +137,7 @@ test("the project tells a derivation each question its answer rests on, the ones
 
 test("a member type a memo answers tells the reads of the computation that filled it, filled by a recorded read or not", async () => {
   const sort = (asked: Set<string>) => [...asked].sort();
-  const [filledUnrecorded, filledRecorded] = await Promise.all([false, true].map(async (recordedFirst) => withJavaSources(await createJavaParser(), (parse) => {
+  const readTwice = async (recordedFirst: boolean) => withJavaSources(await createJavaParser(), (parse) => {
     const project = createJavaProject(parse([NESTED, CHILD]).files);
     const scope = scopeOf(project.types.find((type) => type.name === "Child")!);
     const first = new Set<string>();
@@ -147,7 +146,9 @@ test("a member type a memo answers tells the reads of the computation that fille
     const later = new Set<string>();
     project.reading((question) => later.add(question), () => project.bindName("Inner", scope, "lenient"));
     return { first: sort(first), later: sort(later) };
-  })));
+  });
+  const filledUnrecorded = await readTwice(false);
+  const filledRecorded = await readTwice(true);
   assert.ok(filledUnrecorded.later.includes(questions.file("app/Parent.java")));
   assert.deepEqual(filledRecorded.later, filledRecorded.first);
   assert.deepEqual(filledUnrecorded.later, filledRecorded.later);

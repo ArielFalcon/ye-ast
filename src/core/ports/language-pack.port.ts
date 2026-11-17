@@ -1,6 +1,7 @@
 import type { UnresolvedUse } from "../domain/impact/impact-cuts.ts";
 import type { Relation } from "../domain/relations/relation.ts";
 import type { Cut, Finding } from "../domain/shared/fact.ts";
+import type { DerivedFacts } from "./derived-facts.port.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
 import type { ParseHold } from "./parse-holds.port.ts";
 import type { LanguageProfile } from "../domain/languages/profiles.ts";
@@ -43,6 +44,6 @@ export interface LanguageRelations {
 }
 
 export interface LanguageRelationsReader {
-  /** `context`: the files the pack's `contextFiles` selects, which state its build and are never read as sources. */
-  extract(sources: readonly SourceFile[], options?: { paths?: readonly string[]; completeSource?: boolean; hold?: ParseHold; signal?: AbortSignal; context?: readonly SourceFile[] }): Promise<LanguageRelations>;
+  /** `context`: the files the pack's `contextFiles` selects, which state its build and are never read as sources. `facts`: the derived facts of the snapshot read, which keep what a reader derives per file. */
+  extract(sources: readonly SourceFile[], options?: { paths?: readonly string[]; completeSource?: boolean; hold?: ParseHold; signal?: AbortSignal; context?: readonly SourceFile[]; facts?: DerivedFacts }): Promise<LanguageRelations>;
 }

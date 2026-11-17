@@ -66,10 +66,9 @@ export interface StaticImports {
 }
 
 /** The file's static imports, or nothing when none of them names a type the repository declares. */
-export function staticImportsOf(file: JavaFile, typesByFqn: ReadonlyMap<string, readonly TypeDecl[]>): StaticImports | undefined {
-  const imported = (className: string): readonly TypeDecl[] => typesByFqn.get(className) ?? [];
+export function staticImportsOf(file: JavaFile, typesDeclaring: (qualifiedName: string) => readonly TypeDecl[]): StaticImports | undefined {
   const single = Map.groupBy(file.staticImports, ({ member }) => member);
-  const imports: StaticImports = { file, single: new Map([...single].map(([member, entries]) => [member, entries.map(({ className }) => imported(className))])), onDemand: file.staticOnDemandImports.map(imported), members: new Map() };
+  const imports: StaticImports = { file, single: new Map([...single].map(([member, entries]) => [member, entries.map(({ className }) => typesDeclaring(className))])), onDemand: file.staticOnDemandImports.map((className) => typesDeclaring(className)), members: new Map() };
   return [...imports.single.values(), imports.onDemand].some((entries) => entries.some((types) => types.length > 0)) ? imports : undefined;
 }
 

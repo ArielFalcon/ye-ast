@@ -1,5 +1,6 @@
 import type { UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { LanguageRelationsReader } from "../../ports/language-pack.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin, MemberProofContext, ReassignedMemberUseOrigin } from "../../domain/relations/member-use.ts";
@@ -24,7 +25,7 @@ export interface RelationExtractor {
    * Presence of `memberUses`, including an empty list, supersedes field-origin settlements and local-origin member bridges.
    * `externalUses` comes with `memberUses`: the calls proven to run on a field that holds a type from outside the repository.
    */
-  extract(files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext; paths?: readonly string[]; completeSource?: boolean; hold?: ParseHold; signal?: AbortSignal }): Promise<RelationExtraction>;
+  extract(files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext; paths?: readonly string[]; completeSource?: boolean; hold?: ParseHold; signal?: AbortSignal; facts?: DerivedFacts }): Promise<RelationExtraction>;
 }
 
 export interface RelationExtraction {

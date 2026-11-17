@@ -67,7 +67,11 @@ no key narrower than the listing could be shown sound.
   read.
 - Soundness rests on three conditions that tests hold: no read of another file outside the recorded questions; no state
   shared between derivations without its reads; an empty answer recorded.
-- The index adds one per-file slot to the store; the increase is reported with the measurement of the unit.
+- Measured through the stdio MCP on the 1,340-file backend (p50, candidate against the tree before it): the
+  `relations` stage after one edit 2,319 ms to 187 ms and `callers` after one edit 12,263 ms to 9,351 ms; unchanged
+  `callers` 6,885 ms to 6,301 ms; the first call of a process pays 1 s more for `relations` (2,199 ms to 3,187 ms).
+- The memory tier holds 1.8 MB of declaration entries and 17.1 MB of per-file relation entries for 1,210 sources; the
+  answers are the bytes a cold read gives.
 
 ## Not decided here
 

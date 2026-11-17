@@ -300,7 +300,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
     const implementedContracts = once(() => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()));
     const overloadImplementations = once(async (): Promise<ReadonlyMap<GraphNodeId, GraphNodeId>> => (syntaxOf === undefined ? new Map() : overloadImplementationsOf(store, tree.sources.map(({ path }) => path), navigation(), async (file) => (await syntaxOf(file)).callables)));
     const unresolved = once(() => unresolvedOf(store, tree));
-    const relations = once(() => retainedRelations(deps.relations, prepared, tree, request, source.hold));
+    const relations = once(() => retainedRelations(deps.relations, prepared, tree, request, source.hold, facts));
     const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
     const retained = facts === undefined || source.digest === undefined ? undefined : { facts, index: source.digest };
     /** Kept between requests under the index it read and the relations its origins come from. */
