@@ -4,7 +4,7 @@ import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { javaDeclarationIndex, type DeclarationIndexInputs, type JavaDeclarationIndex } from "./java-declaration-index.ts";
 import { questions } from "./java-declaration-questions.ts";
-import { heldJavaProject, type HeldJavaProject } from "./java-project.ts";
+import { heldJavaProject, ReleasedParseHoldError, type HeldJavaProject } from "./java-project.ts";
 import type { JavaFile, JavaProject, ProjectBuild } from "./java-symbols.ts";
 
 /** What a reader needs to keep its answers by the questions they asked of the declaration index (RFC-0039). */
@@ -23,7 +23,8 @@ export function keptReads(facts: DerivedFacts, hold: ParseHold, parser: () => Pr
 /** The project a derivation reads and the files by path that project holds, with the question-asking function that records its reads. */
 interface FileReading {
   project: JavaProject;
-  files: ReadonlyMap<string, JavaFile>;
+  /** A file read by path records the question of its content, whether the sources hold it or not. */
+  files: { get(path: string): JavaFile | undefined };
   asked(question: string): string;
 }
 
@@ -41,6 +42,12 @@ export async function heldProject(hold: ParseHold, parser: () => Promise<JavaPar
     filesOfHeld.set(held, files);
   }
   return { project: over === "sources" ? held.project : held.declarations, files: files[over] };
+}
+
+/** The held project of one query, built on first use; every use checks the hold is still open, so a released hold is never read. */
+export function heldProjectOnce(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], build: ProjectBuild, over: ReadOver = "sources"): () => ReturnType<typeof heldProject> {
+  let project: ReturnType<typeof heldProject> | undefined;
+  return () => (hold.open() ? (project ??= heldProject(hold, parser, sources, build, over)) : Promise.reject(new ReleasedParseHoldError()));
 }
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -61,20 +68,21 @@ export async function keptByFile<S extends { file: string }, A>(
   if (sites.length === 0) return [];
   const index = await kept.index();
   const results: A[] = sites.map(() => unknown);
-  let project: ReturnType<typeof heldProject> | undefined;
+  const projectOf = heldProjectOnce(kept.hold, reading.parser, reading.sources, reading.build, reading.over);
   for (const [path, entries] of Map.groupBy(sites.entries(), ([, site]) => site.file)) {
     const content = index.answer(questions.file(path));
     if (content === "") continue;
     const places = [...new Map(entries.map(([, site]) => [placeOf(site), site])).entries()].sort(([a], [b]) => byText(a, b));
     const subject = { path, content, places: places.map(([place]) => place), generatesInterfaces: reading.build.generatesInterfaces === true };
     const answers = await kept.facts.ofReads(reading.slot, subject, index.answerIfKnown, async (record) => {
-      const { project: over, files } = await (project ??= heldProject(kept.hold, reading.parser, reading.sources, reading.build, reading.over));
+      const { project: over, files } = await projectOf();
       const asked = (question: string): string => {
         const answer = index.answer(question);
         record(question, answer);
         return answer;
       };
-      return over.reading((question) => void asked(question), () => derive({ project: over, files, asked }, places.map(([, site]) => site)));
+      const recorded = { get: (at: string) => (asked(questions.file(at)), files.get(at)) };
+      return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, asked }, places.map(([, site]) => site)));
     });
     const at = new Map(places.map(([place], position) => [place, position]));
     for (const [position, site] of entries) results[position] = answers[at.get(placeOf(site))!]!;

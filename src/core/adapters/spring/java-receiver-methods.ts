@@ -18,7 +18,7 @@ import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 import { indexWrites, projectWrites, type FilesWriting } from "./java-written-names.ts";
 import type { DeclarationState } from "./java-declarations.ts";
 import { questions } from "./java-declaration-questions.ts";
-import { heldProject, keptByFile, keptReads, type KeptReads, type ReadOver } from "./java-kept-reads.ts";
+import { heldProjectOnce, keptByFile, keptReads, type KeptReads, type ReadOver } from "./java-kept-reads.ts";
 
 const SLOT = "java-receiver-methods";
 const BINDINGS_SLOT = "java-receiver-bindings";
@@ -139,7 +139,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
     const { facts: kept, hold: held } = reading;
     const index = await reading.index();
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
-    let projectOf: ReturnType<typeof heldProject> | undefined;
+    const projectOf = heldProjectOnce(held, parser, sources, build);
     const byFile = Map.groupBy(sites.entries(), ([, site]) => site.file);
     for (const [path, entries] of byFile) {
       if (signal?.aborted) throw new DeadlineCut(results);
@@ -149,7 +149,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       const subject = { path, content, sites: places, generatesInterfaces: build.generatesInterfaces === true, generated };
       const placeIndex = new Map(places.map(([line, column, member], at) => [callKey(line, column, member), at]));
       const readings = await kept.ofReads(SITES_SLOT, subject, index.answerIfKnown, async (record) => {
-        const { project, files } = await (projectOf ??= heldProject(held, parser, sources, build));
+        const { project, files } = await projectOf();
         const asked = (question: string): string => {
           const answer = index.answer(question);
           record(question, answer);

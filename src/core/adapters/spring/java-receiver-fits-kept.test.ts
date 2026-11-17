@@ -82,3 +82,24 @@ test("a call-rewriting annotation anywhere, or a JVM source no extractor reads, 
   const paths = [...SOURCES.map(({ path }) => path), "src/main/kotlin/Twin.kt"];
   assert.deepEqual(await readKept(facts, SOURCES, paths), await cold(SOURCES, paths));
 });
+
+test("a call whose implementation's file is absent is derived again when that file appears, and again when it leaves", async () => {
+  const facts = rememberingFacts();
+  const without = SOURCES.filter((source) => source !== TAX_MAPPER);
+  assert.deepEqual(await readKept(facts, without), await cold(without));
+  assert.deepEqual(await readKept(facts, SOURCES), await cold(SOURCES));
+  assert.deepEqual(await readKept(facts, without), await cold(without));
+  assert.deepEqual(await readKept(facts, SOURCES), await cold(SOURCES));
+});
+
+test("a hold released while a query derives file after file is refused at the next file, never read as an empty project", async () => {
+  const facts = rememberingFacts();
+  const holds = createJavaTreeHolds();
+  const hold = holds.open();
+  const releasing = { ...facts, ofReads: (async (...args: Parameters<typeof facts.ofReads>) => {
+    const kept = await facts.ofReads(...args);
+    hold.release();
+    return kept;
+  }) as typeof facts.ofReads };
+  await assert.rejects(createJavaNameBindings(() => createJavaParser(holds), SOURCES, SOURCES.map(({ path }) => path), releasing, hold).receiverFits!(SITES), { name: "ReleasedParseHoldError" });
+});

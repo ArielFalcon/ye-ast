@@ -89,12 +89,12 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "java-entrypoints": [1, "3a63c07df1763ffeacea0e437ac9a1ada4f10d0de462ec6f50ca063ea72c1cb0"],
   "java-callbacks": [1, "31e796b313e5ab7c1a14d463c85c1e147f377e0585c86f8d0742b4d0fbc8eaf9"],
   "java-receiver-sites": [1, "a6a10152c6d15d73ae90cb581762317393860044cdc48be40a7f8ed1250657d0"],
-  "java-argument-counts": [1, "2f60ffb833077c2684e176908889b7dd18b5f58c02cb17cc0fa686da1e70e739"],
-  "java-accepted-counts": [1, "7fa56d9beb00f70f156766e3db87c34e729a05fa98b6f24c5c029133ceb63d53"],
-  "java-receiver-fits": [1, "5a8fee9f8a05bbffd39289af18a075e58fbeba974c652742db40929640676f82"],
-  "java-implemented-declarations": [1, "4bac0cddb4b2a5c5f5a12cf8beb2e2506403a5522cd556ad6d82ab3d77d756b5"],
-  "java-implicit-chains": [1, "ab476dd3f3a6d53cf81f4d74991700187ab636b6d1510ba8ba6320603cf39ead"],
-  "java-declared-supertypes": [1, "c70d229b3526e9bcf93ccfd71b405e6d19230efc95331dc179f51a0854b53cc8"],
+  "java-argument-counts": [1, "470a1bdbb5025f531531f3b6c7e47a35c2060b9f9e79b42e8c51156198208b84"],
+  "java-accepted-counts": [1, "46a2118d21d79f7565b33d6bc4f95c5eb8fe796382fc6f1ba47c07bf438926a7"],
+  "java-receiver-fits": [1, "e0663b4d88d03a139c713cd0a2bdf4432899622d600fed98ed81a6e15da70934"],
+  "java-implemented-declarations": [1, "1548f363531649fe08135d3449aec499e77c24649017b3076b1f9e6beb097297"],
+  "java-implicit-chains": [1, "851729aee28f2536adf62614a5323d7ab2d36bc6c7be23a6a052cd7ee4eca1fb"],
+  "java-declared-supertypes": [1, "b8ae346f455499547b6d9b411349b1f46826c212414f75bcccd21caa3d56d95c"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
   "ts-module-resolutions": [1, "06babd9d9388578f4fac7b2d6655e24b5df82a7f5c1aa5b6d5dec0c70e1125c9"],
 };
@@ -146,7 +146,7 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   const supertypeSources = [...javaSources, JAVA_ENUM];
   const supertypeFacts = recordingFacts((slot, value) => slot === "java-declared-supertypes" && record(slot, value));
   const at = (file: SourceFile, name: string) => ({ file: file.path, line: file.content.split("\n").findIndex((text) => new RegExp(`class ${name}\\b`).test(text)) + 1, name });
-  await createJavaNameBindings(() => createJavaParser(holds), supertypeSources, supertypeSources.map(({ path }) => path), supertypeFacts, hold).declaredSupertypes!([at(JAVA_CALLBACKS, "Users"), at(JAVA_CALLBACKS, "Lonely"), at(JAVA_AMBIGUOUS, "Ambiguous"), { file: JAVA_ENUM.path, line: 3, name: "ONE" }]);
+  await createJavaNameBindings(() => createJavaParser(holds), supertypeSources, supertypeSources.map(({ path }) => path), supertypeFacts, hold).declaredSupertypes!([at(JAVA_CALLBACKS, "Users"), at(JAVA_CALLBACKS, "Lonely"), at(JAVA_AMBIGUOUS, "Ambiguous"), { file: JAVA_ENUM.path, line: 3, name: "ONE" }, { file: JAVA_CALLBACKS.path, line: 1, name: "Nowhere" }]);
   const chainSources = [...javaSources, JAVA_CHAINS];
   const chainFacts = recordingFacts((slot, value) => slot === "java-implicit-chains" && record(slot, value));
   await createJavaNameBindings(() => createJavaParser(holds), chainSources, chainSources.map(({ path }) => path), chainFacts, hold).implicitChains!(["Child", "Sub", "Big", "Orphan", "Parent"].map((name) => at(JAVA_CHAINS, name)));
