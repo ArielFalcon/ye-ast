@@ -130,3 +130,12 @@ reads the same store. This RFC decides nothing about it.
 | Where it is on | Wherever the index cache directory is given (`indexCache`); without it nothing is written |
 | `--cache <dir>` | Not built. It is a flag on every command and in the registration `init` prints, a change of the CLI surface of its own |
 | Version test | `src/composition/stored-derived-facts.test.ts` pins, per stored slot, its version and a digest of what its reader derives from fixed sources. A reader that changes what it derives changes its digest, and the pin is updated with the version bump |
+
+### Measured (CLI `callers`, a fresh process, index cache warm, the same snapshot)
+
+| Repository | Derived store empty | Derived store warm | Entries, logical bytes |
+|---|---|---|---|
+| Angular application (1247 per-file entries) | 9.0 and 9.2 s | 7.3 and 7.3 s (`member-names` 0.7 s to none, `import-origins` 1.3 s to 0.6 s) | 1247, 5.1 MB |
+| Spring multi-module backend (918 per-file entries) | 19.7 and 19.1 s | 17.8 and 17.2 s (`member-names` 2.5 s to 0.5 s) | 918, 16.9 MB |
+
+The answer is byte-identical in every run. With both caches empty the same calls took 12.1 s and 24.5 s. What stays cold on the backend is not a per-file slot: `receiver-methods` (4 s, keyed by the layout and the sites a query asks about), `relations` (2.1 s) and `entrypoints` (1.9 s), the last two kept by the snapshot data cache and not by `DerivedFacts`. Storing them is the next slice of decisions 7 and 8.
