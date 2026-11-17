@@ -46,7 +46,7 @@ export function namedSourceFile(calls: readonly { args: Record<string, unknown> 
 /** Declares the trust mode of `repo` the way a user does, with the engine's own `init`, in the run-owned configuration. */
 export function declareTrust(engine: string, repo: string, mode: "trusted" | "untrusted", cache: string, env: NodeJS.ProcessEnv): void {
   const run = spawnSync(process.execPath, [...engineCommand(engine), "init", "--trust", mode, "--cache", cache, repo], { cwd: engine, env, encoding: "utf8" });
-  if (run.status !== 0) throw new Error(`init --trust ${mode} ${repo}: ${run.stderr.trim()}`);
+  if (run.status !== 0) throw new Error(`init --trust ${mode} ${repo}: status ${run.status} signal ${run.signal} ${run.error?.message ?? ""} stdout ${run.stdout.trim()} stderr ${run.stderr.trim()}`);
 }
 
 /** A directory only this account reads, as `--cache` requires. */
