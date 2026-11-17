@@ -131,6 +131,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0117](adr/0117-the-entrypoints-of-a-java-file-are-kept-by-the-questions-they-asked-and-a-derivation-kept-by-its-reads-persists-on-disk.md) | The Spring entrypoints of a Java file are the per-file derivation `java-entrypoints`, kept by `DerivedFacts.ofReads` over the held project, with the callback walk derived at each run of the stage; the entries of `ofReads` persist on the disk tier of ADR-0077 under stored reader versions; amends ADR-0116 decisions 4 and 7 | Accepted |
 | [0118](adr/0118-the-callbacks-of-a-java-file-are-kept-by-the-questions-they-asked-over-the-supertypes-of-its-own-declarations.md) | The framework callbacks of a Java file are the per-file derivation `java-callbacks`, kept by `DerivedFacts.ofReads` over the supertypes of the file's own declarations and their ancestors, stored on disk; amends ADR-0117 decisions 2 and 7 | Accepted |
 | [0119](adr/0119-the-receiver-methods-of-a-java-file-are-kept-by-the-questions-they-asked-over-the-names-the-sources-write.md) | The receiver methods of the call sites of a Java file are the per-file derivation `java-receiver-sites`, kept by `DerivedFacts.ofReads` over the names the sources write, stored on disk; the whole-project reads of the resolver become questions; amends ADR-0118 decision 5 and ADR-0116 decision 7 | Accepted |
+| [0120](adr/0120-the-readers-that-ask-about-one-java-declaration-are-kept-per-file-by-the-questions-they-asked.md) | The declared supertypes, implicit constructor chains and argument and accepted counts of Java sources are per-file derivations (`java-declared-supertypes`, `java-implicit-chains`, `java-argument-counts`), kept by `DerivedFacts.ofReads` over the questions each asked of the declaration index, stored on disk; amends ADR-0119 decision 6 | Accepted |
 
 ## Designs (RFC)
 
@@ -171,7 +172,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0036](rfc/0036-protocol-plugins-and-links-inside-a-repository.md) | The protocol plugin kind of RFC-0007, links whose ends share a repository, and a trace that continues through a decided link | Accepted |
 | [0037](rfc/0037-persistent-derived-store.md) | A disk tier behind the derived-facts port, a host-named cache directory, and the workspace join reading only changed repositories | Accepted |
 | [0038](rfc/0038-locating-declarations-and-fixed-layer-resources.md) | The `locate` family, faults that carry its answer, and the fixed layer as read-only MCP resources | Accepted |
-| [0039](rfc/0039-recorded-reads-for-the-java-project.md) | The Java project answers through recorded queries over a per-file index of declared names, so a cross-file derivation is kept by what it read; designs the dependency record ADR-0115 left open; M0 to M2 accepted by ADR-0116, M3 and M6 by ADR-0117, the callback walk per file by ADR-0118, M4 by ADR-0119 | Draft |
+| [0039](rfc/0039-recorded-reads-for-the-java-project.md) | The Java project answers through recorded queries over a per-file index of declared names, so a cross-file derivation is kept by what it read; designs the dependency record ADR-0115 left open; M0 to M2 accepted by ADR-0116, M3 and M6 by ADR-0117, the callback walk per file by ADR-0118, M4 by ADR-0119, the readers of one declaration by ADR-0120 | Draft |
 
 ## Pending decisions
 
