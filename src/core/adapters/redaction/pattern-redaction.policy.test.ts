@@ -276,6 +276,18 @@ MIIEpAIBAAKCAQEA0Z3...
   assert.doesNotMatch(out, /BEGIN RSA PRIVATE KEY/);
 });
 
+test("a private key is redacted up to the last end, including an end that shares its dashes with the previous one, and a header after it stays", () => {
+  const key = (kind: string): string => `-----BEGIN ${kind} PRIVATE KEY-----\nabc\n-----END ${kind} PRIVATE KEY-----`;
+  const tail = "-----BEGIN A PRIVATE KEY-----\nunfinished";
+  const separate = `${key("RSA")}\nnote\n${key("EC")}\n${tail}`;
+  assert.equal(sanitizeText(separate).text, `[REDACTED]\nnote\n[REDACTED]\n${tail}`);
+  assert.equal(containsSecrets(tail), false);
+
+  const shared = "-----BEGIN A PRIVATE KEY-----END A PRIVATE KEY-----END B PRIVATE KEY-----";
+  assert.equal(sanitizeText(shared).text, "[REDACTED]");
+  assert.equal(containsSecrets(shared), true);
+});
+
 test("redacts env-var style credentials incl. the system's own DEV_*_PASS", () => {
   for (const secret of ["DEV_TEST_PASS=SuperSecret123!", "DEV_ENV_PASS: hunter2", "GITHUB_TOKEN=ghp_x", "OPENCODE_API_KEY=sk-abc"]) {
     const { text: out, detection } = sanitizeText(secret);

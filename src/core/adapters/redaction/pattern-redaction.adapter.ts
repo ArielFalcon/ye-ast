@@ -33,8 +33,21 @@ const CREDENTIAL_KEYWORD = "(?:api[_-]?key|token|secret|password|passwd|pwd)";
 const DOTTED_COORDINATE = `(?=(?-i:(?=[a-z]))${CREDENTIAL_KEYWORD}(?-i::[a-z0-9][a-z0-9._-]*:[\\w.-]))(?<=\\.[\\w-]*[a-z0-9])`;
 const API_KEY_ASSIGNMENT = new RegExp(`(?!${DOTTED_COORDINATE})${CREDENTIAL_KEYWORD}[\\"']?\\s*[:=]\\s*(?:"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\\S+)`, "gi");
 
-/* Each pattern reads a run once: a start that cannot match fails at once (a gate before the keyword, a lookbehind that leaves a run to its first start), never after rereading the run from every start. */
-const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skipIn?: (text: string) => (m: string, offset: number) => boolean; modelSkip?: (m: string) => boolean }> = [
+const PRIVATE_KEY_END = /-----END [A-Z ]+PRIVATE KEY-----/y;
+const PRIVATE_KEY_END_PREFIX = "-----END ";
+
+/** The length of the text up to the last private key end: a header after it has no end to reach, and its lazy body would reread the rest of the text from every such header. The end is searched backwards because two ends may share their dashes. */
+function lengthToLastPrivateKeyEnd(text: string): number {
+  for (let at = text.lastIndexOf(PRIVATE_KEY_END_PREFIX); at !== -1; at = at === 0 ? -1 : text.lastIndexOf(PRIVATE_KEY_END_PREFIX, at - 1)) {
+    PRIVATE_KEY_END.lastIndex = at;
+    const end = PRIVATE_KEY_END.exec(text);
+    if (end) return at + end[0].length;
+  }
+  return 0;
+}
+
+/* Each pattern reads a run once: a start that cannot match fails at once (a gate before the keyword, a lookbehind that leaves a run to its first start), never after rereading the run from every start. `readsPrefix` is the length of the text a pattern can match in. */
+const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; readsPrefix?: (text: string) => number; skipIn?: (text: string) => (m: string, offset: number) => boolean; modelSkip?: (m: string) => boolean }> = [
   { name: "slack-webhook", p: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g },
   { name: "stripe-key", p: /\b(?:sk|pk)_(?:test|live)_[A-Za-z0-9]+\b/g },
   { name: "aws-access-key", p: /\bAKIA[0-9A-Z]{16}\b/g },
@@ -46,7 +59,7 @@ const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skipIn?: (text: st
   /* Bearer tokens in command output. Bare-value capture is greedy `\S+` so an embedded quote inside the secret is not leaked; redactPreservingTrailingQuote re-emits a trailing quote only when it is unbalanced (belongs to enclosing prose). Quoted branches are escape-aware. */
   { name: "bearer-token", p: /(?:Authorization|auth)\s*[:=]\s*Bearer\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi },
   { name: "jwt", p: /(?<!eyJ[A-Za-z0-9_-]*?)eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g },
-  { name: "private-key-pem", p: /-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g },
+  { name: "private-key-pem", p: /-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g, readsPrefix: lengthToLastPrivateKeyEnd },
   { name: "api-key-query", p: /\b[?&](?:token|key|api_key|api-key|apiKey|secret)=[^&\s]+/gi },
   { name: "generic-credential", p: /(?:credential|auth_token|access_key)[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi },
   { name: "env-credential", p: /\b(?=[A-Z][A-Z0-9_]*[\"']?\s*[:=])[A-Z][A-Z0-9_]*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|PWD|CRED|CREDENTIAL)[A-Z0-9_]*[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/g },
@@ -217,15 +230,16 @@ export function sanitizeText(input: string, mode: RedactionMode = "issue", byVal
     return `__SANITIZER_DATAURI_${dataUris.length - 1}__`;
   });
 
-  for (const { name, p, skipIn, modelSkip } of NAMED_SECRET_PATTERNS) {
+  for (const { name, p, readsPrefix, skipIn, modelSkip } of NAMED_SECRET_PATTERNS) {
     let redactions = 0;
     const skip = skipIn?.(out);
-    out = out.replace(p, (m, offset: number) => {
+    const read = readsPrefix?.(out) ?? out.length;
+    out = out.slice(0, read).replace(p, (m, offset: number) => {
       if (skip?.(m, offset)) return m;
       if (mode === "model" && modelSkip?.(m)) return m;
       redactions++;
       return redactPreservingTrailingQuote(m);
-    });
+    }) + out.slice(read);
     if (redactions > 0) {
       matchedPatterns.push(name);
       totalRedactions += redactions;
@@ -244,15 +258,16 @@ export function sanitizeText(input: string, mode: RedactionMode = "issue", byVal
 export function containsSecrets(text: string, mode: RedactionMode = "issue"): boolean {
   if (!text) return false;
   const masked = replaceDataUris(text, () => "");
-  for (const { p, skipIn, modelSkip } of NAMED_SECRET_PATTERNS) {
+  for (const { p, readsPrefix, skipIn, modelSkip } of NAMED_SECRET_PATTERNS) {
     p.lastIndex = 0;
+    const read = masked.slice(0, readsPrefix?.(masked) ?? masked.length);
     const conditional = skipIn !== undefined || (mode === "model" && modelSkip !== undefined);
     if (!conditional) {
-      if (p.test(masked)) return true;
+      if (p.test(read)) return true;
       continue;
     }
     const skip = skipIn?.(masked);
-    for (const found of masked.matchAll(p)) {
+    for (const found of read.matchAll(p)) {
       const m = found[0];
       if (skip?.(m, found.index ?? 0)) continue;
       if (mode === "model" && modelSkip?.(m)) continue;
