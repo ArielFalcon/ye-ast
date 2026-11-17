@@ -19,6 +19,8 @@ export const STORED_DERIVED_FACT_VERSIONS: Readonly<Record<string, number>> = {
   "java-receiver-sites": 1,
   "java-declared-supertypes": 1,
   "java-implicit-chains": 1,
+  "java-argument-counts": 1,
+  "java-accepted-counts": 1,
   tokens: 1,
   "ts-module-resolutions": 1,
 };

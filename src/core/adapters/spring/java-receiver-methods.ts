@@ -190,6 +190,8 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
 const SITES_SLOT = "java-receiver-sites";
 const DECLARED_SUPERTYPES_SLOT = "java-declared-supertypes";
 const IMPLICIT_CHAINS_SLOT = "java-implicit-chains";
+const ARGUMENT_COUNTS_SLOT = "java-argument-counts";
+const ACCEPTED_COUNTS_SLOT = "java-accepted-counts";
 
 function readFileOf(file: JavaFile, source: SourceFile | undefined, facts?: DerivedFacts): ReadFile {
   return { file, bindings: receiverBindingsOf(file, source, facts), invocations: invocationsOf(file.root) };
@@ -328,7 +330,7 @@ export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, 
  * different argument list than it runs, an unread source may hold the call or the declaration). A declared source
  * generator adds declarations, never changes a parameter list the sources state nor an argument list a call writes.
  */
-export function createJavaArgumentCounts(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): Required<Pick<ImportOrigins, "argumentCounts" | "acceptedCounts">> {
+export function createJavaArgumentCounts(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}, reads?: KeptReads): Required<Pick<ImportOrigins, "argumentCounts" | "acceptedCounts">> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
   /** Per project, its invocations by file and its methods by place, read once for every site asked of it; `unknown` where the reading proves nothing. */
   const readings = new WeakMap<JavaProject, { files: ReadonlyMap<string, JavaFile>; invocations: Map<string, ReadonlyMap<string, readonly Node[]>>; methods: ReadonlyMap<string, readonly MethodDecl[]>; constructors: ReadonlyMap<string, readonly MethodDecl[]> } | "unknown">();
@@ -354,25 +356,47 @@ export function createJavaArgumentCounts(parser: () => Promise<JavaParser>, sour
       return analyze(files, unparsed, createJavaProject(files, build));
     });
   };
+  /** One answer per site, derived per file of sites and kept by the questions it asked of the declaration index (ADR-0120); `unknown` where the reading proves no binding. */
+  const keptRead = <S extends { file: string }, A>(slot: string, sites: readonly S[], placeOf: (site: S) => string, answer: (site: S, file: JavaFile, project: JavaProject) => A): Promise<readonly A[]> =>
+    keptByFile(reads!, { slot, parser, sources, build, over: "sources" }, sites, placeOf, UNKNOWN_COUNT as A, ({ project, files, asked }, places) => {
+      const file = files.get(places[0]!.file);
+      return file === undefined || !provesFromIndex(project, asked, (at) => files.get(at)) ? places.map(() => UNKNOWN_COUNT as A) : places.map((site) => answer(site, file, project));
+    });
+  const argumentAt = (site: ReceiverCallSite, invocations: ReadonlyMap<string, readonly Node[]>): ArgumentCount => {
+    const found = invocations.get(callKey(site.line, site.column, site.member)) ?? [];
+    return found.length === 1 && (found[0]!.type === "method_invocation" || found[0]!.type === "object_creation_expression") ? { kind: "count", count: argumentCount(found[0]!) } : UNKNOWN_COUNT;
+  };
   return {
-    argumentCounts: (sites) =>
-      read(sites, (site, reading): ArgumentCount => {
-        const file = reading.files.get(site.file);
-        if (file === undefined) return UNKNOWN_COUNT;
-        let invocations = reading.invocations.get(site.file);
-        if (invocations === undefined) {
-          invocations = invocationsOf(file.root);
-          reading.invocations.set(site.file, invocations);
-        }
-        const found = invocations.get(callKey(site.line, site.column, site.member)) ?? [];
-        return found.length === 1 && (found[0]!.type === "method_invocation" || found[0]!.type === "object_creation_expression") ? { kind: "count", count: argumentCount(found[0]!) } : UNKNOWN_COUNT;
-      }),
-    acceptedCounts: (sites) =>
-      read(sites, (site, reading): AcceptedCounts => {
-        const key = `${site.file}:${site.start}:${site.name}`;
-        const named = [...(reading.methods.get(key) ?? []), ...(reading.constructors.get(key) ?? [])];
+    argumentCounts: (sites) => {
+      if (reads === undefined)
+        return read(sites, (site, reading): ArgumentCount => {
+          const file = reading.files.get(site.file);
+          if (file === undefined) return UNKNOWN_COUNT;
+          let invocations = reading.invocations.get(site.file);
+          if (invocations === undefined) {
+            invocations = invocationsOf(file.root);
+            reading.invocations.set(site.file, invocations);
+          }
+          return argumentAt(site, invocations);
+        });
+      const invocations = new WeakMap<JavaFile, ReadonlyMap<string, readonly Node[]>>();
+      return keptRead(ARGUMENT_COUNTS_SLOT, sites, ({ line, column, member }) => callKey(line, column, member), (site, file): ArgumentCount => {
+        if (!invocations.has(file)) invocations.set(file, invocationsOf(file.root));
+        return argumentAt(site, invocations.get(file)!);
+      });
+    },
+    acceptedCounts: (sites) => {
+      if (reads === undefined)
+        return read(sites, (site, reading): AcceptedCounts => {
+          const key = `${site.file}:${site.start}:${site.name}`;
+          const named = [...(reading.methods.get(key) ?? []), ...(reading.constructors.get(key) ?? [])];
+          return named.length === 1 ? acceptedCountsOf(named[0]!) : UNKNOWN_COUNT;
+        });
+      return keptRead(ACCEPTED_COUNTS_SLOT, sites, ({ start, name }) => `${start}:${name}`, (site, file, project): AcceptedCounts => {
+        const named = project.typesOf(file).flatMap((type) => [...type.methods, ...type.constructors]).filter((method) => placeOf(method).start === site.start && method.name === site.name);
         return named.length === 1 ? acceptedCountsOf(named[0]!) : UNKNOWN_COUNT;
-      }),
+      });
+    },
   };
 }
 

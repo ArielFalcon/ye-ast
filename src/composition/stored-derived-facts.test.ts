@@ -61,6 +61,7 @@ const JAVA_SPACED: SourceFile = { path: "src/main/java/app/Spaced.java", content
 const JAVA_AMBIGUOUS: SourceFile = { path: "src/main/java/app/Ambiguous.java", content: ["package app;", "import first.*;", "import second.*;", "class Ambiguous implements UserDetailsService {}", ""].join("\n") };
 const JAVA_ENUM: SourceFile = { path: "src/main/java/app/Unit.java", content: ["package app;", "enum Unit {", "  ONE {", "    int area() { return 1; }", "  };", "  int area() { return 2; }", "}", ""].join("\n") };
 const JAVA_CHAINS: SourceFile = { path: "src/main/java/app/Chains.java", content: ["package app;", "class Parent { Parent() {} }", "class Child extends Parent {}", "class Plain {}", "class Sub extends Plain {}", "class Sized { Sized(int size) {} }", "class Big extends Sized {}", "class Orphan extends Missing {}", ""].join("\n") };
+const JAVA_COUNTS: SourceFile = { path: "src/main/java/app/Counts.java", content: ["package app;", "class Tool {", "  Tool(int size) {}", "  void use(String... names) {}", "  void use(int a, int b) {}", "}", "class User { void run(Tool tool) { tool.use(1, 2); new Tool(3); tool.use(\"a\").use(\"b\"); } }", ""].join("\n") };
 const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export function run(redact: () => void): void {", "  redact();", "}", ""].join("\n") };
 const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };
 const WRITER: SourceFile = { path: "src/writer.ts", content: ["export {};", "(Array.prototype as any).last = () => 1;", ""].join("\n") };
@@ -86,6 +87,8 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "java-entrypoints": [1, "3a63c07df1763ffeacea0e437ac9a1ada4f10d0de462ec6f50ca063ea72c1cb0"],
   "java-callbacks": [1, "31e796b313e5ab7c1a14d463c85c1e147f377e0585c86f8d0742b4d0fbc8eaf9"],
   "java-receiver-sites": [1, "a6a10152c6d15d73ae90cb581762317393860044cdc48be40a7f8ed1250657d0"],
+  "java-argument-counts": [1, "2f60ffb833077c2684e176908889b7dd18b5f58c02cb17cc0fa686da1e70e739"],
+  "java-accepted-counts": [1, "7fa56d9beb00f70f156766e3db87c34e729a05fa98b6f24c5c029133ceb63d53"],
   "java-implicit-chains": [1, "ab476dd3f3a6d53cf81f4d74991700187ab636b6d1510ba8ba6320603cf39ead"],
   "java-declared-supertypes": [1, "c70d229b3526e9bcf93ccfd71b405e6d19230efc95331dc179f51a0854b53cc8"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
@@ -143,6 +146,13 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   const chainSources = [...javaSources, JAVA_CHAINS];
   const chainFacts = recordingFacts((slot, value) => slot === "java-implicit-chains" && record(slot, value));
   await createJavaNameBindings(() => createJavaParser(holds), chainSources, chainSources.map(({ path }) => path), chainFacts, hold).implicitChains!(["Child", "Sub", "Big", "Orphan", "Parent"].map((name) => at(JAVA_CHAINS, name)));
+  const countSources = [...javaSources, JAVA_COUNTS];
+  const countFacts = recordingFacts((slot, value) => (slot === "java-argument-counts" || slot === "java-accepted-counts") && record(slot, value));
+  const counting = createJavaNameBindings(() => createJavaParser(holds), countSources, countSources.map(({ path }) => path), countFacts, hold);
+  const written = JAVA_COUNTS.content.split("\n")[6]!;
+  const call = (text: string, member: string) => ({ file: JAVA_COUNTS.path, line: 7, column: written.indexOf(text) + 1, member });
+  await counting.argumentCounts!([call("tool.use(1, 2)", "use"), call("new Tool(3)", "Tool"), call("tool.use(\"a\")", "use")]);
+  await counting.acceptedCounts!([{ file: JAVA_COUNTS.path, start: 3, name: "Tool" }, { file: JAVA_COUNTS.path, start: 4, name: "use" }, { file: JAVA_COUNTS.path, start: 5, name: "use" }, { file: JAVA_COUNTS.path, start: 9, name: "none" }]);
   hold.release();
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));
