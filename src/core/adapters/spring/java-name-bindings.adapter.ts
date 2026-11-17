@@ -57,7 +57,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
     declaredTypes: createJavaDeclaredTypes(parser, sources, paths, build),
     dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold, build, libraries),
     receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold, build, reads),
-    implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build),
+    implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build, reads),
     outsideSupertypes: createJavaOutsideSupertypes(parser, sources, paths, hold, build),
     ...createJavaArgumentCounts(parser, sources, paths, hold, build, reads),
     receiverFits: createJavaReceiverFits(parser, sources, paths, facts, hold, build),

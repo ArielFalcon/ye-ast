@@ -189,6 +189,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
 
 const SITES_SLOT = "java-receiver-sites";
 const DECLARED_SUPERTYPES_SLOT = "java-declared-supertypes";
+const IMPLEMENTED_DECLARATIONS_SLOT = "java-implemented-declarations";
 const IMPLICIT_CHAINS_SLOT = "java-implicit-chains";
 const ARGUMENT_COUNTS_SLOT = "java-argument-counts";
 const ACCEPTED_COUNTS_SLOT = "java-accepted-counts";
@@ -248,44 +249,22 @@ function receiverMethodOf(invocation: Node, source: ReadFile, resolver: Resolver
  * platform type aside), since such a supertype may declare the contract. `declarations`, possibly empty, is therefore
  * established only from a hierarchy the reader read in full.
  */
-export function createJavaImplementedDeclarations(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["implementedDeclarations"] {
+export function createJavaImplementedDeclarations(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}, reads?: KeptReads): ImportOrigins["implementedDeclarations"] {
   const unreadJvm = paths.some(isUncoveredJvmSource);
   const analyze = (sites: readonly ImplementingSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ImplementedDeclarations[] => {
     if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN_DECLARATIONS);
     const methods = methodsByPlace(project);
-    const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
-    const signatures = new Map<MethodDecl, Signature | undefined>();
-    const hierarchyOf = (type: TypeDecl) => {
-      if (!hierarchies.has(type)) hierarchies.set(type, project.hierarchy(type));
-      return hierarchies.get(type)!;
-    };
-    const signatureOf = (method: MethodDecl) => {
-      if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
-      return signatures.get(method);
-    };
-    return sites.map((site) => {
-      const named = methods.get(`${site.file}:${site.start}:${site.name}`) ?? [];
-      const method = named.length === 1 ? named[0] : undefined;
-      if (method === undefined) return UNKNOWN_DECLARATIONS;
-      const signature = signatureOf(method);
-      if (signature === undefined || signature.some(isVariable)) return UNKNOWN_DECLARATIONS;
-      const { types, gaps } = hierarchyOf(method.owner);
-      if (gaps.length > 0) return UNKNOWN_DECLARATIONS;
-      const found: MethodPlace[] = [];
-      for (const type of types) {
-        if (type === method.owner) continue;
-        for (const candidate of type.methods) {
-          if (candidate.name !== method.name) continue;
-          const other = signatureOf(candidate);
-          if (other === undefined || other.some(isVariable)) return UNKNOWN_DECLARATIONS;
-          if (sameSignature(signature, other)) found.push(placeOf(candidate));
-        }
-      }
-      return { kind: "declarations", declarations: found.toSorted(byPlace) };
-    });
+    return implementedAt(sites, (site) => methods.get(`${site.file}:${site.start}:${site.name}`) ?? [], project);
   };
   return async (sites) => {
     if (sites.length === 0) return [];
+    if (reads !== undefined)
+      return keptByFile(reads, { slot: IMPLEMENTED_DECLARATIONS_SLOT, parser, sources, build, over: "sources" }, sites, ({ start, name }) => `${start}:${name}`, UNKNOWN_DECLARATIONS, ({ project, files, asked }, places) => {
+        const file = files.get(places[0]!.file);
+        if (file === undefined || !provesFromIndex(project, asked, (at) => files.get(at))) return places.map(() => UNKNOWN_DECLARATIONS);
+        const methods = project.typesOf(file).flatMap((type) => type.methods);
+        return implementedAt(places, (site) => methods.filter((method) => placeOf(method).start === site.start && method.name === site.name), project);
+      });
     const read = await parser();
     const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
     if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
@@ -294,6 +273,40 @@ export function createJavaImplementedDeclarations(parser: () => Promise<JavaPars
       return analyze(sites, files, unparsed, createJavaProject(files, build));
     });
   };
+}
+
+/** What each site's method implements or overrides in the supertypes of its owner, the method being the one `named` offers at the site. */
+function implementedAt(sites: readonly ImplementingSite[], named: (site: ImplementingSite) => readonly MethodDecl[], project: JavaProject): readonly ImplementedDeclarations[] {
+  const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
+  const signatures = new Map<MethodDecl, Signature | undefined>();
+  const hierarchyOf = (type: TypeDecl) => {
+    if (!hierarchies.has(type)) hierarchies.set(type, project.hierarchy(type));
+    return hierarchies.get(type)!;
+  };
+  const signatureOf = (method: MethodDecl) => {
+    if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
+    return signatures.get(method);
+  };
+  return sites.map((site) => {
+    const offered = named(site);
+    const method = offered.length === 1 ? offered[0] : undefined;
+    if (method === undefined) return UNKNOWN_DECLARATIONS;
+    const signature = signatureOf(method);
+    if (signature === undefined || signature.some(isVariable)) return UNKNOWN_DECLARATIONS;
+    const { types, gaps } = hierarchyOf(method.owner);
+    if (gaps.length > 0) return UNKNOWN_DECLARATIONS;
+    const found: MethodPlace[] = [];
+    for (const type of types) {
+      if (type === method.owner) continue;
+      for (const candidate of type.methods) {
+        if (candidate.name !== method.name) continue;
+        const other = signatureOf(candidate);
+        if (other === undefined || other.some(isVariable)) return UNKNOWN_DECLARATIONS;
+        if (sameSignature(signature, other)) found.push(placeOf(candidate));
+      }
+    }
+    return { kind: "declarations", declarations: found.toSorted(byPlace) };
+  });
 }
 
 /**

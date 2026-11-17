@@ -11,9 +11,9 @@
   [ADR-0116](0116-a-java-derivation-is-kept-by-the-questions-it-asked-of-a-per-file-index-of-declared-names.md),
   [ADR-0077](0077-derived-facts-persist-by-content-in-ye-asts-own-store.md)
 
-**In short:** the declared supertypes, the implicit constructor chains, and the argument and accepted counts of Java
-sources are derived per file of sites, kept by `DerivedFacts.ofReads` and stored on disk, so a read that finds none of
-the questions' answers changed builds no project for them. No fact changes.
+**In short:** the declared supertypes, the implicit constructor chains, the argument and accepted counts and the
+implemented declarations of Java sources are derived per file of sites, kept by `DerivedFacts.ofReads` and stored on
+disk, so a read in which no recorded answer changed builds no project for them. No fact changes.
 
 ## Context
 
@@ -21,7 +21,7 @@ After ADR-0119 every call of `callers` still builds the held project once (a par
 490 to 550 ms of 6.0 s unchanged and 7.5 s after one edit on the 1,340-file backend). A stack at the build shows the
 first reader to ask for it is `declaredSupertypes`, which the hierarchy completion asks for every type of the
 repository in every call. The readers that ask about one declaration (`declaredSupertypes`, `implicitChains`,
-`argumentCounts`, `acceptedCounts`) read one file and the declarations that file names; they scan the project only to
+`argumentCounts`, `acceptedCounts`, `implementedDeclarations`) read one file and the declarations that file names; they scan the project only to
 find the type or the method at a place (`project.types`, `methodsByPlace`), and for whether the strict binding proves
 anything (`provesBinding`), which ADR-0119 already answers from the index.
 
@@ -34,7 +34,7 @@ anything (`provesBinding`), which ADR-0119 already answers from the index.
 ## Decision
 
 1. **Each reader is a per-file derivation**, kept by `DerivedFacts.ofReads` and stored on disk at version 1
-   (ADR-0117 decision 5): `java-declared-supertypes`, `java-implicit-chains`, `java-argument-counts` and `java-accepted-counts`. The subject is
+   (ADR-0117 decision 5): `java-declared-supertypes`, `java-implicit-chains`, `java-argument-counts`, `java-accepted-counts` and `java-implemented-declarations`. The subject is
    the file's path and content digest, the sorted distinct places asked of the file, and whether the build generates
    interfaces. The value is the answer for each place. The sites are asked of the file's own types and methods through
    the project (`typesOf`, a method by place), never by a scan of the project.
@@ -49,7 +49,7 @@ anything (`provesBinding`), which ADR-0119 already answers from the index.
    without building it.
 5. **One declaration index per read of the snapshot.** The readers of one `ImportOrigins` share the index through the
    same function that keeps the receiver methods, so the entries `java-declarations` keeps are read once.
-6. **Not moved here:** `implementedDeclarations`, `receiverFits`, `outsideSupertypes` and the dispatch readers, which keep
+6. **Not moved here:** `receiverFits`, `outsideSupertypes` and the dispatch readers, which keep
    the held project and are decided by their own units, and parse on demand (M5), which waits for them.
 
 ## Consequences
