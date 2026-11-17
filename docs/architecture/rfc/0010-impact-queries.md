@@ -520,8 +520,9 @@ those families exported the map scope alone.
   Nothing is repaired.
 - **The first build.** It is an `indexAll`, because `sync` never advances `getIndexBuildInfo`
   (`index.js:655-664`). Only a query that reads the store builds it; `map` copies files only.
-- **Retention.** Each distinct declared scope keeps its own mirror, and every live query sweeps the others once its answer
-  is built and its lock released. The policy is a typed value the core decides and a host may override through
+- **Retention.** Each distinct declared scope keeps its own mirror, and a live query sweeps the others once its answer is
+  built and its lock released, when a signal calls for it: the first answer of a process for the repository, or a refresh
+  that created, discarded or fully built a mirror (RFC-0040 L2). The policy is a typed value the core decides and a host may override through
   composition, never a flag: the scope being answered plus the two most recently used (`keepScopes: 3`), a mirror nobody
   used for more than 14 days (`unusedForMs`), and 512 MiB of logical bytes for the whole `live/` tree (`maxBytes`), each
   scope measured from its state's manifest plus its store's own entries. Last use is the state file's modification time,
@@ -559,7 +560,7 @@ those families exported the map scope alone.
 5. **Commit.** It writes `state.json` with the new manifest, the files not held and the `stateId`.
 6. **The answer.** It builds the answer from the mirror, then releases the lock.
 7. **The sweep.** Once the answer is built and the lock released, it sweeps the mirrors of other scopes as
-   "Retention" describes, when the staleness check has run.
+   "Retention" describes, when the staleness check has run and a signal named there calls for it.
 
 A refresh cut by the deadline or an interruption, or a lock still held when it arrives, answers `unknown` with reason
 `index-unavailable`; the fact has no field for the cause, so none is recorded. The next refresh resumes from `pending`.
@@ -580,7 +581,7 @@ named, since only hashing the changed files would tell. The fact itself is uncha
 **No live fact cache; retained snapshot data.** A live fact is built afresh on every call. What a live query reads from
 the reconciled capture (sources, findings, relations, module dependencies) comes from the snapshot data cache
 ([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md), amending ADR-0020 decision 6). The lock, the
-fresh listing, the reconcile, the staleness re-list and the retention sweep still run on every call; the cache is
+fresh listing, the reconcile, and the staleness re-list still run on every call, and the retention sweep on the signals "Retention" names; the cache is
 consulted after the reconcile and keyed by the repository, scope, trust and the capture's whole listing (blob ids,
 `written` flags, skipped entries), never by HEAD. A file whose stat moved but whose bytes did not keeps its blob id and so
 its key; an edit changes a blob and misses. The assumption stays the mirror's own, stated in "The mirror" above: the
