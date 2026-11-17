@@ -34,7 +34,7 @@ import { createIndexCache } from "../core/adapters/codegraph/cached-index.adapte
 import { createDerivedFactStore } from "../core/adapters/fs/derived-fact-store.adapter.ts";
 import { STORED_DERIVED_FACT_VERSIONS } from "../core/domain/snapshot/stored-derived-facts.ts";
 import type { DerivedFactRetentionPolicy } from "../core/ports/derived-fact-store.port.ts";
-import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
+import { createCodeGraph, defaultCodeGraphDeps, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createJdkLibrarySource } from "../core/adapters/jdk/jdk-library.adapter.ts";
@@ -213,7 +213,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   };
   const budget = options.exportBudget && { budget: options.exportBudget };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };
-  const graph = measurement === undefined ? createCodeGraph() : measuredGraph(createCodeGraph(), measurement);
+  const bareGraph = createCodeGraph(defaultCodeGraphDeps, { shutdown: options.signal });
+  const graph = measurement === undefined ? bareGraph : measuredGraph(bareGraph, measurement);
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
   const bareLiveMirror = createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten });
   const liveMirror = measurement === undefined ? bareLiveMirror : measuredLiveMirror(bareLiveMirror, measurement);

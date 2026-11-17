@@ -6,6 +6,7 @@ import { STAGING_RULES_VERSION } from "./stage-snapshot.ts";
 
 const SOURCE_DIGEST_BY_VERSION: Readonly<Record<string, string>> = {
   "11": "4caecd1ca920723fd34fd91c5d966b94adc7595f8d71efc1f2750e878d5e1cd8",
+  "12": "b2abaf4d75b9a455343169c44b636aa4cb15a0ff4d77c92cfd51408f39de6d73",
   "2": "f29f8d32090e597644690359faa6980a333ad5cd4a8fda42936cf2a9a62d724e",
   "3": "d8d50ff0b543684a228e16e9c3ed080de1196216a17502f2dab54444618e3896",
   "4": "a4dbe978ca40342805ba6b4b1bb275504f95284bdd8f5f773aa227d724c823ee",
@@ -17,7 +18,7 @@ const SOURCE_DIGEST_BY_VERSION: Readonly<Record<string, string>> = {
   "10": "8c8c0c80adedee3562ffecea6b1bb05b98efa634d5921e9daaa307e7d23a2534",
 };
 
-const INDEX_BUILDING_SOURCES = ["./stage-snapshot.ts", "./index-snapshot.child.ts", "./sync-mirror.child.ts", "./codegraph.adapter.ts", "../../ports/staging-rules.ts"];
+const INDEX_BUILDING_SOURCES = ["./stage-snapshot.ts", "./index-snapshot.child.ts", "./sync-mirror.child.ts", "./sync-worker.child.ts", "./sync-worker.ts", "./mirror-files.ts", "./codegraph.adapter.ts", "../../ports/staging-rules.ts"];
 
 test("the staging rules version changes whenever the code that stages or builds an index does", () => {
   const hash = createHash("sha256");

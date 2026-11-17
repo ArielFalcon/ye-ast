@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CodeGraphReader, GraphNodeId } from "../../ports/code-graph.port.ts";
-import { createCodeGraph } from "./codegraph.adapter.ts";
+import { createCodeGraph, defaultCodeGraphDeps } from "./codegraph.adapter.ts";
 
 const BASE: Readonly<Record<string, string>> = {
   "src/orders.ts": "export function loadOrder(id: string): string {\n  return id;\n}\nexport function listOrders(): string[] {\n  return [loadOrder(\"1\")];\n}\n",
@@ -100,6 +100,14 @@ function allFiles(extra: Files): string[] {
   return [...new Set([...Object.keys(BASE), ...Object.keys(extra)])].sort();
 }
 
+async function freshBuildOf(live: string) {
+  const fresh = mirrorOf({});
+  cpSync(live, fresh, { recursive: true, filter: (source) => !source.endsWith(".ye-ast-graph") });
+  const rebuilt = await graph.buildMirror(fresh);
+  assert.ok(rebuilt.ok);
+  return { fresh, rebuilt: rebuilt.value };
+}
+
 for (const shape of SHAPES) {
   test(`sync matches a fresh build when ${shape.name}${shape.unparsed === undefined ? "" : ", but for what it synthesizes from the files it names unparsed"}`, async () => {
     const live = mirrorOf(BASE);
@@ -109,10 +117,7 @@ for (const shape of SHAPES) {
     const synced = await graph.syncMirror(live, Object.keys(shape.change));
     assert.ok(synced.ok, synced.ok ? "" : synced.fault.detail);
 
-    const fresh = mirrorOf({});
-    cpSync(live, fresh, { recursive: true, filter: (source) => !source.endsWith(".ye-ast-graph") });
-    const rebuilt = await graph.buildMirror(fresh);
-    assert.ok(rebuilt.ok);
+    const { fresh, rebuilt } = await freshBuildOf(live);
 
     const files = allFiles(shape.change);
     const liveReader = graph.open(live);
@@ -122,7 +127,7 @@ for (const shape of SHAPES) {
       const synthesized = shape.unparsed === undefined;
       assert.deepEqual(projection(liveReader.value, files, synthesized), projection(freshReader.value, files, synthesized));
       assert.deepEqual(synced.value.filesUnparsed, shape.unparsed ?? []);
-      assert.deepEqual(synced.value.filesNotIndexed, rebuilt.value.filesNotIndexed);
+      assert.deepEqual(synced.value.filesNotIndexed, rebuilt.filesNotIndexed);
       assert.deepEqual(synced.value.filesFailed, []);
     } finally {
       liveReader.value.close();
@@ -130,3 +135,38 @@ for (const shape of SHAPES) {
     }
   });
 }
+
+/** Parsed shapes first, deletions last among them: the engine's sync never re-resolves an unchanged importer of a file that comes back. */
+function chainOrder(shapes: readonly Shape[]): Shape[] {
+  const rank = (shape: Shape) => (shape.unparsed !== undefined ? 2 : Object.values(shape.change).includes(null) ? 1 : 0);
+  return [...shapes].sort((a, b) => rank(a) - rank(b));
+}
+
+test("chained syncs through one worker each match a fresh build, but for what they synthesize once a file they name is unparsed", async () => {
+  let started = 0;
+  const chained = createCodeGraph({ ...defaultCodeGraphDeps, spawnWorker: (launch) => ((started += 1), defaultCodeGraphDeps.spawnWorker(launch)) });
+  const live = mirrorOf(BASE);
+  assert.ok((await chained.buildMirror(live)).ok);
+  const changed: Record<string, string | null> = {};
+  let synthesized = true;
+  for (const shape of chainOrder(SHAPES)) {
+    apply(live, shape.change);
+    Object.assign(changed, shape.change);
+    synthesized &&= shape.unparsed === undefined;
+    const synced = await chained.syncMirror(live, Object.keys(shape.change));
+    assert.ok(synced.ok, synced.ok ? "" : synced.fault.detail);
+    const { fresh, rebuilt } = await freshBuildOf(live);
+    const liveReader = chained.open(live);
+    const freshReader = graph.open(fresh);
+    assert.ok(liveReader.ok && freshReader.ok);
+    try {
+      const files = allFiles(changed);
+      assert.deepEqual(projection(liveReader.value, files, synthesized), projection(freshReader.value, files, synthesized), shape.name);
+      assert.deepEqual(synced.value.filesNotIndexed, rebuilt.filesNotIndexed, shape.name);
+    } finally {
+      liveReader.value.close();
+      freshReader.value.close();
+    }
+  }
+  assert.equal(started, 1);
+});
