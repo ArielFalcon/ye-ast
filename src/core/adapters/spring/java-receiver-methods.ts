@@ -461,7 +461,18 @@ class DeadlineCut extends Error {
  * call-rewriting annotation anywhere leaves every binding unproven.
  */
 export function provesBinding(files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): boolean {
-  return readsEverySource(project, unparsed, unreadJvm) && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
+  const known = provenBindings.get(project);
+  if (known !== undefined && known.unreadJvm === unreadJvm && sameItems(known.files, files) && sameItems(known.unparsed, unparsed)) return known.proves;
+  const proves = readsEverySource(project, unparsed, unreadJvm) && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
+  provenBindings.set(project, { files, unparsed, unreadJvm, proves });
+  return proves;
+}
+
+/** What `provesBinding` last answered over a project: every reader of a read asks it over the same inputs. */
+const provenBindings = new WeakMap<JavaProject, { files: readonly JavaFile[]; unparsed: readonly UnparsedSource[]; unreadJvm: boolean; proves: boolean }>();
+
+function sameItems<T>(left: readonly T[], right: readonly T[]): boolean {
+  return left === right || (left.length === right.length && left.every((item, index) => item === right[index]));
 }
 
 /**

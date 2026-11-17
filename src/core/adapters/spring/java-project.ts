@@ -80,8 +80,19 @@ export function heldJavaProject(hold: ParseHold, parser: () => Promise<JavaParse
   return held;
 }
 
+const sourceKeys = new WeakMap<SourceFile, string>();
+
+function sourceKey(source: SourceFile): string {
+  let key = sourceKeys.get(source);
+  if (key === undefined) {
+    key = JSON.stringify([source.path, source.content]);
+    sourceKeys.set(source, key);
+  }
+  return key;
+}
+
 function projectKey(sources: readonly SourceFile[], declared: readonly SourceFile[], build: ProjectBuild): string {
-  return JSON.stringify([sources.map(({ path, content }) => [path, content]), declared.map(({ path, content }) => [path, content]), build.generatesInterfaces === true]);
+  return `[${sources.map(sourceKey).join()}]|[${declared.map(sourceKey).join()}]|${build.generatesInterfaces === true}`;
 }
 
 async function buildHeldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[], build: ProjectBuild): Promise<HeldJavaProject> {

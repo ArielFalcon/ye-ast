@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
+import { withJavaSources } from "./java-project.ts";
+import { provesBinding } from "./java-receiver-methods.ts";
+import { createJavaProject } from "./java-symbols.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { AcceptedCounts, ArgumentCount, OutsideSupertypes, ReceiverMethod } from "../../ports/import-origins.port.ts";
@@ -739,4 +742,30 @@ test("a receiver whose hierarchy only one type outside the repository leaves ope
   assert.deepEqual(await methodAt([twice, port, call], "findById"), { kind: "unproven" });
   assert.deepEqual(await methodAt([courses, port, java("Kept.java", ["package app;", "", "record Kept(String code) implements Courses {}"]), use("courses.code()", [], "Courses courses")], "code"), { kind: "unproven" });
   assert.deepEqual(await methodAt([course, port, use("course.findById(1L)", [], "Course course")], "findById"), { kind: "outside", type: "com.lib.Entity" });
+});
+
+test("the proof that binding may prove anything reads the sources of one project once, whichever reader asks, and reads them again for other inputs", async () => {
+  const parser = await createJavaParser();
+  const rewriting = java("Rewriting.java", ["package app;", "", "import lombok.experimental.ExtensionMethod;", "", "@ExtensionMethod(Object.class)", "class Rewriting {}"]);
+
+  withJavaSources(parser, (parse) => {
+    const { files, unparsed } = parse([STORE, JDBC]);
+    const project = createJavaProject(files);
+    let reads = 0;
+    const counted = files.map((file) => ({ ...file, root: new Proxy(file.root, { get: (target, key) => { if (key === "namedChildren") reads++; const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value; } }) }));
+
+    assert.equal(provesBinding(counted, project, unparsed, false), true);
+    const scanned = reads;
+    assert.ok(scanned > 0);
+    assert.equal(provesBinding([...counted], project, unparsed, false), true);
+    assert.equal(reads, scanned);
+    assert.equal(provesBinding(counted, project, unparsed, true), false);
+    assert.equal(provesBinding(counted, project, [{ path: "Gone.java", line: 1 }], false), false);
+  });
+  withJavaSources(parser, (parse) => {
+    const { files, unparsed } = parse([STORE, JDBC, rewriting]);
+    const project = createJavaProject(files);
+    assert.equal(provesBinding(files.slice(0, 2), project, unparsed, false), true);
+    assert.equal(provesBinding(files, project, unparsed, false), false);
+  });
 });
