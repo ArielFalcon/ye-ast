@@ -217,7 +217,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   };
   const budget = options.exportBudget && { budget: options.exportBudget };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };
-  const graph = measurement === undefined ? createCodeGraph() : measuredGraph(createCodeGraph(), measurement);
+  const bareGraph = createCodeGraph(defaultCodeGraphDeps, { shutdown: options.signal });
+  const graph = measurement === undefined ? bareGraph : measuredGraph(bareGraph, measurement);
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
   const bareLiveMirror = createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten });
   const liveMirror = measurement === undefined ? bareLiveMirror : measuredLiveMirror(bareLiveMirror, measurement);
@@ -232,7 +233,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   };
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, holds, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, snapshotCache: snapshotCache.snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
-  const keptGraph = createCodeGraph(defaultCodeGraphDeps, { imageBytes: options.graphImageBytes ?? GRAPH_IMAGE_BYTES });
+  const keptGraph = createCodeGraph(defaultCodeGraphDeps, { imageBytes: options.graphImageBytes ?? GRAPH_IMAGE_BYTES, shutdown: options.signal });
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph: measurement === undefined ? keptGraph : measuredGraph(keptGraph, measurement), digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
