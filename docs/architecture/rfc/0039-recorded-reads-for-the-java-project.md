@@ -1,6 +1,6 @@
 # RFC-0039: The Java project answers through queries that record what a derivation reads
 
-- Status: Draft, 2026-11-17
+- Status: Draft, 2026-11-17; the surface of M0 to M2 is accepted by ADR-0116
 - Related: ADR-0031, ADR-0035, ADR-0040, ADR-0077, ADR-0114, ADR-0115 ("Not decided here": the dependency record
   this RFC designs), RFC-0037
 
@@ -240,6 +240,42 @@ unchanged. M5 then lowers both figures.
 | A marker question is asked by every derivation, so its flip derives all again | correct; the same holds today for every edit |
 | The index grows the store | the per-file slots of the 918-file backend take 16.9 MB today (RFC-0037); M1 reports the added bytes |
 | Parsing on demand breaks "each source once per read" | M5 keeps the parse hold as the only owner of trees (ADR-0040) |
+
+## As measured
+
+### M0: where the time of the three stages goes (2026-11-17)
+
+Java backend, 1,340 files of which 1,173 are read sources; a disposable clone; the stdio MCP, live, `callers`; four
+rounds of one edit after a warm-up (p50), then the stages isolated in process. The host was loaded by other sessions,
+so read the ratios.
+
+| Stage of a one-edit `callers` call | ms, p50 | What it holds |
+|---|---|---|
+| `relations` | 2,200 | the held project when it is the first reader to need it (about 540 ms, below), then the derivation |
+| `entrypoints` | 1,850 | its own parse of every source and its own project (about 500 ms and 90 ms in the first call, where nothing overlaps), then the derivation, about 1,250 ms |
+| `receiver-methods` (13 calls) | 780 | derivation only: the trees and the project are held |
+| the whole call | 12,400 | |
+
+| The held project of one read | ms |
+|---|---|
+| Parse of every source (`declarations` reading) | 470-515 |
+| `createJavaProject` over the parsed files | 64-107 |
+| `relations` derivation over the held project, repeated four times | 2,255-2,432 |
+
+| Counted over a whole call | Figure |
+|---|---|
+| Sources read through `readSource` | 10,557 (nine readers over 1,173 files) |
+| Time in them | 570-620 ms, so the hold's trees are parsed once and the other eight reads reuse them |
+| `createJavaProject` builds | 9 per call, 550 ms in all (about 60 ms each) |
+
+What it settles:
+
+- The three stages are derivation, not parse or project build: the parse of every source is about 0.5 s once per read
+  and a project build 60-100 ms, against 2.3 s for `relations` alone. A derivation that hits for every file but one
+  saves most of the stage; M5 (parse on demand) is worth at most the 0.5 s of one parse of every source and the 0.5 s
+  of `entrypoints`' second parse, so it is decided after M3 and not before.
+- `relations` over this backend yields 17,636 relations and 4,294 unresolved uses, the bytes M2 must reproduce.
+- Open question 7 is answered by these numbers: M5 is not built with M2.
 
 ## Open questions
 
