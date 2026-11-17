@@ -60,7 +60,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
     implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build, reads),
     outsideSupertypes: createJavaOutsideSupertypes(parser, sources, paths, hold, build),
     ...createJavaArgumentCounts(parser, sources, paths, hold, build, reads),
-    receiverFits: createJavaReceiverFits(parser, sources, paths, facts, hold, build),
+    receiverFits: createJavaReceiverFits(parser, sources, paths, facts, hold, build, reads),
     implicitChains: createJavaImplicitChains(parser, sources, paths, hold, build, reads),
     declaredSupertypes: createJavaDeclaredSupertypes(parser, sources, paths, hold, build, reads),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),

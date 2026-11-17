@@ -63,6 +63,7 @@ const JAVA_ENUM: SourceFile = { path: "src/main/java/app/Unit.java", content: ["
 const JAVA_CHAINS: SourceFile = { path: "src/main/java/app/Chains.java", content: ["package app;", "class Parent { Parent() {} }", "class Child extends Parent {}", "class Plain {}", "class Sub extends Plain {}", "class Sized { Sized(int size) {} }", "class Big extends Sized {}", "class Orphan extends Missing {}", ""].join("\n") };
 const JAVA_COUNTS: SourceFile = { path: "src/main/java/app/Counts.java", content: ["package app;", "class Tool {", "  Tool(int size) {}", "  void use(String... names) {}", "  void use(int a, int b) {}", "}", "class User { void run(Tool tool) { tool.use(1, 2); new Tool(3); tool.use(\"a\").use(\"b\"); } }", ""].join("\n") };
 const JAVA_IMPLEMENTS: SourceFile = { path: "src/main/java/app/Implements.java", content: ["package app;", "interface Store {", "  void save(String value);", "}", "class Disk implements Store {", "  public void save(String value) {}", "  <T> void generic(T value) {}", "}", "class Tool {", "  void use() {}", "}", ""].join("\n") };
+const JAVA_FITS: SourceFile = { path: "src/main/java/app/Fits.java", content: ["package app;", "interface Mapper<S, T> { T convert(S source); }", "class Tax {}", "class Rate {}", "class Cat {}", "class TaxMapper implements Mapper<Tax, Rate> {", "  public Rate convert(Tax source) { return null; }", "}", "class Other { Mapper<Cat, Rate> mapper; void run() { mapper.convert(null); } }", "class Same { Mapper<Tax, Rate> mapper; void run() { mapper.convert(null); } }", ""].join("\n") };
 const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export function run(redact: () => void): void {", "  redact();", "}", ""].join("\n") };
 const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };
 const WRITER: SourceFile = { path: "src/writer.ts", content: ["export {};", "(Array.prototype as any).last = () => 1;", ""].join("\n") };
@@ -90,6 +91,7 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "java-receiver-sites": [1, "a6a10152c6d15d73ae90cb581762317393860044cdc48be40a7f8ed1250657d0"],
   "java-argument-counts": [1, "2f60ffb833077c2684e176908889b7dd18b5f58c02cb17cc0fa686da1e70e739"],
   "java-accepted-counts": [1, "7fa56d9beb00f70f156766e3db87c34e729a05fa98b6f24c5c029133ceb63d53"],
+  "java-receiver-fits": [1, "5a8fee9f8a05bbffd39289af18a075e58fbeba974c652742db40929640676f82"],
   "java-implemented-declarations": [1, "4bac0cddb4b2a5c5f5a12cf8beb2e2506403a5522cd556ad6d82ab3d77d756b5"],
   "java-implicit-chains": [1, "ab476dd3f3a6d53cf81f4d74991700187ab636b6d1510ba8ba6320603cf39ead"],
   "java-declared-supertypes": [1, "c70d229b3526e9bcf93ccfd71b405e6d19230efc95331dc179f51a0854b53cc8"],
@@ -158,6 +160,10 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   const implementSources = [...javaSources, JAVA_IMPLEMENTS];
   const implementFacts = recordingFacts((slot, value) => slot === "java-implemented-declarations" && record(slot, value));
   await createJavaNameBindings(() => createJavaParser(holds), implementSources, implementSources.map(({ path }) => path), implementFacts, hold).implementedDeclarations!([[6, "save"], [7, "generic"], [10, "use"], [99, "none"]].map(([start, name]) => ({ file: JAVA_IMPLEMENTS.path, start: start as number, name: name as string })));
+  const fitSources = [...javaSources, JAVA_FITS];
+  const fitFacts = recordingFacts((slot, value) => slot === "java-receiver-fits" && record(slot, value));
+  const fitCall = (line: number) => ({ file: JAVA_FITS.path, line, column: JAVA_FITS.content.split("\n")[line - 1]!.indexOf("mapper.convert") + 1, member: "convert", implementation: { file: JAVA_FITS.path, start: 7, name: "convert" } });
+  await createJavaNameBindings(() => createJavaParser(holds), fitSources, fitSources.map(({ path }) => path), fitFacts, hold).receiverFits!([fitCall(9), fitCall(10)]);
   hold.release();
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));

@@ -8,11 +8,13 @@ import type { ImportOrigins, ReceiverFit, ReceiverFitSite } from "../../ports/im
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { annotationAt, COMMENT_NODES, resolve, TYPE_NAMES } from "./java-declared-types.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
-import { invocationsOf, methodsByPlace, provesBinding, receiverBindingsOf, callKey } from "./java-receiver-methods.ts";
-import { createJavaProject, supertypeClauses, type JavaFile, type JavaProject, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
+import { keptByFile, type KeptReads } from "./java-kept-reads.ts";
+import { invocationsOf, methodsByPlace, provesBinding, provesFromIndex, receiverBindingsOf, callKey } from "./java-receiver-methods.ts";
+import { createJavaProject, supertypeClauses, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverFit = { kind: "unknown" };
 const DISJOINT: ReceiverFit = { kind: "disjoint" };
+const RECEIVER_FITS_SLOT = "java-receiver-fits";
 
 /**
  * `ImportOrigins.receiverFits` for Java sources (ADR-0104): the receiver of a call is a declared name of a repository
@@ -23,13 +25,11 @@ const DISJOINT: ReceiverFit = { kind: "disjoint" };
  * array, a name that binds nothing or several, a receiver that is no declared name, a type that reaches `T` through a
  * base class and a read that proves no binding are `unknown`.
  */
-export function createJavaReceiverFits(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["receiverFits"]> {
+export function createJavaReceiverFits(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}, reads?: KeptReads): NonNullable<ImportOrigins["receiverFits"]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
   const sourcesByPath = new Map(sources.map((source) => [source.path, source]));
-  const analyze = (sites: readonly ReceiverFitSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ReceiverFit[] => {
-    if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN);
-    const byPath = new Map(files.map((file) => [file.path, file]));
-    const methods = methodsByPlace(project);
+  /** The fit of each site, the file a call is written in and the methods a site's implementation names being what `fileAt` and `originsAt` offer. */
+  const fitsAt = (sites: readonly ReceiverFitSite[], project: JavaProject, fileAt: (path: string) => JavaFile | undefined, originsAt: (site: ReceiverFitSite) => readonly MethodDecl[]): readonly ReceiverFit[] => {
     const read = new Map<string, { invocations: ReadonlyMap<string, readonly Node[]>; bindings: ReadonlyMap<string, ReceiverBinding> }>();
     const readOf = (file: JavaFile) => {
       let known = read.get(file.path);
@@ -78,15 +78,30 @@ export function createJavaReceiverFits(parser: () => Promise<JavaParser>, source
     };
 
     return sites.map((site) => {
-      const file = byPath.get(site.file);
-      const origins = methods.get(`${site.implementation.file}:${site.implementation.start}:${site.implementation.name}`) ?? [];
+      const file = fileAt(site.file);
+      const origins = originsAt(site);
       if (file === undefined || origins.length !== 1) return UNKNOWN;
       const invocations = readOf(file).invocations.get(callKey(site.line, site.column, site.member)) ?? [];
       return invocations.length > 0 && invocations.every((invocation) => excludes(invocation, file, origins[0]!.owner)) ? DISJOINT : UNKNOWN;
     });
   };
+  const analyze = (sites: readonly ReceiverFitSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ReceiverFit[] => {
+    if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN);
+    const byPath = new Map(files.map((file) => [file.path, file]));
+    const methods = methodsByPlace(project);
+    return fitsAt(sites, project, (path) => byPath.get(path), ({ implementation }) => methods.get(`${implementation.file}:${implementation.start}:${implementation.name}`) ?? []);
+  };
   return async (sites) => {
     if (sites.length === 0) return [];
+    if (reads !== undefined)
+      return keptByFile(reads, { slot: RECEIVER_FITS_SLOT, parser, sources, build, over: "sources" }, sites, ({ line, column, member, implementation }) => `${callKey(line, column, member)}|${implementation.file}:${implementation.start}:${implementation.name}`, UNKNOWN, ({ project, files, asked }, places) => {
+        if (!provesFromIndex(project, asked, (at) => files.get(at))) return places.map(() => UNKNOWN);
+        const originsAt = ({ implementation }: ReceiverFitSite): readonly MethodDecl[] => {
+          const declaring = files.get(implementation.file);
+          return declaring === undefined ? [] : project.typesOf(declaring).flatMap((type) => type.methods).filter((method) => method.node.startPosition.row + 1 === implementation.start && method.name === implementation.name);
+        };
+        return fitsAt(places, project, (path) => files.get(path), originsAt);
+      });
     const read = await parser();
     const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
     if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);

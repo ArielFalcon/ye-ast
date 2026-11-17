@@ -579,7 +579,7 @@ export function provesBinding(files: readonly JavaFile[], project: JavaProject, 
  * and no file the index marks as naming a JDK API that implements an interface at run time that the project's own
  * resolution confirms does.
  */
-function provesFromIndex(project: JavaProject, ask: (question: string) => string, fileAt: (path: string) => JavaFile | undefined): boolean {
+export function provesFromIndex(project: JavaProject, ask: (question: string) => string, fileAt: (path: string) => JavaFile | undefined): boolean {
   const unread = JSON.parse(ask(questions.unread())) as { files: readonly unknown[]; unreadJvm: boolean };
   if (unread.files.length > 0 || unread.unreadJvm || (JSON.parse(ask(questions.marked("call-rewriting"))) as string[]).length > 0) return false;
   return (JSON.parse(ask(questions.marked("dynamic-implementation"))) as string[]).every((path) => {
@@ -1409,7 +1409,7 @@ function hasTypeVariables(type: TypeDecl): boolean {
 }
 
 /** A method the index places by its file and the lines from its first token to its name (a compact constructor's first line). */
-function placeOf(method: MethodDecl): MethodPlace {
+export function placeOf(method: MethodDecl): MethodPlace {
   return { file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
 }
 
