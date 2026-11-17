@@ -50,8 +50,13 @@ anything (`provesBinding`), which ADR-0119 already answers from the index.
    without building it.
 5. **One declaration index per read of the snapshot.** The readers of one `ImportOrigins` share the index through the
    same function that keeps the receiver methods, so the entries `java-declarations` keeps are read once.
-6. **Not moved here:** `outsideSupertypes` and the dispatch readers, which keep
-   the held project and are decided by their own units, and parse on demand (M5), which waits for them.
+6. **`outsideSupertypes` is kept whole, by the listing.** It lists the supertypes outside the repository of a method's
+   owner and every type below it, which reads every declaration, anonymous class and function value of the sources
+   (`readHierarchy`). Its derivation, one for each set of sites, records `listing()` and `unread` (RFC-0039 P10 and P8)
+   and stays in memory: an unchanged read answers it without a project, and an edit of any source derives it again, as
+   today. Its per-closure form is decided by its own unit.
+7. **Not moved here:** the dispatch readers, which keep the held project, and parse on demand (M5), which waits for
+   them.
 
 ## Consequences
 

@@ -8,6 +8,8 @@ import { FUNCTION_VALUE_AWAITS_JDK, type CutCause, type DispatchUnknownReason } 
 import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { questions } from "./java-declaration-questions.ts";
+import type { KeptReads } from "./java-kept-reads.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { methodsByPlace, provesBinding } from "./java-receiver-methods.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
@@ -16,6 +18,7 @@ import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, r
 
 const UNKNOWN: DispatchTargets = { kind: "unknown", reason: "dispatch not proven" };
 const UNKNOWN_OUTSIDE: OutsideSupertypes = { kind: "unknown" };
+const OUTSIDE_SUPERTYPES_SLOT = "java-outside-supertypes";
 /** The class every Java class extends when it writes no superclass (JLS 8.1.4). */
 const ROOT_TYPE = "java.lang.Object";
 const ASPECT_REASON = "aspect may replace the body" satisfies DispatchUnknownReason;
@@ -220,7 +223,7 @@ function vetoOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): Veto
  * method is not placed. An annotation and an aspect's advice leave the answer as read: a proxy or a generated subclass
  * of a type adds no supertype the type's own methods run under (ADR-0079 decision 5).
  */
-export function createJavaOutsideSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["outsideSupertypes"]> {
+export function createJavaOutsideSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}, reads?: KeptReads): NonNullable<ImportOrigins["outsideSupertypes"]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
   /** Per project, its hierarchy and its methods by place, read once for every site asked of it; `unknown` where the reading proves nothing. */
   const readings = new WeakMap<JavaProject, { hierarchy: Hierarchy; methods: ReadonlyMap<string, readonly MethodDecl[]> } | "unknown">();
@@ -247,6 +250,14 @@ export function createJavaOutsideSupertypes(parser: () => Promise<JavaParser>, s
   };
   return async (sites) => {
     if (sites.length === 0) return [];
+    if (reads !== undefined) {
+      const index = await reads.index();
+      return reads.facts.ofReads(OUTSIDE_SUPERTYPES_SLOT, { sites, generatesInterfaces: build.generatesInterfaces === true }, index.answerIfKnown, async (record) => {
+        for (const question of [questions.listing(), questions.unread()]) record(question, index.answer(question));
+        const held = await heldJavaProject(reads.hold, parser, sources, [], build);
+        return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
+      });
+    }
     const read = await parser();
     const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
     if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
