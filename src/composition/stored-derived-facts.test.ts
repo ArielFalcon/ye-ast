@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
+import { createJavaReceiverMethods } from "../core/adapters/spring/java-receiver-methods.ts";
 import { createJavaMemberNames } from "../core/adapters/tree-sitter/java-member-names.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createJavaTokens } from "../core/adapters/tree-sitter/java-tokens.adapter.ts";
 import { createTypeScriptMemberNames } from "../core/adapters/typescript/declared-member-names.adapter.ts";
+import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
 import { createTypeScriptTokens } from "../core/adapters/typescript/source-tokens.adapter.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
@@ -18,6 +20,8 @@ const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export func
 const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };
 const WRITER: SourceFile = { path: "src/writer.ts", content: ["export {};", "(Array.prototype as any).last = () => 1;", ""].join("\n") };
 const SCRIPT: SourceFile = { path: "src/script.ts", content: "var scriptGlobal = 1;\n" };
+const IMPORTER: SourceFile = { path: "src/importer.ts", content: ["import Later from './later';", "import { gone } from './gone';", "export const used = Later;", ""].join("\n") };
+const LATER: SourceFile = { path: "src/later.ts", content: "export default class Later {}\n" };
 
 /**
  * What a reader of each stored slot derives from a fixed source, as a digest, beside the version the slot has: a reader
@@ -29,7 +33,11 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "ts-binding-uses": [1, "8f82a98a0c55b411ab24f9f3420c5162a0625f944447f7c91a5fb160544be31f"],
   "ts-script-globals": [1, "66e1183b6ebfc3a46590953747633de58924ee17f5ddfd3c9a63fd24ca55702e"],
   "ts-written-roots": [1, "d557ab6096c85362657c4fabb463c21becbbc0b6b32aae0f1235b64597373e40"],
+  "ts-module-statements": [1, "91ab9359a95e086f838319423bdedbe521677be9a9aeeeaa9559d89865c9aaa7"],
+  "ts-default-declaration": [1, "bb5c1e3feab5ef3908224d5f2c0eabde6442b0d5202265d2d7b2f4aee3b13de8"],
+  "java-receiver-bindings": [1, "90990e5ddeb91598c35caee6778aaeb4bcfbeca882230eda67aed1a064c6760d"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
+  "ts-module-resolutions": [1, "06babd9d9388578f4fac7b2d6655e24b5df82a7f5c1aa5b6d5dec0c70e1125c9"],
 };
 
 async function derivedBySlot(): Promise<Record<string, [number, string]>> {
@@ -54,6 +62,8 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   const origins = createImportOrigins([PARAMETER, DYNAMIC, WRITER, SCRIPT], { facts });
   await origins.rootOrigins([{ file: PARAMETER.path, line: 2, column: 3, kind: "calls", name: "redact" }, { file: DYNAMIC.path, line: 3, column: 3, kind: "calls", name: "helper" }]);
   await origins.replacedRoots();
+  await createModuleDependenciesReader().extract([IMPORTER, LATER], { facts });
+  await createJavaReceiverMethods(createJavaParser, [JAVA_FILE], [JAVA_FILE.path], facts)([{ file: JAVA_FILE.path, line: 2, column: 36, member: "go" }]);
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));
   const digest = createSha256Digest();

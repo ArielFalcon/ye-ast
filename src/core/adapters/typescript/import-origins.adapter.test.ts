@@ -9,6 +9,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
 import type { ImportOriginSite } from "../../ports/import-origins.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import { rememberingFacts } from "./remembering-facts.testing.ts";
 
 const CONFIG: SourceFile = {
   path: "tsconfig.json",
@@ -847,33 +848,6 @@ test("heritage between repository classes and interfaces, imported or local, pro
   const shape: SourceFile = { path: "src/shape.ts", content: "export class Shape {}\nexport interface Outlined {}" };
   assert.deepEqual(await declaredTypeOf("Map<string, number>", "Map", [], [shapes, shape]), { kind: "global", name: "Map" });
 });
-
-/** Derived facts in memory, recording each derivation as `slot` or `slot path`. */
-function rememberingFacts(): DerivedFacts & { derived: string[] } {
-  const kept = new Map<string, string>();
-  const derived: string[] = [];
-  return {
-    derived,
-    ofFile(slot, file, derive) {
-      const key = JSON.stringify([slot, file.path, file.content]);
-      if (!kept.has(key)) {
-        derived.push(`${slot} ${file.path}`);
-        kept.set(key, JSON.stringify(derive()));
-      }
-      return JSON.parse(kept.get(key)!);
-    },
-    async ofInputs(slot, inputs, derive) {
-      const key = JSON.stringify([slot, inputs]);
-      if (!kept.has(key)) {
-        derived.push(slot);
-        kept.set(key, JSON.stringify(await derive()));
-      }
-      return JSON.parse(kept.get(key)!);
-    },
-    fingerprint: (inputs) => JSON.stringify(inputs),
-    drain: () => ({ hits: 0, misses: 0, diskHits: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
-  };
-}
 
 const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export function run(redact: () => void): void {", "  redact();", "}", ""].join("\n") };
 const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };

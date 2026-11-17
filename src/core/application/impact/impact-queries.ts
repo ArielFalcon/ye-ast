@@ -154,7 +154,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const alsoListed = other?.filter((path) => !held.has(path)).toSorted(compareText);
     const listing = own === undefined || alsoListed === undefined ? undefined : [...own, ...alsoListed];
     const slot = canonicalJson(alsoListed === undefined || alsoListed.length === 0 ? { output: "module-dependencies" } : { output: "module-dependencies", alsoListed });
-    return retainedOf(prepared, slot, () => reader.extract(tree.sources, listing === undefined ? undefined : { listing }), signal);
+    return retainedOf(prepared, slot, () => reader.extract(tree.sources, { ...(listing === undefined ? {} : { listing }), ...(prepared?.facts === undefined ? {} : { facts: prepared.facts }) }), signal);
   };
   /** The head's module statements, read once a namespace import may name a reached declaration. */
   const namespaceModules = (head: Pick<HeadReading, "prepared">, tree: CommitExtraction, signal: AbortSignal | undefined): (() => Promise<Pick<ModuleDependencies, "dependencies" | "unread">>) | undefined => {

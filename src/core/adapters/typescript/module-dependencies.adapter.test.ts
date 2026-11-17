@@ -4,6 +4,8 @@ import { sourceTree } from "./source-tree.ts";
 import assert from "node:assert/strict";
 import { createModuleDependenciesReader } from "./module-dependencies.adapter.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import { rememberingFacts } from "./remembering-facts.testing.ts";
 
 const config: SourceFile = { path: "tsconfig.json", content: '{"compilerOptions":{"baseUrl":".","paths":{"@lib/*":["src/lib/*"]}}}' };
 const manifest: SourceFile = { path: "package.json", content: '{"dependencies":{"pkg":"1"}}' };
@@ -206,4 +208,82 @@ test("sources and default-export targets are read through the shared tree source
   Object.assign(sourceTree(widget, ts.ScriptTarget.Latest, ts.ScriptKind.TS), { statements: shared.statements });
   const result = await createModuleDependenciesReader().extract([user, widget]);
   assert.equal(result.dependencies[0]!.bindings[0]!.exportedAs, "Shared");
+});
+
+const USER: SourceFile = { path: "src/user.ts", content: "import { item } from './lib/item';\nimport later from './later';\nexport const used = item;\n" };
+const SNAPSHOT = [config, manifest, barrel, item, USER];
+
+/** What a read of the snapshot answers with facts kept between reads, and without any. */
+async function readWith(facts: DerivedFacts | undefined, sources: readonly SourceFile[], listing?: readonly string[]): Promise<{ kept: string; cold: string }> {
+  const reader = createModuleDependenciesReader();
+  const options = { ...(listing === undefined ? {} : { listing }) };
+  const kept = await reader.extract(sources, { ...options, ...(facts === undefined ? {} : { facts }) });
+  return { kept: JSON.stringify(kept), cold: JSON.stringify(await reader.extract(sources, options)) };
+}
+
+test("an edit to a file derives that file's statements again, keeps every other file's and every resolution, and answers what a cold read answers", async () => {
+  const facts = rememberingFacts();
+  await readWith(facts, SNAPSHOT);
+  assert.ok(facts.derived.includes("ts-module-resolutions"));
+  facts.derived.length = 0;
+
+  const edited = SNAPSHOT.map((source) => (source.path === item.path ? { ...source, content: `${source.content}\nexport const more = 2;` } : source));
+  const { kept, cold } = await readWith(facts, edited);
+
+  assert.equal(kept, cold);
+  assert.deepEqual(facts.derived, [`ts-module-statements ${item.path}`]);
+});
+
+test("a path that appears in the snapshot resolves the specifier that named it, though no file that imports it changed", async () => {
+  const facts = rememberingFacts();
+  const before = await readWith(facts, SNAPSHOT);
+  const later: SourceFile = { path: "src/later.ts", content: "export default class Later {}" };
+
+  const after = await readWith(facts, [...SNAPSHOT, later]);
+
+  assert.equal(after.kept, after.cold);
+  assert.notEqual(after.kept, before.kept);
+  const [, resolved] = JSON.parse(after.kept).dependencies.filter(({ file }: { file: string }) => file === USER.path);
+  assert.deepEqual(resolved.target, { kind: "repository", file: later.path });
+  assert.equal(resolved.bindings[0].exportedAs, "Later");
+});
+
+test("a JSON file that a specifier resolves through changes its resolution though no TypeScript file changed", async () => {
+  const facts = rememberingFacts();
+  const source: SourceFile = { path: "src/use.ts", content: "import { item } from '@lib/index';" };
+  const sources = [config, manifest, barrel, item, source];
+  const before = await readWith(facts, sources);
+  const moved = { ...config, content: '{"compilerOptions":{"baseUrl":".","paths":{"@lib/*":["src/other/*"]}}}' };
+
+  const after = await readWith(facts, sources.map((each) => (each === config ? moved : each)));
+
+  assert.equal(after.kept, after.cold);
+  assert.notEqual(after.kept, before.kept);
+});
+
+test("a path the snapshot lists but does not hold decides whether a specifier names no file", async () => {
+  const facts = rememberingFacts();
+  const sources = [config, manifest, USER, item];
+  const without = await readWith(facts, sources, sources.map(({ path }) => path));
+
+  const listed = await readWith(facts, sources, [...sources.map(({ path }) => path), "src/later.ts"]);
+
+  assert.equal(listed.kept, listed.cold);
+  const named = (read: { kept: string }) => JSON.parse(read.kept).dependencies.find(({ specifier }: { specifier: string }) => specifier === "./later").namesNoFile;
+  assert.equal(named(without), true);
+  assert.equal(named(listed), undefined);
+});
+
+test("the declaration a target exports as default is read again when the target changes, not the importer", async () => {
+  const facts = rememberingFacts();
+  const target: SourceFile = { path: "src/later.ts", content: "export default class Later {}" };
+  const sources = [...SNAPSHOT, target];
+  await readWith(facts, sources);
+  facts.derived.length = 0;
+
+  const { kept, cold } = await readWith(facts, sources.map((source) => (source === target ? { ...source, content: "export default class Renamed {}" } : source)));
+
+  assert.equal(kept, cold);
+  assert.ok(JSON.parse(kept).dependencies.some(({ bindings }: { bindings: { exportedAs?: string }[] }) => bindings.some(({ exportedAs }) => exportedAs === "Renamed")));
+  assert.deepEqual(facts.derived.toSorted(), [`ts-default-declaration ${target.path}`, `ts-module-statements ${target.path}`]);
 });
