@@ -8,14 +8,16 @@ import type { AcceptedCounts, ArgumentCount, ConstructedClassSite, DeclaredSuper
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { declarationsProject, enclosingType, heldJavaProject, thisHolder, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
+import { declarationsProject, enclosingType, heldJavaProject, thisHolder, thisType, withJavaSources, type HeldJavaProject, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings, statedType } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, CALL_REWRITING_ANNOTATIONS, isAnonymous, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
-import { projectWrites, type FilesWriting } from "./java-written-names.ts";
+import { indexWrites, projectWrites, type FilesWriting } from "./java-written-names.ts";
+import { javaDeclarationIndex, type JavaDeclarationIndex } from "./java-declaration-index.ts";
+import { questions } from "./java-declaration-questions.ts";
 
 const SLOT = "java-receiver-methods";
 const BINDINGS_SLOT = "java-receiver-bindings";
@@ -94,6 +96,7 @@ interface ReadFile extends ReceiverSource {
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some(isUncoveredJvmSource);
+  const generated = !paths.some((path) => LOMBOK_CONFIG.test(path));
   const sourcesByPath = new Map(sources.map((source) => [source.path, source]));
   let layout: string | undefined;
   const resolved = async (sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]> => {
@@ -107,46 +110,17 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         if (file === undefined) return undefined;
         let known = readFiles.get(path);
         if (known === undefined) {
-          known = { file, bindings: receiverBindingsOf(file, sourcesByPath.get(path), facts), invocations: invocationsOf(file.root) };
+          known = readFileOf(file, sourcesByPath.get(path), facts);
           readFiles.set(path, known);
         }
         return known;
       };
-      const resolver = createResolver(project, !paths.some((path) => LOMBOK_CONFIG.test(path)));
-      const readAt = (invocation: Node, source: ReadFile): ReceiverMethod => {
-        if (invocation.type === "object_creation_expression") return (proves ? resolver.creationOf(invocation, source.file) : undefined) ?? UNKNOWN;
-        const supplied = proves && invocation.type === "method_reference" ? resolver.suppliedReference(invocation, source.file) : undefined;
-        if (supplied !== undefined) return supplied;
-        if (invocation.type === "method_reference") {
-          const named = proves ? resolver.referenceOf(invocation, source.file) : undefined;
-          return named === undefined ? UNPROVEN : "method" in named ? placedAt(named.method) : { kind: "unproven", candidates: named.candidates.map(placeOf).sort(byPlace) };
-        }
-        if (invocation.type === "explicit_constructor_invocation") {
-          const chained = resolver.constructorOf(invocation, source.file);
-          return chained === undefined ? UNKNOWN : chained === "unproven" || !proves ? UNPROVEN : placedAt(chained);
-        }
-        if (invocation.childForFieldName("object")?.type === "super") return proves ? resolver.superMethodOf(invocation, source.file) : UNPROVEN;
-        const named = proves ? resolver.methodOf(invocation, source) : undefined;
-        if (named !== undefined && "method" in named) return { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
-        if (named !== undefined && "generated" in named) return GENERATED;
-        if (named !== undefined) return { kind: "unproven", candidates: named.candidates, ...(named.open === true ? { open: true as const } : {}) };
-        if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) {
-          const outside = proves ? resolver.outsideReceiverOf(invocation, source) : undefined;
-          return outside === undefined ? UNPROVEN : { kind: "outside", type: outside };
-        }
-        const object = invocation.childForFieldName("object");
-        if (object === null || NAMES.has(object.type)) return UNKNOWN;
-        return object.type === "class_literal" && proves ? CLASS_LITERAL : UNPROVEN;
-      };
+      const resolver = createResolver(project, generated);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const source = readFile(site.file);
         if (source === undefined) continue;
-        const readings = (source.invocations.get(callKey(site.line, site.column, site.member)) ?? []).map((invocation) => readAt(invocation, source));
-        const [first] = readings;
-        if (first === undefined) continue;
-        const reading = readings.every((each) => sameReading(each, first)) ? first : UNPROVEN;
-        results[index] = !proves && reading.kind === "unproven" ? UNPROVEN_EVERYWHERE : reading;
+        results[index] = receiverMethodAt(source.invocations.get(callKey(site.line, site.column, site.member)), source, resolver, proves) ?? UNKNOWN;
       }
       return results;
     };
@@ -158,13 +132,50 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       return analyze(files, unparsed, createJavaProject(files, build));
     });
   };
+  let indexed: Promise<JavaDeclarationIndex> | undefined;
+  const indexOf = (kept: DerivedFacts, held: ParseHold) => (indexed ??= parser().then((read) => javaDeclarationIndex(kept, read, held.keep(sources), { generatesInterfaces: build.generatesInterfaces === true, unreadJvm })));
+  /** The receiver methods of each file of sites, kept by the questions its derivation asked of the declaration index (ADR-0119). */
+  const keptByReads = async (sites: readonly ReceiverCallSite[], signal: AbortSignal | undefined, kept: DerivedFacts, held: ParseHold): Promise<readonly ReceiverMethod[]> => {
+    const index = await indexOf(kept, held);
+    const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
+    const byFile = Map.groupBy(sites.entries(), ([, site]) => site.file);
+    for (const [path, entries] of byFile) {
+      if (signal?.aborted) throw new DeadlineCut(results);
+      const content = index.answer(questions.file(path));
+      if (content === "") continue;
+      const places = sortedPlaces(entries.map(([, site]) => site));
+      const subject = { path, content, sites: places, generatesInterfaces: build.generatesInterfaces === true, generated };
+      const placeIndex = new Map(places.map(([line, column, member], at) => [callKey(line, column, member), at]));
+      const readings = await kept.ofReads(SITES_SLOT, subject, index.answerIfKnown, async (record) => {
+        const { project, files } = await heldProject(held, parser, sources, build);
+        const asked = (question: string): string => {
+          const answer = index.answer(question);
+          record(question, answer);
+          return answer;
+        };
+        return project.reading((question) => void asked(question), () => {
+          const proves = provesFromIndex(project, asked, (at) => files.get(at));
+          const file = files.get(path);
+          if (file === undefined) return places.map(() => UNKNOWN);
+          const source = readFileOf(file, sourcesByPath.get(path), kept);
+          const resolver = createResolver(project, generated, indexWrites(project, asked, (at) => files.get(at)));
+          return places.map(([line, column, member]) => {
+            if (signal?.aborted) throw new DeadlineCut(results);
+            return receiverMethodAt(source.invocations.get(callKey(line, column, member)), source, resolver, proves) ?? UNKNOWN;
+          });
+        });
+      });
+      for (const [index, site] of entries) results[index] = readings[placeIndex.get(callKey(site.line, site.column, site.member))!]!;
+    }
+    return results;
+  };
   return async (sites, signal) => {
     if (sites.length === 0) return [];
     if (facts === undefined) return resolved(sites, signal);
     layout ??= facts.fingerprint({ java: sources.map(({ path, content }) => [path, content]), paths, generatesInterfaces: build.generatesInterfaces === true });
     try {
       return await facts.ofInputs(SLOT, { layout, sites }, async () => {
-        const results = await resolved(sites, signal);
+        const results = hold === undefined ? await resolved(sites, signal) : await keptByReads(sites, signal, facts, hold);
         if (signal?.aborted) throw new DeadlineCut(results);
         return results;
       });
@@ -173,6 +184,68 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       throw error;
     }
   };
+}
+
+const SITES_SLOT = "java-receiver-sites";
+
+const filesOfHeld = new WeakMap<HeldJavaProject, ReadonlyMap<string, JavaFile>>();
+
+/** The project a read holds over `sources`, with its files by path. */
+async function heldProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], build: ProjectBuild): Promise<{ project: JavaProject; files: ReadonlyMap<string, JavaFile> }> {
+  const held = await heldJavaProject(hold, parser, sources, [], build);
+  let files = filesOfHeld.get(held);
+  if (files === undefined) {
+    files = new Map(held.files.map(({ file }) => [file.path, file]));
+    filesOfHeld.set(held, files);
+  }
+  return { project: held.project, files };
+}
+
+function readFileOf(file: JavaFile, source: SourceFile | undefined, facts?: DerivedFacts): ReadFile {
+  return { file, bindings: receiverBindingsOf(file, source, facts), invocations: invocationsOf(file.root) };
+}
+
+/** The distinct places of the sites of one file, by line, column and member. */
+function sortedPlaces(sites: readonly ReceiverCallSite[]): [line: number, column: number, member: string][] {
+  const places = new Map(sites.map((site) => [callKey(site.line, site.column, site.member), [site.line, site.column, site.member] as [number, number, string]]));
+  return [...places.values()].sort(([lineA, columnA, memberA], [lineB, columnB, memberB]) => lineA - lineB || columnA - columnB || (memberA < memberB ? -1 : memberA > memberB ? 1 : 0));
+}
+
+type Resolver = ReturnType<typeof createResolver>;
+
+/** What the invocations that start at a place read: their one reading, or unproven where they differ; none where no invocation starts there. */
+function receiverMethodAt(invocations: readonly Node[] | undefined, source: ReadFile, resolver: Resolver, proves: boolean): ReceiverMethod | undefined {
+  const readings = (invocations ?? []).map((invocation) => receiverMethodOf(invocation, source, resolver, proves));
+  const [first] = readings;
+  if (first === undefined) return undefined;
+  const reading = readings.every((each) => sameReading(each, first)) ? first : UNPROVEN;
+  return !proves && reading.kind === "unproven" ? UNPROVEN_EVERYWHERE : reading;
+}
+
+function receiverMethodOf(invocation: Node, source: ReadFile, resolver: Resolver, proves: boolean): ReceiverMethod {
+  if (invocation.type === "object_creation_expression") return (proves ? resolver.creationOf(invocation, source.file) : undefined) ?? UNKNOWN;
+  const supplied = proves && invocation.type === "method_reference" ? resolver.suppliedReference(invocation, source.file) : undefined;
+  if (supplied !== undefined) return supplied;
+  if (invocation.type === "method_reference") {
+    const named = proves ? resolver.referenceOf(invocation, source.file) : undefined;
+    return named === undefined ? UNPROVEN : "method" in named ? placedAt(named.method) : { kind: "unproven", candidates: named.candidates.map(placeOf).sort(byPlace) };
+  }
+  if (invocation.type === "explicit_constructor_invocation") {
+    const chained = resolver.constructorOf(invocation, source.file);
+    return chained === undefined ? UNKNOWN : chained === "unproven" || !proves ? UNPROVEN : placedAt(chained);
+  }
+  if (invocation.childForFieldName("object")?.type === "super") return proves ? resolver.superMethodOf(invocation, source.file) : UNPROVEN;
+  const named = proves ? resolver.methodOf(invocation, source) : undefined;
+  if (named !== undefined && "method" in named) return { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
+  if (named !== undefined && "generated" in named) return GENERATED;
+  if (named !== undefined) return { kind: "unproven", candidates: named.candidates, ...(named.open === true ? { open: true as const } : {}) };
+  if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) {
+    const outside = proves ? resolver.outsideReceiverOf(invocation, source) : undefined;
+    return outside === undefined ? UNPROVEN : { kind: "outside", type: outside };
+  }
+  const object = invocation.childForFieldName("object");
+  if (object === null || NAMES.has(object.type)) return UNKNOWN;
+  return object.type === "class_literal" && proves ? CLASS_LITERAL : UNPROVEN;
 }
 
 /**
@@ -463,6 +536,20 @@ export function provesBinding(files: readonly JavaFile[], project: JavaProject, 
   const proves = readsEverySource(project, unparsed, unreadJvm) && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
   provenBindings.set(project, { files, unparsed, unreadJvm, proves });
   return proves;
+}
+
+/**
+ * What `provesBinding` answers over the declaration index: no source left unread, no call-rewriting annotation anywhere,
+ * and no file the index marks as naming a JDK API that implements an interface at run time that the project's own
+ * resolution confirms does.
+ */
+function provesFromIndex(project: JavaProject, ask: (question: string) => string, fileAt: (path: string) => JavaFile | undefined): boolean {
+  const unread = JSON.parse(ask(questions.unread())) as { files: readonly unknown[]; unreadJvm: boolean };
+  if (unread.files.length > 0 || unread.unreadJvm || (JSON.parse(ask(questions.marked("call-rewriting"))) as string[]).length > 0) return false;
+  return (JSON.parse(ask(questions.marked("dynamic-implementation"))) as string[]).every((path) => {
+    const file = fileAt(path);
+    return file === undefined || !namesAnyDynamicImplementation(file, project);
+  });
 }
 
 /** What `provesBinding` last answered over a project: every reader of a read asks it over the same inputs. */

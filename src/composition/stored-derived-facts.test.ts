@@ -81,6 +81,7 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "java-relations": [1, "44a95dcd724d82e01cf726296313a3daebdeb01f5dda377fb39806c7dd0b85c7"],
   "java-entrypoints": [1, "3a63c07df1763ffeacea0e437ac9a1ada4f10d0de462ec6f50ca063ea72c1cb0"],
   "java-callbacks": [1, "31e796b313e5ab7c1a14d463c85c1e147f377e0585c86f8d0742b4d0fbc8eaf9"],
+  "java-receiver-sites": [1, "a6a10152c6d15d73ae90cb581762317393860044cdc48be40a7f8ed1250657d0"],
   tokens: [1, "abdbd629965c9c2d3afecd0b502ffdea9e0015537dc77bee38e7c21f012cee3c"],
   "ts-module-resolutions": [1, "06babd9d9388578f4fac7b2d6655e24b5df82a7f5c1aa5b6d5dec0c70e1125c9"],
 };
@@ -127,6 +128,8 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   const downstream = recordingFacts((slot, value) => slot === "java-declarations" || record(slot, value));
   await createJavaRelations(() => createJavaParser(holds)).extract(hold.keep(javaSources), { hold, facts: downstream });
   await createSpringRoutesExtractor(await createJavaParser(holds)).extract(hold.keep(javaSources), [], { hold, facts: downstream });
+  const siteFacts = recordingFacts((slot, value) => slot === "java-receiver-sites" && record(slot, value));
+  await createJavaReceiverMethods(() => createJavaParser(holds), javaSources, javaSources.map(({ path }) => path), siteFacts, hold)([{ file: JAVA_FILE.path, line: 2, column: 36, member: "go" }]);
   hold.release();
   record("tokens", await createTypeScriptTokens().tokensOf(TS_FILE));
   record("tokens", await createJavaTokens(createJavaParser).tokensOf(JAVA_FILE));
