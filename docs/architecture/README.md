@@ -174,6 +174,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0037](rfc/0037-persistent-derived-store.md) | A disk tier behind the derived-facts port, a host-named cache directory, and the workspace join reading only changed repositories | Accepted |
 | [0038](rfc/0038-locating-declarations-and-fixed-layer-resources.md) | The `locate` family, faults that carry its answer, and the fixed layer as read-only MCP resources | Accepted |
 | [0039](rfc/0039-recorded-reads-for-the-java-project.md) | The Java project answers through recorded queries over a per-file index of declared names, so a cross-file derivation is kept by what it read; designs the dependency record ADR-0115 left open; M0 to M2 accepted by ADR-0116, M3 and M6 by ADR-0117, the callback walk per file by ADR-0118, M4 by ADR-0119, the readers of one declaration by ADR-0120 | Draft |
+| [0040](rfc/0040-resident-generations-and-answer-latency.md) | The current state of a repository stays resident as an immutable generation (graph image, decoded facts, assembled reading, kept answers) rebuilt only where its inputs changed, with freshness ahead of the query and a lock for the refresh only, so an answer costs what depends on its question; D1 to D5 approved | Draft |
 
 ## Pending decisions
 
