@@ -6,6 +6,7 @@ import { createDiffReader, type FileChange } from "../../domain/change/diff-read
 import type { Result } from "../../domain/shared/result.ts";
 import { isFullObjectId } from "../../domain/shared/revision.ts";
 import type { CommitExport, ExportBudget, ExportedFile, ExportPlan, ExportStop, RemoteRef, SkippedEntry, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
+import { createListingMemo, type CommitTree, type ListedBlob } from "./commit-listing-memo.ts";
 import { claimPath, isConfinedPath, type PathClaims } from "./export-path-rules.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 
@@ -103,7 +104,16 @@ export const defaultGitDeps: GitDeps = {
     spawnGit(repo, ["cat-file", "--batch"], (stdout) => readBatch(stdout, blobs.length, sink), `${blobs.join("\n")}\n`, false, signal),
 };
 
-export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
+export interface GitVcsOptions {
+  /** The bytes the kept commit listings may charge; 8 MiB by default, zero keeps none (ADR-0122). */
+  listingBytes?: number;
+}
+
+/** The corpus' listings charge 22 to 255 KB each and 0.6 MB together; the bound holds more than ten times that. */
+const LISTING_BYTES = 8 * 1024 * 1024;
+
+export function createGitVcs(deps: GitDeps = defaultGitDeps, options: GitVcsOptions = {}): Vcs & VcsChanges {
+  const listings = createListingMemo(options.listingBytes ?? LISTING_BYTES);
   async function canonicalRoot(repo: string, signal?: AbortSignal): Promise<Result<string, VcsFault>> {
     if (signal?.aborted) return ABORTED;
     const root = await ensureRepositoryRoot(deps, repo, signal);
@@ -129,51 +139,75 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     return { ok: true, value: run.stdout.toString("utf8").trim() };
   }
 
-  async function listCommit(repo: string, sha: string, plan: ExportPlan, signal?: AbortSignal): Promise<Result<CommitExport, VcsFault>> {
+  /** The accepted files and skipped entries of the commit as git lists them, after checking that `sha` is the full sha of a commit. */
+  async function treeOf(repo: string, sha: string, maxEntries: number, signal?: AbortSignal): Promise<Result<CommitTree, VcsFault>> {
     const resolved = await resolveCommit(repo, sha, signal);
     if (!resolved.ok) return resolved;
     if (resolved.value !== sha) return { ok: false, fault: { kind: "unknown-revision", detail: `${sha} is not a full commit sha` } };
 
-    const files: ExportedFile[] = [];
-    const selected: ExportedFile[] = [];
+    const files: ListedBlob[] = [];
     const skipped: SkippedEntry[] = [];
     const claimed: PathClaims = new Map();
-    const { maxEntries, maxBytes } = plan.budget ?? UNBOUNDED;
     let entries = 0;
-    let listingStop: ExportStop | undefined;
+    let stop: ExportStop | undefined;
     const listing = await deps.streamRecords(
       repo,
       ["ls-tree", "-r", "-z", "--full-tree", sha],
       (record) => {
         const entry = parseEntry(record);
         if (entries === maxEntries) {
-          listingStop = { at: entry.path, limit: maxEntries };
+          stop = { at: entry.path, limit: maxEntries };
           throw new BudgetExhausted();
         }
         entries += 1;
         const reason = skipReason(entry, claimed);
-        if (reason !== undefined) {
-          skipped.push({ path: entry.path, reason });
-          return;
-        }
-        const file: ExportedFile = { path: entry.path, blob: entry.blob, written: false };
-        files.push(file);
-        if (plan.write(file.path)) selected.push(file);
+        if (reason !== undefined) skipped.push({ path: entry.path, reason });
+        else files.push({ path: entry.path, blob: entry.blob });
       },
       signal,
     );
     if (signal?.aborted) return ABORTED;
-    if (listingStop === undefined && listing.code !== 0) return gitFailed(listing);
+    if (stop === undefined && listing.code !== 0) return gitFailed(listing);
+    return { ok: true, value: { files, skipped, stop } };
+  }
 
+  async function listCommit(repo: string, sha: string, plan: ExportPlan, signal?: AbortSignal): Promise<Result<CommitExport, VcsFault>> {
+    const { maxEntries, maxBytes } = plan.budget ?? UNBOUNDED;
+    const kept = listings.get(repo, sha, maxEntries);
+    const read = kept === undefined ? await treeOf(repo, sha, maxEntries, signal) : { ok: true as const, value: kept.tree };
+    if (!read.ok) return read;
+    const tree = read.value;
+
+    const files: ExportedFile[] = tree.files.map(({ path, blob }) => ({ path, blob, written: false }));
+    const selected = files.filter((file) => plan.write(file.path));
+    const sizes: ReadonlyMap<string, number> = kept?.sizes ?? new Map();
+    const learned = new Map<string, number>();
     let failure: VcsFault | undefined;
     let blobStop: ExportStop | undefined;
     let bytes = 0;
+    const take = (file: ExportedFile, size: number): boolean => {
+      if (bytes + size > maxBytes) {
+        blobStop = { at: file.path, limit: maxBytes };
+        return false;
+      }
+      bytes += size;
+      file.written = true;
+      return true;
+    };
+
+    let known = 0;
+    while (known < selected.length) {
+      const size = sizes.get(selected[known]!.blob);
+      if (size === undefined || !take(selected[known]!, size)) break;
+      known += 1;
+    }
+    const unchecked = blobStop === undefined ? selected.slice(known) : [];
     let index = 0;
-    const checked = selected.length === 0 ? undefined : await deps.checkBlobs(
+    const checked = unchecked.length === 0 ? undefined : await deps.checkBlobs(
       repo,
-      selected.map((file) => file.blob),
+      unchecked.map((file) => file.blob),
       (size) => {
-        const file = selected[index++];
+        const file = unchecked[index++];
         if (file === undefined) return;
         if (signal?.aborted) {
           failure = ABORTED_FAULT;
@@ -183,20 +217,17 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
           failure = { kind: "object-missing", detail: `${file.blob} of ${file.path} is not in the local object store` };
           throw new ExportStopped(failure);
         }
-        if (bytes + size > maxBytes) {
-          blobStop = { at: file.path, limit: maxBytes };
-          throw new BudgetExhausted();
-        }
-        bytes += size;
-        file.written = true;
+        learned.set(file.blob, size);
+        if (!take(file, size)) throw new BudgetExhausted();
       },
       signal,
     );
     if (failure !== undefined) return { ok: false, fault: failure };
     if (signal?.aborted) return ABORTED;
     if (checked !== undefined && blobStop === undefined && checked.code !== 0) return gitFailed(checked);
-    const stopped = blobStop ?? listingStop;
-    return { ok: true, value: { files, skipped, ...(stopped === undefined ? {} : { stopped }) } };
+    if (kept === undefined || learned.size > 0) listings.admit(repo, sha, maxEntries, tree, learned);
+    const stopped = blobStop ?? tree.stop;
+    return { ok: true, value: { files, skipped: tree.skipped.map(({ path, reason }) => ({ path, reason })), ...(stopped === undefined ? {} : { stopped: { ...stopped } }) } };
   }
 
   async function materializeCommit(repo: string, files: readonly ExportedFile[], destination: string, signal?: AbortSignal): Promise<Result<void, VcsFault>> {

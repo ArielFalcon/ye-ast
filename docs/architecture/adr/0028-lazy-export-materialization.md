@@ -3,6 +3,8 @@
 - Status: Accepted, 2026-11-06, owner
 - Decision source: the owner, 2026-11-06: "luego haz la implementacion completa del plan que propones", approving the
   efficiency plan whose step 5 amends ADR-0020 decisions 4 and 5.
+- Amended by: [ADR-0122](0122-a-commit-listing-is-kept-by-its-sha-and-the-index-cache-sweeps-when-it-builds-or-once-per-interval.md) (decision 1: the listing of a full sha is kept by the sha, the revision is still
+  resolved on every request)
 - Related: [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md) (amended),
   [ADR-0010](0010-trust-modes.md), [ADR-0015](0015-index-reuse-by-content.md),
   [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md),
