@@ -109,3 +109,11 @@ class Shadow { @Bean UserDetailsService fake() { return name -> null; } }` },
   const findings = (await createSpringRoutesExtractor(parser).extract(sources)).findings;
   assert.deepEqual(findings, []);
 });
+
+test("types that start on the same line are reported in source order", async () => {
+  const parser = await createJavaParser();
+  const findings = (await createSpringRoutesExtractor(parser).extract([{ path: "src/main/java/app/OneLine.java", content: `package app;
+import org.springframework.security.core.userdetails.UserDetailsService;
+class Base implements UserDetailsService {} class C extends Base {} class D extends Base {}` }])).findings;
+  assert.deepEqual(findings.map((f) => f.status === "unknown" && f.subject !== undefined && "symbol" in f.subject ? f.subject.symbol : undefined), ["Base", "C", "D"]);
+});

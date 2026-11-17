@@ -192,7 +192,7 @@ export function callbacksOfFile(file: JavaFile, project: JavaProject, contracts:
       const nodes = supertypesOf(type.node).filter((node) => (node.type === "generic_type" ? node.namedChildren[0]?.text : node.text)?.split(".").at(-1) === simple);
       findings.push({ status: "unknown", reason: "unresolved", evidence: [{ ...spanOf(type.file.path, type.node), via: row.type }, ...nodes.map((node) => ({ ...spanOf(type.file.path, node), via: row.type }))], subject: contractSubject(row, type.qualifiedName) });
     }
-    for (const type of types.filter((candidate) => edges.invokes(candidate, row.type)).sort((a, b) => a.node.startPosition.row - b.node.startPosition.row)) {
+    for (const type of types.filter((candidate) => edges.invokes(candidate, row.type)).sort((a, b) => a.node.startPosition.row - b.node.startPosition.row || a.node.startIndex - b.node.startIndex)) {
       if (type.kind !== "class" || type.isAbstract) continue;
       const at = { ...spanOf(type.file.path, type.node), via: row.type };
       if (!registered(type, row.registration, annotations)) {
