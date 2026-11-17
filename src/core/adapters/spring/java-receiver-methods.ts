@@ -15,6 +15,7 @@ import { builderMember, generatedMember, type GeneratedMember } from "./java-gen
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
+import { projectWrites, type FilesWriting } from "./java-written-names.ts";
 
 const SLOT = "java-receiver-methods";
 const BINDINGS_SLOT = "java-receiver-bindings";
@@ -407,7 +408,7 @@ function onDemandOutside(name: string, scope: Scope, project: JavaProject): { qu
     if (names !== undefined && project.isPlatformName(offered)) {
       if (names.has(name)) listed.push(offered);
     } else if (project.lookupType(container, { file: scope.file, type: undefined }) !== undefined) return undefined;
-    else if (!project.types.some((type) => type.file.packageName === container)) unlisted.push(offered);
+    else if (!project.declaresTypesIn(container)) unlisted.push(offered);
   }
   const offered = listed.length > 0 ? listed : unlisted;
   return offered.length === 1 && !outsideAround ? { qualifiedName: offered[0]! } : {};
@@ -485,8 +486,11 @@ function readsEverySource(project: JavaProject, unparsed: readonly UnparsedSourc
   return unparsed.length === 0 && !unreadJvm && project.unreadable.length === 0;
 }
 
-/** `generated`: whether the members that a record or a Lombok annotation adds are settled (no `lombok.config` may rename them). */
-export function createResolver(project: JavaProject, generated = false) {
+/**
+ * `generated`: whether the members that a record or a Lombok annotation adds are settled (no `lombok.config` may rename
+ * them). `writes`: the files whose declarations write a name, which a read of one derivation answers by recorded questions.
+ */
+export function createResolver(project: JavaProject, generated = false, writes: FilesWriting = projectWrites(project)) {
   const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
   /** The supertype clauses, by file and offset, that name a platform interface declaring no members. */
   const memberless = new Set<string>();
@@ -551,51 +555,64 @@ export function createResolver(project: JavaProject, generated = false) {
     return signatures.get(method);
   };
 
-  let unplacedBelow: { types: ReadonlySet<TypeDecl>; names: ReadonlySet<string> } | undefined;
-  /**
-   * What may stand below a repository type without a type the project places: the repository types an anonymous or a
-   * local class extends, and the simple names of the supertypes the strict reading leaves unsettled anywhere, an
-   * anonymous or local class's or a placed type's that is no type outside the repository.
-   */
-  const readUnplacedBelow = () => {
-    if (unplacedBelow !== undefined) return unplacedBelow;
-    const placed = new Set(project.types.map((type) => type.node.id));
-    const types = new Set<TypeDecl>();
-    const names = new Set<string>();
-    for (const type of project.types) for (const gap of unsettledGaps(declaredHierarchy(type))) if (!isOutsideSupertype(gap)) names.add(gap.name.split(".").at(-1)!);
-    for (const file of new Set(project.types.map((type) => type.file))) {
-      const pending: Node[] = [file.root];
-      for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-        if ((isTypeDeclaration(node) || isAnonymous(node)) && !placed.has(node.id)) {
-          for (const supertype of supertypesOf(node)) {
-            const found = resolve(supertype, file, project, enclosingType(node.parent ?? node, file, project), supertype, true);
-            if (found?.kind === "repository" && found.type !== undefined) types.add(found.type);
-            else if (found?.kind !== "platform" && found?.kind !== "library") names.add(typeNodeName(supertype).split(".").at(-1)!);
-          }
-        }
-        for (const child of node.namedChildren) if (child !== null) pending.push(child);
-      }
+  /** The supertype names of a file's anonymous and local classes, with the scope each is read in. */
+  const unplacedSupertypes = (file: JavaFile): readonly { supertype: Node; scope: TypeDecl | undefined }[] => {
+    const placed = new Set(project.typesOf(file).map((type) => type.node.id));
+    const found: { supertype: Node; scope: TypeDecl | undefined }[] = [];
+    const pending: Node[] = [file.root];
+    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+      if ((isTypeDeclaration(node) || isAnonymous(node)) && !placed.has(node.id)) for (const supertype of supertypesOf(node)) found.push({ supertype, scope: enclosingType(node.parent ?? node, file, project) });
+      for (const child of node.namedChildren) if (child !== null) pending.push(child);
     }
-    unplacedBelow = { types, names };
-    return unplacedBelow;
+    return found;
   };
 
-  let referencedNames: ReadonlySet<string> | undefined;
+  const unplacedBelowOf = new Map<TypeDecl, boolean>();
+  /**
+   * What may stand below a repository type without a type the project places: a repository type an anonymous or a local
+   * class extends, or a supertype name the strict reading leaves unsettled anywhere, an anonymous or local class's or a
+   * placed type's that is no type outside the repository, under the name of the type.
+   */
+  const hasUnplacedBelow = (type: TypeDecl): boolean => {
+    let known = unplacedBelowOf.get(type);
+    if (known === undefined) {
+      known =
+        writes("supertype", type.name).some((file) => project.typesOf(file).some((placed) => unsettledGaps(declaredHierarchy(placed)).some((gap) => lastSegment(gap.name) === type.name && !isOutsideSupertype(gap)))) ||
+        writes("unplaced-supertype", type.name).some((file) =>
+          unplacedSupertypes(file).some(({ supertype, scope }) => {
+            if (lastSegment(typeNodeName(supertype)) !== type.name) return false;
+            const found = resolve(supertype, file, project, scope, supertype, true);
+            return found?.kind === "repository" && found.type !== undefined ? found.type === type : found?.kind !== "platform" && found?.kind !== "library";
+          }),
+        );
+      unplacedBelowOf.set(type, known);
+    }
+    return known;
+  };
+
   /** Whether a method reference of the sources names a method `name`, which a value of a functional interface it is converted to runs under another declaration's name. */
-  const isReferenced = (name: string): boolean => {
-    if (referencedNames === undefined) {
-      const names = new Set<string>();
-      for (const file of new Set(project.types.map((type) => type.file))) {
-        const pending: Node[] = [file.root];
-        for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-          const written = node.type === "method_reference" ? node.namedChildren.at(-1)?.text : undefined;
-          if (written !== undefined) names.add(written);
-          for (const child of node.namedChildren) if (child !== null) pending.push(child);
+  const isReferenced = (name: string): boolean => writes("method-reference", name).length > 0;
+
+  const typesBelowOf = new Map<TypeDecl, readonly TypeDecl[]>();
+  /** The types other than `type` whose declared hierarchy holds it: found by the name each clause writes, from the name of `type` down. */
+  const typesBelow = (type: TypeDecl): readonly TypeDecl[] => {
+    let known = typesBelowOf.get(type);
+    if (known === undefined) {
+      const below = new Set<TypeDecl>();
+      const names = [type.name];
+      for (const name of names) {
+        for (const file of writes("supertype", name)) {
+          for (const other of project.typesOf(file)) {
+            if (other === type || below.has(other) || !declaredHierarchy(other).types.includes(type)) continue;
+            below.add(other);
+            if (!names.includes(other.name)) names.push(other.name);
+          }
         }
       }
-      referencedNames = names;
+      known = [...below];
+      typesBelowOf.set(type, known);
     }
-    return referencedNames.has(name);
+    return known;
   };
 
   /**
@@ -627,9 +644,8 @@ export function createResolver(project: JavaProject, generated = false) {
    * have `type` or an interface below it as its type (`mayBeFunctional`).
    */
   const runnableAmong = (type: TypeDecl, offered: readonly MethodDecl[], name: string, arity: number): { candidates: readonly MethodDecl[] } | undefined => {
-    const below = project.types.filter((other) => other !== type && declaredHierarchy(other).types.includes(type));
-    const unplaced = readUnplacedBelow();
-    if ([type, ...below].some((member) => unplaced.types.has(member) || unplaced.names.has(member.name))) return undefined;
+    const below = typesBelow(type);
+    if ([type, ...below].some(hasUnplacedBelow)) return undefined;
     if (below.some((subtype) => subtype.kind === "other" || !openOnlyOutside(declaredHierarchy(subtype)) || generatedMember(subtype, project, name, arity) !== undefined)) return undefined;
     if ([type, ...below].some(mayBeFunctional) && isReferenced(name)) return undefined;
     const above = new Set(declaredHierarchy(type).types);
@@ -664,7 +680,7 @@ export function createResolver(project: JavaProject, generated = false) {
     for (let body = enclosingBody(invocation); body !== undefined; body = enclosingBody(body)) {
       const holder = body.parent;
       if (holder === null) return undefined;
-      const held = project.types.find((type) => type.file === file && type.node.id === holder.id);
+      const held = project.typesOf(file).find((type) => type.node.id === holder.id);
       if (held !== undefined && (!outward || name === undefined || hierarchyOpen(declaredHierarchy(held), []) || hasMember(held, name, invocation))) return { type: held, typeName: false };
       if (held !== undefined) continue;
       if (holder.type === "enum_constant") {
@@ -695,7 +711,7 @@ export function createResolver(project: JavaProject, generated = false) {
   const staticallyImported = (name: string, file: JavaFile): { type: TypeDecl; typeName: boolean } | "unproven" => {
     const classes = new Set(file.staticImports.filter(({ member }) => member === name).map(({ className }) => className));
     const [imported] = classes.size === 1 ? [...classes] : [];
-    const type = imported === undefined ? undefined : project.types.find((candidate) => candidate.fqn === imported);
+    const type = imported === undefined ? undefined : project.typesDeclaring(imported)[0];
     return type !== undefined && (type.kind === "class" || type.kind === "interface") ? { type, typeName: true } : "unproven";
   };
 
@@ -1038,7 +1054,7 @@ export function createResolver(project: JavaProject, generated = false) {
   const isPlainArgument = (argument: Signature[number]): boolean => {
     if ("variable" in argument) return false;
     if (PRIMITIVES.has(argument.name) || PLAIN_PLATFORM_TYPES.has(argument.name)) return true;
-    const declared = project.types.find((type) => type.fqn === argument.name);
+    const declared = project.typesDeclaring(argument.name)[0];
     return declared !== undefined && !hasTypeVariables(declared);
   };
 
@@ -1166,6 +1182,8 @@ function namesAnyDynamicImplementation(file: JavaFile, project: JavaProject): bo
   }
   return false;
 }
+
+const lastSegment = (written: string): string => written.split(".").at(-1) ?? "";
 
 /** How many methods of the name a type body declares. */
 function declaredMethods(body: Node, name: string): number {

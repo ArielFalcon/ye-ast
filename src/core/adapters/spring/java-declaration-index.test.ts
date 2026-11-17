@@ -153,6 +153,15 @@ test("the types the sources declare under a qualified name tell the file of each
   assert.deepEqual([...asked].sort(), [questions.declaring("app.Ghost"), questions.declaring("app.Parent"), questions.file("app/Parent.java")].sort());
 });
 
+test("a package declares types where a source declares one in it, and the project tells the question it rests on", async () => {
+  const asked = new Set<string>();
+  await reading((project) => {
+    assert.equal(project.declaresTypesIn("app"), true);
+    assert.equal(project.declaresTypesIn("ap"), false);
+  }, (question) => asked.add(question));
+  assert.deepEqual([...asked].sort(), [questions.package("typed", "ap"), questions.package("typed", "app")].sort());
+});
+
 test("a member type a memo answers tells the reads of the computation that filled it, filled by a recorded read or not", async () => {
   const sort = (asked: Set<string>) => [...asked].sort();
   const readTwice = async (recordedFirst: boolean) => withJavaSources(await createJavaParser(), (parse) => {

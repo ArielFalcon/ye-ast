@@ -90,7 +90,7 @@ function headerOf(file: JavaFile): JavaHeader {
   };
 }
 
-function declaredType(type: TypeDecl): DeclaredType {
+export function declaredType(type: TypeDecl): DeclaredType {
   return {
     fqn: type.fqn,
     name: type.name,
@@ -113,7 +113,7 @@ function annotationNames(declaration: Node): string[] {
 
 const simpleName = (written: string): string => written.split(".").at(-1) ?? "";
 
-function bodyOf(file: JavaFile, types: readonly TypeDecl[]): BodySummary {
+export function bodyOf(file: JavaFile, types: readonly TypeDecl[]): BodySummary {
   const placed = new Set(types.map((type) => type.node.id));
   const unplaced = new Set<string>();
   const references = new Set<string>();

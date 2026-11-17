@@ -2,7 +2,7 @@ import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { BUILD_PARTS, JAVA_DECLARATIONS_SLOT, JAVA_MARKERS, NAMING_KINDS, PACKAGE_QUESTIONS, type BuildPart, type JavaMarker, type NamingKind, type PackageQuestion } from "./java-declaration-questions.ts";
-import { declarationsOf, type DeclarationState, type JavaDeclarations } from "./java-declarations.ts";
+import { declarationsOf, type BodySummary, type DeclaredType, type DeclarationState, type JavaDeclarations } from "./java-declarations.ts";
 import { claimedPlatformPackage } from "./java-symbols.ts";
 
 export interface DeclarationIndexInputs {
@@ -52,20 +52,7 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
   const namedTypes = lazily(() => grouped(entries.flatMap(({ path, entry }) => entry.types.map((type) => [type.name, JSON.stringify([type.fqn, path])] as const))));
   const packages = lazily(() => new Set(inProject.flatMap(({ entry }) => prefixesOf(entry.header.packageName))));
   const typedPackages = lazily(() => new Set(entries.flatMap(({ entry }) => (entry.types.length > 0 ? [entry.header.packageName] : []))));
-  const naming = lazily(() => {
-    const kinds = Object.fromEntries(NAMING_KINDS.map((kind) => [kind, new Map<string, Set<string>>()])) as Record<NamingKind, Map<string, Set<string>>>;
-    const add = (kind: NamingKind, name: string, path: string) => (kinds[kind].get(name) ?? kinds[kind].set(name, new Set()).get(name)!).add(path);
-    for (const { path, entry } of entries) {
-      for (const type of entry.types) {
-        for (const supertype of type.supertypes) add("supertype", simpleName(supertype.name), path);
-        for (const annotation of type.annotations) add("annotation", annotation, path);
-        for (const constant of type.constantNames) add("constant", constant, path);
-      }
-      for (const name of entry.body.unplacedSupertypes) add("unplaced-supertype", name, path);
-      for (const name of entry.body.methodReferences) add("method-reference", name, path);
-    }
-    return kinds;
-  });
+  const naming = lazily(() => namingsOf(entries.map(({ path, entry }) => ({ path, types: entry.types, body: entry.body }))));
   const marked = lazily(() => grouped(entries.flatMap(({ path, entry }) => entry.body.markers.map((marker) => [marker, path] as const))));
   const claimed = lazily(() => list(new Set(inProject.flatMap(({ entry }) => claimedPlatformPackage(entry.header.packageName) ?? []))));
   const listing = lazily(() => fingerprint({ listing: entries.map(({ path, entry }) => [path, entry.content]).sort(([a], [b]) => (a! < b! ? -1 : a! > b! ? 1 : 0)) }));
@@ -126,6 +113,24 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
 export function javaDeclarationIndex(facts: DerivedFacts, parser: JavaParser, sources: readonly SourceFile[], inputs: DeclarationIndexInputs): JavaDeclarationIndex {
   const entries = sources.map((source) => ({ path: source.path, entry: facts.ofFile(JAVA_DECLARATIONS_SLOT, source, () => declarationsOf(parser, source, (value) => facts.fingerprint(value))) }));
   return createDeclarationIndex(entries, inputs, (value) => facts.fingerprint(value));
+}
+
+/** The paths of the files that write each name, by kind of writing: what `naming` answers. */
+export type Namings = Record<NamingKind, Map<string, Set<string>>>;
+
+export function namingsOf(files: readonly { path: string; types: readonly DeclaredType[]; body: BodySummary }[]): Namings {
+  const kinds = Object.fromEntries(NAMING_KINDS.map((kind) => [kind, new Map<string, Set<string>>()])) as Namings;
+  const add = (kind: NamingKind, name: string, path: string) => (kinds[kind].get(name) ?? kinds[kind].set(name, new Set()).get(name)!).add(path);
+  for (const { path, types, body } of files) {
+    for (const type of types) {
+      for (const supertype of type.supertypes) add("supertype", simpleName(supertype.name), path);
+      for (const annotation of type.annotations) add("annotation", annotation, path);
+      for (const constant of type.constantNames) add("constant", constant, path);
+    }
+    for (const name of body.unplacedSupertypes) add("unplaced-supertype", name, path);
+    for (const name of body.methodReferences) add("method-reference", name, path);
+  }
+  return kinds;
 }
 
 function grouped<K, V>(pairs: readonly (readonly [K, V])[]): Map<K, V[]> {

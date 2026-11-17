@@ -720,6 +720,29 @@ test("an open hierarchy names no declarations where one may stand outside the re
   assert.deepEqual(await methodAt([problem, first, second, below, call], "setCode"), { kind: "unproven", candidates: [place(problem, 4)], open: true });
 });
 
+test("a class below the receiver's type through a type between them is among the declarations its call may run", async () => {
+  const port = java("Port.java", ["package app;", "", "interface Port extends com.lib.Outside<String, Long> {", "  String findById(Long id);", "}"]);
+  const mid = java("Mid.java", ["package app;", "", "interface Mid extends Port {}"]);
+  const leaf = java("Leaf.java", ["package app;", "", "class Leaf implements Mid {", "  public String findById(Long id) { return null; }", "}"]);
+  const call = use("port.findById(1L)", [], "Port port");
+
+  assert.deepEqual(await methodAt([port, call], "findById"), { kind: "unproven", candidates: [place(port, 4)], open: true });
+  assert.deepEqual(await methodAt([port, mid, leaf, call], "findById"), { kind: "unproven", candidates: [place(leaf, 4), place(port, 4)], open: true });
+});
+
+test("a type whose supertype the sources leave unsettled under the name of the receiver's type may stand below it", async () => {
+  const problem = java("Problem.java", ["package app;", "", "class Problem extends Exception {", "  void setCode(String code) {}", "}"]);
+  const first = javaIn("a", "Problem.java", ["package a;", "", "public class Problem {}"]);
+  const second = javaIn("b", "Problem.java", ["package b;", "", "public class Problem {}"]);
+  const odd = javaIn("c", "Odd.java", ["package c;", "", "import a.*;", "import b.*;", "", "class Odd extends Problem {}"]);
+  const call = use("problem.setCode(\"x\")", [], "Problem problem");
+
+  assert.deepEqual(await methodAt([problem, first, second, call], "setCode"), { kind: "unproven", candidates: [place(problem, 4)], open: true });
+  assert.deepEqual(await methodAt([problem, first, second, odd, call], "setCode"), { kind: "unproven" });
+  const library = javaIn("c", "Odd.java", ["package c;", "", "class Odd extends com.lib.Problem {}"]);
+  assert.deepEqual(await methodAt([problem, library, call], "setCode"), { kind: "unproven", candidates: [place(problem, 4)], open: true });
+});
+
 test("a call on a concrete class of a closed hierarchy names the one concrete method of the name and arity its class chain declares where every other one is abstract, and the declarations of the arity otherwise", async () => {
   const mapper = java("Mapper.java", ["package app;", "", "interface Mapper<S, T> {", "  T convert(S source);", "}"]);
   const shaped = java("Shaped.java", ["package app;", "", "interface Shaped {", "  default Integer convert(Object source) { return 0; }", "}"]);

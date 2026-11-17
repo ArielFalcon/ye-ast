@@ -126,6 +126,8 @@ export interface JavaProject {
   typesOf(file: JavaFile): readonly TypeDecl[];
   /** The types the sources declare under a qualified name: several when files of different modules do. */
   typesDeclaring(qualifiedName: string): readonly TypeDecl[];
+  /** Whether a source declares a type in the package of that name. */
+  declaresTypesIn(packageName: string): boolean;
   /**
    * Runs `run` and tells `record` each question of the declaration index that an answer of the project rests on: the
    * names the sources declare, the packages they hold and the platform packages they claim, and the file of every
@@ -795,6 +797,10 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
       ask(() => questions.declaring(qualifiedName));
       askFilesOf(found);
       return found;
+    },
+    declaresTypesIn: (packageName) => {
+      ask(() => questions.package("typed", packageName));
+      return typedPackages.has(packageName);
     },
     reading: (tell, run) => {
       const outer = record;
