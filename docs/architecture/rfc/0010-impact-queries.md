@@ -535,13 +535,14 @@ those families exported the map scope alone.
   place: it never fails a query and never changes a fact. ADR-0027's retention of kept indexes is a different
   store; [RFC-0006](0006-configuration.md) carries this policy in its `store` row.
 
-**One live query.** A live query holds ye-ast's lock from its refresh until its answer is built.
+**One live query.** A live query holds ye-ast's lock for its refresh and its pin, then derives its answer from the pinned
+capture after releasing it ([ADR-0144](../adr/0144-the-mirror-lock-covers-the-refresh-and-the-pin-and-a-live-query-derives-from-the-pinned-capture.md)).
 
 1. **The lock.** It lives beside the mirror, at `live/<scope digest>.lock`, so a rebuild that discards the mirror
    never discards it. It is an exclusive create with the pid, stale only when that pid is dead, the primitive
    codegraph uses (`utils.js:269-330`). A query that finds the lock held waits for it within its deadline. Holding
-   it through the answer means no query ever reads a mirror whose sources and store are mid-update, at the cost of
-   serializing live queries on one mirror.
+   it through the refresh and the pin means no query ever reads a mirror whose sources and store are mid-update;
+   releasing it before the derivation lets live queries on one mirror overlap everything but their refreshes.
 2. **The changed paths.** It lists the tree and compares the listing with the manifest. Added, modified and deleted
    paths all count. When none changed and `pending` is empty, it skips steps 3 to 5: `sync` without paths is a full
    reconcile (`index.js:841`). A query that reads no store (`map`) stops after copying: it adds the changed paths to
@@ -557,8 +558,14 @@ those families exported the map scope alone.
    build's `unindexedFiles` (`codegraph.adapter.ts:128`), plus `sync`'s `failedFilePaths`. That summary covers the
    whole mirror, so the answer cuts only a path the live export staged: each of those is a `no-extractor` cut, as
    after a full build.
-5. **Commit.** It writes `state.json` with the new manifest, the files not held and the `stateId`.
-6. **The answer.** It builds the answer from the mirror, then releases the lock.
+5. **Commit.** It writes `state.json` with the new manifest, the files not held, the `stateId` and a new store
+   generation ([ADR-0125](../adr/0125-a-live-store-is-read-into-a-graph-image-named-by-its-committed-store-generation.md)).
+6. **The pin.** It opens the store at the committed generation as an image read in full, loads the sources and HEAD,
+   then releases the lock. The answer is built from that pinned capture alone: nothing it derives opens the store or
+   reads the mirror's files, so a later sync by another process cannot change it. Mirror bytes an answer needs beyond
+   its sources (the live side of an of-change diff) are copied with their blob ids checked against the pinned export;
+   a file that moved answers `unknown` with `source-unreadable`. A capture over several repositories pins each under
+   its own lock, one at a time.
 7. **The sweep.** Once the answer is built and the lock released, it sweeps the mirrors of other scopes as
    "Retention" describes, when the staleness check has run and a signal named there calls for it.
 
@@ -635,8 +642,8 @@ with a change query at any commit whose written files are equal and survives an 
 - The CLI has no deadline and builds it in the foreground.
 - `ye-ast mcp` under `trusted` also starts the build in the background at launch. A live query meanwhile waits for the
   lock within its deadline and then answers `unknown` with `index-unavailable`.
-- `ye-ast map --live` needs no index: it reads the mirror's files and carries no `inputs.origin`. It still takes the lock,
-  so it waits while a build holds it. The `value` of a live map equals the sha map's entrypoints; the nested facts carry
+- `ye-ast map --live` needs no index: it reads the mirror's files and carries no `inputs.origin`. It still takes the lock
+  to refresh the mirror and read its sources, so it waits while a build holds it. The `value` of a live map equals the sha map's entrypoints; the nested facts carry
   the live snapshot and scope, so the whole `value` does not equal byte for byte.
 - `ye-ast init` does not build it (RFC-0005 "First index" is revised).
 - **Deferred optimisation.** When the clean tree's content key is already in the per-user index cache, the first
