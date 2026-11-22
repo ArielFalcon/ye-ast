@@ -67,7 +67,11 @@ export function preparedLive(held: Pick<HeldLive, "tree" | "sources" | "extract"
 export interface LiveCaptureSelection {
   repo: string;
   repoId: string;
-  head: string;
+  /**
+   * The HEAD the caller planned with: the capture is refused when HEAD names another commit once the mirror is up to
+   * date. Absent, the capture takes the HEAD it reads then, so a query that needs HEAD only for its answer reads it once.
+   */
+  head?: string | undefined;
   scope: DeclaredScope;
   trust: "trusted";
   synthesized?: OpenLive["synthesized"];
@@ -103,8 +107,8 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
         const head = await deps.vcs.resolveCommit(selection.repo, LIVE_HEAD, signal);
         if (signal?.aborted) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "aborted", detail: "live query aborted" } } };
         if (!head.ok) return { ok: false, fault: { repoId: selection.repoId, cause: head.fault } };
-        if (head.value !== selection.head) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "live-mirror-failed", detail: "repository HEAD changed during live capture" } } };
-        captures.set(selection.repoId, createHeldLive({ ...selection, tree, deps, ...(hold === undefined ? {} : { hold }) }));
+        if (selection.head !== undefined && head.value !== selection.head) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "live-mirror-failed", detail: "repository HEAD changed during live capture" } } };
+        captures.set(selection.repoId, createHeldLive({ ...selection, head: head.value, tree, deps, ...(hold === undefined ? {} : { hold }) }));
         return acquire(index + 1);
       });
       if (opened.ok) return opened.value;
@@ -155,6 +159,7 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
   const base = await options.beforeHead?.();
   if (signal?.aborted) return ABORTED;
   if (base !== undefined && !base.ok) return base;
+  if (options.beforeOpen === undefined) return captureWithHeadInside(deps, request, scope, options);
   const head = await deps.vcs.resolveCommit(repo, LIVE_HEAD, signal);
   if (!head.ok) return head;
   const prepared = await options.beforeOpen?.(head.value);
@@ -167,6 +172,25 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
     return signal?.aborted ? ABORTED : answer;
   }
   return { ok: false, fault: opened.fault.cause };
+}
+
+/**
+ * A live capture with nothing to do between HEAD and the open reads HEAD once, under the lock and after the refresh. A
+ * failed open answers as it did when HEAD was read before the lock: an unreadable HEAD's fault comes first.
+ */
+async function captureWithHeadInside<T, E>(deps: HeadReaderDeps, request: Extract<Revisioned, { live: true }>, scope: DeclaredScope, options: Pick<Parameters<typeof withLiveCapture<T, E>>[2], "use" | "unavailable">): Promise<Result<T, E | VcsFault | LiveFault | ScopeFault>> {
+  const { repo, repoId, signal } = request;
+  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, trust: "trusted", synthesized: request.synthesized, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
+  if (opened.ok) return opened.value;
+  const { cause } = opened.fault;
+  if (signal?.aborted) return cause.kind === "unavailable" ? ABORTED : { ok: false, fault: cause };
+  const head = await deps.vcs.resolveCommit(repo, LIVE_HEAD, signal);
+  if (!head.ok) return head;
+  if (cause.kind === "unavailable") {
+    const answer = await options.unavailable({ head: head.value, scope });
+    return signal?.aborted ? ABORTED : answer;
+  }
+  return { ok: false, fault: cause };
 }
 
 /** What one operation adds to the fact base of every fact it answers. */
@@ -280,6 +304,8 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
       selected,
       base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? tree.origin : undefined),
       open: async () => {
+        const proven = deps.live?.graph === deps.graph ? tree.takeStore?.() : undefined;
+        if (proven !== undefined) return { store: proven, summary: notHeldInExport(tree.notHeld, extraction.export) };
         const opened = deps.graph.open(tree.root);
         return opened.ok ? { store: opened.value, summary: notHeldInExport(tree.notHeld, extraction.export) } : "unavailable";
       },

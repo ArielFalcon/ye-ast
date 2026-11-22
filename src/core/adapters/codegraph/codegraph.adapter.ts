@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { devNull } from "node:os";
-import { dirname, extname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readdir, realpath, rm } from "node:fs/promises";
+import { statSync } from "node:fs";
+import { realpath, rm } from "node:fs/promises";
 import type { CodeGraph as SdkGraph, Edge, Node } from "@colbymchenry/codegraph";
 import type { Result } from "../../domain/shared/result.ts";
 import {
@@ -11,7 +12,6 @@ import {
   type CodeGraph,
   type CodeGraphFault,
   type CodeGraphReader,
-  type GraphEdge,
   type GraphNodeId,
   type GraphSymbol,
   type GraphUnresolvedReference,
@@ -19,9 +19,11 @@ import {
   type MirrorSyncSummary,
   type StoreVersions,
 } from "../../ports/code-graph.port.ts";
-import { isEngineEntry } from "../../ports/staging-rules.ts";
+import { listMirror, storedFiles, unindexedFiles, type StoredFiles } from "./mirror-files.ts";
 import { removeStaged, stageSnapshot } from "./stage-snapshot.ts";
 import { readStoredVersions, SUPPORTED_STORE, unsupportedVersions } from "./store-version.ts";
+import { compareEdges, compareOutgoingEdges, compareReferences, compareSymbols, compareText, edgeFrom, keptGraphImages, readGraphImage, unique, type GraphImage, type GraphImages, type StoreRows } from "./graph-image.ts";
+import { createSyncWorkers, type SpawnWorker, type SyncAnswer } from "./sync-worker.ts";
 
 export { SUPPORTED_STORE };
 
@@ -41,6 +43,8 @@ export interface CodeGraphDeps {
   loadSdk(bundle: string): Sdk;
   /** Runs the indexer child process to its end. Aborting `signal` kills it. */
   runIndexer(command: string, args: readonly string[], env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<IndexerRun>;
+  /** Starts a mirror's long-lived sync worker, with stdin and stdout piped. */
+  spawnWorker: SpawnWorker;
 }
 
 /**
@@ -53,6 +57,7 @@ export function siblingScript(moduleUrl: string, name: string): string {
 
 const CHILD_SCRIPT = siblingScript(import.meta.url, "index-snapshot.child");
 const SYNC_SCRIPT = siblingScript(import.meta.url, "sync-mirror.child");
+const WORKER_SCRIPT = siblingScript(import.meta.url, "sync-worker.child");
 const INHERITED_VARIABLES = ["PATH", "HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "SystemRoot"] as const;
 const ABORTED: Result<never, CodeGraphFault> = { ok: false, fault: { kind: "aborted", detail: "interrupted by the caller" } };
 const STDERR_DETAIL_BYTES = 2000;
@@ -73,6 +78,7 @@ export const defaultCodeGraphDeps: CodeGraphDeps = {
       child.on("error", (error) => settle({ code: null, stdout, stderr: `${stderr}${error.message}` }));
       child.on("close", (code) => settle({ code, stdout, stderr }));
     }),
+  spawnWorker: ({ command, args, env }) => spawn(command, args, { env, stdio: ["pipe", "pipe", "ignore"] }),
 };
 
 /**
@@ -88,7 +94,20 @@ function resolveBundle(): string | null {
   }
 }
 
-export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): CodeGraph {
+export interface CodeGraphOptions {
+  /**
+   * Opens every store as an image read once and kept while it fits these bytes, by the identity of its database file.
+   * Only for stores nothing writes after they are built, such as the kept indexes of the index cache.
+   */
+  imageBytes?: number;
+  /** Ends the long-lived sync workers; without it they end with the host process. */
+  shutdown?: AbortSignal | undefined;
+}
+
+export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, options: CodeGraphOptions = {}): CodeGraph {
+  const images = options.imageBytes === undefined ? undefined : keptGraphImages(options.imageBytes);
+  const workers = createSyncWorkers(deps.spawnWorker, options.shutdown);
+
   function openGraph(store: string): Result<{ sdk: Sdk; graph: SdkGraph; versions: StoreVersions }, CodeGraphFault> {
     const bundle = deps.resolveBundle();
     if (bundle === null) return platformPackageMissing();
@@ -114,8 +133,35 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): Cod
   }
 
   function open(store: string): Result<CodeGraphReader, CodeGraphFault> {
+    if (images !== undefined) return openImage(store, images);
     const opened = openGraph(store);
     return opened.ok ? { ok: true, value: createReader(opened.value.graph, opened.value.versions) } : opened;
+  }
+
+  function openImage(store: string, images: GraphImages): Result<CodeGraphReader, CodeGraphFault> {
+    const bundle = deps.resolveBundle();
+    if (bundle === null) return platformPackageMissing();
+    try {
+      const sdk = deps.loadSdk(bundle);
+      const database = withEngineEnvironment(() => sdk.getDatabasePath(resolve(store)));
+      const load = (): GraphImage => {
+        const opened = openGraph(store);
+        if (!opened.ok) throw new UnopenedStoreError(opened.fault);
+        opened.value.graph.close();
+        const connection = sdk.DatabaseConnection.open(database, { readOnly: true });
+        try {
+          return readGraphImage(connection.getDb() as StoreRows, opened.value.versions);
+        } finally {
+          connection.close();
+        }
+      };
+      const file = statSync(database, { throwIfNoEntry: false });
+      const image = file === undefined ? load() : images.obtain([database, file.dev, file.ino, file.size, file.mtimeMs, file.ctimeMs].join("\0"), load);
+      return { ok: true, value: image.reader() };
+    } catch (error) {
+      if (error instanceof UnopenedStoreError) return { ok: false, fault: error.fault };
+      return fault("store-unreadable", errorDetail(error));
+    }
   }
 
   async function index(snapshot: string, store: string, signal?: AbortSignal): Promise<Result<IndexSummary, CodeGraphFault>> {
@@ -152,6 +198,7 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): Cod
     const root = resolve(mirror);
     const listed = await listMirror(root);
     if (!listed.ok) return listed;
+    if ((await workers.release(root, signal)) === "aborted") return ABORTED;
     await rm(join(root, INDEX_STORE_DIRECTORY), { recursive: true, force: true });
     const run = await deps.runIndexer(process.execPath, ["--liftoff-only", CHILD_SCRIPT, bundle, root], await indexerEnvironment(deps.environment, root), signal);
     if (signal?.aborted) return ABORTED;
@@ -170,6 +217,14 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): Cod
     const bundle = deps.resolveBundle();
     if (bundle === null) return platformPackageMissing();
     const root = resolve(mirror);
+    const launch = async () => ({ command: process.execPath, args: ["--liftoff-only", WORKER_SCRIPT, bundle, root], env: await indexerEnvironment(deps.environment, root) });
+    const answered = await workers.sync(root, paths, launch, signal);
+    if (answered === "aborted") return ABORTED;
+    return answered === null ? syncOnce(root, bundle, paths, signal) : fromWorker(answered);
+  }
+
+  /** A sync in a child of its own, for when the mirror's worker died or answered nothing readable. */
+  async function syncOnce(root: string, bundle: string, paths: readonly string[], signal?: AbortSignal): Promise<Result<MirrorSyncSummary, CodeGraphFault>> {
     const listed = await listMirror(root);
     if (!listed.ok) return listed;
     const args = ["--liftoff-only", SYNC_SCRIPT, bundle, root, ...paths];
@@ -179,19 +234,15 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): Cod
     if (!report.ok) return report;
     const summarized = summarize(root, listed.value, paths);
     if (!summarized.ok) return summarized;
-    const filesFailed = [...report.value.filesFailed].sort(compareText);
-    const { filesNotIndexed, filesUnparsed, filesStored, versions } = summarized.value;
-    return { ok: true, value: { filesIndexed: filesStored, filesSkipped: 0, filesErrored: filesFailed.length, filesNotIndexed, versions, filesFailed, filesUnparsed } };
+    return { ok: true, value: syncSummary(report.value.filesFailed, summarized.value) };
   }
 
-  function summarize(root: string, files: readonly string[], synced: readonly string[]): Result<{ filesNotIndexed: readonly string[]; filesUnparsed: readonly string[]; filesStored: number; versions: StoreVersions }, CodeGraphFault> {
+  function summarize(root: string, files: readonly string[], synced: readonly string[]): Result<StoredFiles & { versions: StoreVersions }, CodeGraphFault> {
     const opened = openGraph(root);
     if (!opened.ok) return opened;
     const { sdk, graph, versions } = opened.value;
     try {
-      const indexed = graph.getFiles();
-      const filesUnparsed = synced.filter((path) => !sdk.isLanguageSupported(sdk.detectLanguage(path))).sort(compareText);
-      return { ok: true, value: { filesNotIndexed: unindexedFiles(sdk, files, indexed), filesUnparsed, filesStored: indexed.length, versions } };
+      return { ok: true, value: { ...storedFiles(sdk, graph, files, synced), versions } };
     } catch (error) {
       return fault("store-unreadable", errorDetail(error));
     } finally {
@@ -202,19 +253,28 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): Cod
   return { index, buildMirror, syncMirror, open };
 }
 
-async function listMirror(root: string): Promise<Result<readonly string[], CodeGraphFault>> {
-  const files: string[] = [];
-  try {
-    for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
-      const path = join(entry.parentPath, entry.name).slice(root.length + 1).split(sep).join("/");
-      if (isEngineEntry(path)) continue;
-      if (entry.isFile()) files.push(path);
-      else if (!entry.isDirectory()) return { ok: false, fault: { kind: "stage-failed", detail: `${path} is neither a regular file nor a directory` } };
+function fromWorker(answer: SyncAnswer): Result<MirrorSyncSummary, CodeGraphFault> {
+  switch (answer.kind) {
+    case "synced": {
+      const unsupported = unsupportedVersions(answer.stored, answer.codegraph);
+      if (unsupported !== null) return { ok: false, fault: unsupported };
+      const versions = { codegraph: answer.codegraph!, schema: answer.stored.schema!, extraction: answer.stored.extraction! };
+      return { ok: true, value: syncSummary(answer.filesFailed, { ...answer, versions }) };
     }
-  } catch (error) {
-    return fault("stage-failed", errorDetail(error));
+    case "stage-failed":
+      return fault("stage-failed", answer.detail);
+    case "unreadable":
+      return fault("store-unreadable", answer.detail);
+    case "locked":
+      return fault("index-failed", "the store is locked by another writer");
+    case "failed":
+      return fault("index-failed", `the sync failed: ${answer.detail}`);
   }
-  return { ok: true, value: files };
+}
+
+function syncSummary(failed: readonly string[], { filesNotIndexed, filesUnparsed, filesStored, versions }: StoredFiles & { versions: StoreVersions }): MirrorSyncSummary {
+  const filesFailed = [...failed].sort(compareText);
+  return { filesIndexed: filesStored, filesSkipped: 0, filesErrored: filesFailed.length, filesNotIndexed, versions, filesFailed, filesUnparsed };
 }
 
 async function indexerEnvironment(host: NodeJS.ProcessEnv, root: string): Promise<NodeJS.ProcessEnv> {
@@ -248,11 +308,6 @@ function withEngineEnvironment<T>(call: () => T): T {
       else host[name] = value;
     }
   }
-}
-
-function unindexedFiles(sdk: Sdk, staged: readonly string[], indexed: readonly { path: string }[]): readonly string[] {
-  const stored = new Set(indexed.map((file) => file.path));
-  return staged.filter((path) => !stored.has(path) && sdk.isLanguageSupported(sdk.detectLanguage(path))).sort(compareText);
 }
 
 interface IndexReport {
@@ -299,11 +354,11 @@ function createReader(graph: SdkGraph, versions: StoreVersions): CodeGraphReader
     declarationsNamed: (names) => unique(names).flatMap((name) => graph.getNodesByName(name)).map(toSymbol).sort(compareSymbols),
     incomingEdges: (targets, kinds) => {
       if (kinds?.length === 0) return [];
-      return graph.getIncomingEdgesTo(unique(targets), kinds as Edge["kind"][] | undefined).map(toEdge).sort(compareEdges);
+      return graph.getIncomingEdgesTo(unique(targets), kinds as Edge["kind"][] | undefined).map(edgeFrom).sort(compareEdges);
     },
     outgoingEdges: (sources, kinds) => {
       if (kinds?.length === 0) return [];
-      return graph.getOutgoingEdgesFrom(unique(sources), kinds as Edge["kind"][] | undefined).map(toEdge).sort(compareOutgoingEdges);
+      return graph.getOutgoingEdgesFrom(unique(sources), kinds as Edge["kind"][] | undefined).map(edgeFrom).sort(compareOutgoingEdges);
     },
     unresolvedReferences: (files): readonly GraphUnresolvedReference[] =>
       unique(files)
@@ -337,49 +392,10 @@ function toSymbol(node: Node): GraphSymbol {
   };
 }
 
-function toEdge(edge: Edge): GraphEdge {
-  const { confidence, synthesizedBy, refName, refKind } = edge.metadata ?? {};
-  return {
-    source: edge.source as GraphNodeId,
-    target: edge.target as GraphNodeId,
-    kind: edge.kind,
-    line: edge.line ?? null,
-    column: edge.column ?? null,
-    confidence: typeof confidence === "number" ? confidence : null,
-    provenance: edge.provenance ?? null,
-    synthesizedBy: typeof synthesizedBy === "string" ? synthesizedBy : null,
-    resolvedFrom: typeof refName === "string" && typeof refKind === "string" && refKind !== edge.kind ? { name: refName, kind: refKind } : null,
-  };
-}
-
-function compareSymbols(a: GraphSymbol, b: GraphSymbol): number {
-  return compareText(a.file, b.file) || a.startLine - b.startLine || a.endLine - b.endLine || compareText(a.qualifiedName, b.qualifiedName) || compareText(a.id, b.id);
-}
-
-function compareEdges(a: GraphEdge, b: GraphEdge): number {
-  return (
-    compareText(a.target, b.target) ||
-    compareText(a.kind, b.kind) ||
-    (a.line ?? -1) - (b.line ?? -1) ||
-    (a.column ?? -1) - (b.column ?? -1) ||
-    compareText(a.source, b.source)
-  );
-}
-
-function compareOutgoingEdges(a: GraphEdge, b: GraphEdge): number {
-  return compareText(a.source, b.source) || compareText(a.kind, b.kind) || (a.line ?? -1) - (b.line ?? -1) || (a.column ?? -1) - (b.column ?? -1) || compareText(a.target, b.target);
-}
-
-function compareReferences(a: GraphUnresolvedReference, b: GraphUnresolvedReference): number {
-  return compareText(a.file, b.file) || a.line - b.line || a.column - b.column || compareText(a.name, b.name) || compareText(a.kind, b.kind) || compareText(a.from, b.from);
-}
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function unique<T>(values: readonly T[]): T[] {
-  return [...new Set(values)];
+class UnopenedStoreError extends Error {
+  constructor(readonly fault: CodeGraphFault) {
+    super(fault.detail);
+  }
 }
 
 function platformPackageMissing(): Result<never, CodeGraphFault> {

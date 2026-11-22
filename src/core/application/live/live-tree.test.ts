@@ -292,10 +292,9 @@ test("a sweep that cannot read the mirrors leaves the answer and its stateId as 
 });
 
 test("the sweep discards the mirrors the policy names, keeps the one being answered, and leaves the answer alone", async () => {
+  const control = await tree(fakeLive({ "src/A.java": "1" }));
   const fake = fakeLive({ "src/A.java": "1" });
-  const first = await tree(fake);
-  fake.discarded.length = 0;
-  const current = fake.locations[0]!.scope;
+  const current = JSON.stringify(SCOPE);
   const dayMs = 24 * 60 * 60 * 1000;
   fake.engine.usage = {
     ok: true,
@@ -308,12 +307,93 @@ test("the sweep discards the mirrors the policy names, keeps the one being answe
     },
   };
 
-  const again = await tree(fake);
+  const swept: string[] = [];
+  const discardIfIdle = fake.deps.mirror.discardIfIdle;
+  fake.deps.mirror.discardIfIdle = async (location) => { swept.push(location.scope); return discardIfIdle(location); };
 
-  assert.deepEqual(fake.discarded, ["unused"]);
-  assert.equal(fake.calls.filter((call) => call === "discardIfIdle").length, 1);
+  const answered = await tree(fake);
+
+  assert.equal(fake.locations[0]!.scope, current);
+  assert.deepEqual(swept, ["unused"]);
   assert.deepEqual(fake.debrisRemoved, [["gone.state.json"]]);
-  assert.equal(again.stateId, first.stateId);
+  assert.equal(answered.stateId, control.stateId);
+});
+
+test("the sweep runs on a process's first answer and after a mirror is created, discarded or fully built, never after an unchanged or synced refresh", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  const sweeps = () => fake.calls.filter((call) => call === "usage").length;
+
+  await tree(fake);
+  assert.equal(sweeps(), 1, "the first answer creates the mirror");
+  await tree(fake);
+  fake.tree.set("src/A.java", "2");
+  await tree(fake);
+  assert.equal(sweeps(), 1, "an unchanged and a synced refresh change nothing the sweep measures");
+
+  fake.openable.value = false;
+  await tree(fake);
+  fake.openable.value = true;
+  assert.equal(sweeps(), 2, "a full build");
+
+  fake.state.current = { ...fake.state.current!, versions: { ...VERSIONS, codegraph: "0.9.0" } };
+  await tree(fake);
+  assert.equal(sweeps(), 3, "a mirror of other engines discarded and created again");
+
+  const another = await openLive({ ...fake.deps }, { repo: "/repo", scope: SCOPE, selected, store: true }, async () => undefined);
+  assert.ok(another.ok);
+  assert.equal(sweeps(), 4, "another process's first answer");
+});
+
+test("a sweep that could not measure the mirrors runs again on the next answer", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  fake.engine.usage = { ok: false, fault: { kind: "unreadable", detail: "cannot read the live directory" } };
+  await tree(fake);
+  fake.engine.usage = { ok: true, value: { scopes: [], debris: [] } };
+
+  await tree(fake);
+  await tree(fake);
+
+  assert.equal(fake.calls.filter((call) => call === "usage").length, 2);
+});
+
+test("a query over an unchanged store opens it once and hands that reader to the answer, which then owns it", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  await tree(fake);
+  fake.stores.opened = 0;
+  fake.stores.closed = 0;
+
+  let taken: unknown;
+  let again: unknown;
+  const answered = await query(fake, {}, async (tree) => {
+    taken = tree.takeStore?.();
+    again = tree.takeStore?.();
+    return undefined;
+  });
+
+  assert.ok(answered.ok);
+  assert.ok(taken !== undefined, "the reader that proved the store is handed over");
+  assert.equal(again, undefined, "it is handed over once");
+  assert.deepEqual(fake.stores, { opened: 1, closed: 0 });
+});
+
+test("a reader nobody takes is closed before the query returns, whatever the answer does, and none outlives a rebuild", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  await tree(fake);
+  fake.stores.opened = 0;
+  fake.stores.closed = 0;
+
+  await tree(fake);
+  await assert.rejects(query(fake, {}, async () => { throw new Error("boom"); }));
+  assert.deepEqual(fake.stores, { opened: 2, closed: 2 });
+
+  fake.state.current = { ...fake.state.current!, unparsedSinceBuild: ["src/app.component.html"] };
+  let handed: unknown;
+  const rebuilt = await query(fake, { synthesized: true }, async (tree) => { handed = tree.takeStore?.(); return undefined; });
+
+  assert.ok(rebuilt.ok);
+  assert.equal(handed, undefined, "a reader opened before a build is not handed over");
+  assert.equal(fake.builds, 2);
+  assert.deepEqual(fake.stores, { opened: 3, closed: 3 });
 });
 
 test("every successful refresh touches the state, including one that writes nothing", async () => {
