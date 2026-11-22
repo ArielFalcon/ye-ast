@@ -95,6 +95,8 @@ store published from a trusted working tree is the store the commit's own export
 - A full live build pays the cache's staging (hard links) and one copy of the store; the cache entry and the mirror
   each hold the store's bytes, which retention already counts for the cache (ADR-0027) and for the mirror (RFC-0010
   "Retention").
+- The verification of decision 3 rehashes the written files once per full live build: 39 to 42 ms on jhipster-monolith
+  (618 files, three fresh clones), beside a full build of about 1.6 s. A sync or a refresh that builds nothing never runs it.
 - Without an index cache (`composeQueries` without `indexCache`) the mirror builds in place, as before.
 - `STAGING_RULES_VERSION` moves from 13 to 14, since the adapter that builds indexes changed (the fitness test of
   ADR-0015 pins its sources). What a build produces is unchanged, but every kept index and live mirror of version 13 is
