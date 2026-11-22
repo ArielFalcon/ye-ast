@@ -7,6 +7,8 @@
   most critical jobs, 3-5 s in specific cases; the p75 should be below 1 s", and "caches with robust stale policies".
 - Amends: [ADR-0116](0116-a-java-derivation-is-kept-by-the-questions-it-asked-of-a-per-file-index-of-declared-names.md)
   (when `DerivedFacts.ofReads` asks the recorded questions again)
+- Amended by: [ADR-0145](0145-a-kept-derivation-asks-only-the-questions-an-edit-changed-since-the-index-it-was-verified-against.md) (decisions 3 and
+  4: another fingerprint asks only the questions changed since the verified index, and `verifiedAt` also names its version)
 - Related: [RFC-0040](../rfc/0040-resident-generations-and-answer-latency.md) §3.2, L10;
   [RFC-0039](../rfc/0039-recorded-reads-for-the-java-project.md),
   [ADR-0117](0117-the-entrypoints-of-a-java-file-are-kept-by-the-questions-they-asked-and-a-derivation-kept-by-its-reads-persists-on-disk.md),

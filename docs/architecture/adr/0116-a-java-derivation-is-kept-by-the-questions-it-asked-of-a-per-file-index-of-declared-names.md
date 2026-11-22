@@ -10,6 +10,8 @@
   decision 6 and its "Not decided here" (the dependency record for the Java project),
   [ADR-0114](0114-a-per-file-derived-fact-reads-its-own-file-alone-and-a-cross-file-derivation-stays-keyed-by-what-it-reads.md)
   decision 1 (a derivation that reads other files is kept by what it read, not only by every input)
+- Amended by: [ADR-0145](0145-a-kept-derivation-asks-only-the-questions-an-edit-changed-since-the-index-it-was-verified-against.md) (decision 4: a hit
+  through another index asks only the recorded questions an edit changed)
 - Related: [RFC-0039](../rfc/0039-recorded-reads-for-the-java-project.md),
   [ADR-0035](0035-derived-facts-are-retained-by-content.md),
   [ADR-0077](0077-derived-facts-persist-by-content-in-ye-asts-own-store.md),
