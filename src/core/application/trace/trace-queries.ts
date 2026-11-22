@@ -1,4 +1,4 @@
-import { WORKSPACE_SCOPE } from "../../domain/shared/scope.ts";
+import { WORKSPACE_SCOPE, type ScopeRequest } from "../../domain/shared/scope.ts";
 import type { DeclarationModel } from "../navigation/declaration-model.ts";
 import { withCuts, type Asserted } from "../../domain/shared/question.ts";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
@@ -44,7 +44,7 @@ import { comparePlacement, type DataEffectReader } from "../../domain/trace/data
 import type { DeferredValueReader } from "../../ports/framework-deferrals.port.ts";
 import type { LibraryPlacedCallSiteReader } from "../../ports/library-signatures.port.ts";
 import { pagePlans } from "./page-plans.ts";
-import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
+import { createBaseReadings, withOutputs, type BaseReadingDeps, type TypedReading } from "../snapshot/base-reading.ts";
 import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
 import { sourceIdentity } from "../../domain/shared/source-identity.ts";
 
@@ -182,16 +182,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, bindings: edgeTargets.bindings, uses: reading.declarationUses(), reconciled, inScope: head.selected, memberDeclarations, syntaxOf, budget, implemented: () => reading.implementedContracts(), ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
           const deferredValues = deps.deferredValues?.(head.tree.sources);
-          const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
-          const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources.map(sourceIdentity) }, dataEffects);
-          const completeSource = completeSourceRead(head.tree.export, new Set(head.tree.sources.map(({ path }) => path)), {
-            include: request.scope?.include ?? [], exclude: request.scope?.exclude ?? [],
-          }) && (deps.librarySources?.length ?? 0) === 0;
-          const placedCallSites = () => deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources, { completeSource, ...(typed.libraries === undefined ? {} : { libraries: typed.libraries }) });
-          const callSites = () => head.prepared?.facts === undefined ? placedCallSites() : head.prepared.facts.ofInputs("trace-call-sites", {
-            sources: head.tree.sources.map(sourceIdentity), repo: request.repoId, libraries: deps.librarySources ?? [], completeSource,
-            jdks: typed.libraries === undefined ? null : (typed.outputs ?? []).filter(({ kind }) => kind === "jdk"),
-          }, placedCallSites);
+          const { callSites, dataSites } = effectSites(deps, head, request, typed);
           const effectCuts = await placeEffects(walk.roots, {
             store, declarations: reading.declarations, ownedIn: reconciled.ownedIn, callsOf: (body) => reconciled.callsOf(body),
             sites: async () => [...await callSites(), ...await dataSites()]
@@ -232,6 +223,32 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         ? headReader.atSources(request, spec, (head) => read(head, []))
         : headReader.atHead(request, spec, (head) => read(head, head.tree.findings));
     },
+  };
+}
+
+/**
+ * The call sites and data effects of a snapshot read, the rows a trace's effects come from: whole-snapshot derivations,
+ * kept under the read's sources and what else they read, whatever the trace's targets.
+ */
+export function effectSites(
+  deps: Pick<TraceQueriesDeps, "callSites" | "dataEffects" | "librarySources">,
+  head: { tree: Pick<CommitExtraction, "export" | "sources">; prepared?: { facts?: DerivedFacts } | undefined },
+  request: { repoId: string; scope?: ScopeRequest | undefined },
+  typed: Pick<TypedReading, "libraries" | "outputs">,
+): { callSites(): ReturnType<LibraryPlacedCallSiteReader["placed"]>; dataSites(): ReturnType<DataEffectReader["placed"]> } {
+  const { sources } = head.tree;
+  const facts = head.prepared?.facts;
+  const dataEffects = () => deps.dataEffects?.placed(sources) ?? Promise.resolve([]);
+  const completeSource = completeSourceRead(head.tree.export, new Set(sources.map(({ path }) => path)), {
+    include: request.scope?.include ?? [], exclude: request.scope?.exclude ?? [],
+  }) && (deps.librarySources?.length ?? 0) === 0;
+  const placedCallSites = () => deps.callSites.placed(sources, request.repoId, deps.librarySources, { completeSource, ...(typed.libraries === undefined ? {} : { libraries: typed.libraries }) });
+  return {
+    dataSites: () => facts === undefined ? dataEffects() : facts.ofInputs("trace-data-effects", { sources: sources.map(sourceIdentity) }, dataEffects),
+    callSites: () => facts === undefined ? placedCallSites() : facts.ofInputs("trace-call-sites", {
+      sources: sources.map(sourceIdentity), repo: request.repoId, libraries: deps.librarySources ?? [], completeSource,
+      jdks: typed.libraries === undefined ? null : (typed.outputs ?? []).filter(({ kind }) => kind === "jdk"),
+    }, placedCallSites),
   };
 }
 
