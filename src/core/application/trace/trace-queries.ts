@@ -46,6 +46,7 @@ import type { LibraryPlacedCallSiteReader } from "../../ports/library-signatures
 import { pagePlans } from "./page-plans.ts";
 import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
 import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
+import { sourceIdentity } from "../../domain/shared/source-identity.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs" | "libraries" | "frameworks"> {
   workspace?: WorkspaceReadOperation;
@@ -182,13 +183,13 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (walk === "aborted") return ABORTED;
           const deferredValues = deps.deferredValues?.(head.tree.sources);
           const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
-          const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
+          const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources.map(sourceIdentity) }, dataEffects);
           const completeSource = completeSourceRead(head.tree.export, new Set(head.tree.sources.map(({ path }) => path)), {
             include: request.scope?.include ?? [], exclude: request.scope?.exclude ?? [],
           }) && (deps.librarySources?.length ?? 0) === 0;
           const placedCallSites = () => deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources, { completeSource, ...(typed.libraries === undefined ? {} : { libraries: typed.libraries }) });
           const callSites = () => head.prepared?.facts === undefined ? placedCallSites() : head.prepared.facts.ofInputs("trace-call-sites", {
-            sources: head.tree.sources, repo: request.repoId, libraries: deps.librarySources ?? [], completeSource,
+            sources: head.tree.sources.map(sourceIdentity), repo: request.repoId, libraries: deps.librarySources ?? [], completeSource,
             jdks: typed.libraries === undefined ? null : (typed.outputs ?? []).filter(({ kind }) => kind === "jdk"),
           }, placedCallSites);
           const effectCuts = await placeEffects(walk.roots, {

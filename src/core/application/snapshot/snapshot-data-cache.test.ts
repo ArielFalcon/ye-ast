@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { mock, test } from "node:test";
 import { createSnapshotDataCache, type SnapshotCacheEvent } from "./snapshot-data-cache.ts";
+import type { SourceFile } from "../../ports/source-file.port.ts";
 import type { SnapshotData } from "./read-snapshot.ts";
 
 const empty: SnapshotData = { sources: [] };
@@ -55,15 +56,32 @@ test("invalid or zero budgets disable retention", () => {
   }
 });
 
-test("stored and returned values are isolated from caller mutations", () => {
+test("a stored value is isolated from the caller's later mutations, and a returned one cannot be mutated", () => {
   const data = { sources: [{ path: "a", content: "original" }], findings: [] };
   const cache = createSnapshotDataCache(1000);
   cache.put("a", data);
   data.sources[0]!.content = "changed";
   data.sources.push({ path: "b", content: "new" });
   const first = cache.get("a")!;
-  (first.sources[0] as { content: string }).content = "changed again";
+  assert.throws(() => ((first.sources[0] as { content: string }).content = "changed again"), TypeError);
+  assert.throws(() => (first.sources as SourceFile[]).push({ path: "c", content: "" }), TypeError);
   assert.deepEqual(cache.get("a"), { sources: [{ path: "a", content: "original" }], findings: [] });
+});
+
+test("a hit answers the frozen value the cache admitted, decoding nothing", (t) => {
+  const cache = createSnapshotDataCache(1000);
+  cache.put("a", { sources: [{ path: "a", content: "x" }] });
+  const admitted = cache.putFact("f", JSON.stringify({ starts: [1, 2] }));
+  const parse = t.mock.method(JSON, "parse");
+
+  const entries = [cache.get("a"), cache.get("a")];
+  const facts = [cache.getFact("f"), cache.getFact("f")];
+
+  assert.equal(parse.mock.callCount(), 0);
+  assert.equal(entries[0], entries[1]);
+  assert.equal(facts[0], facts[1]);
+  assert.equal(facts[0], admitted.value);
+  assert.throws(() => (facts[0] as { starts: number[] }).starts.push(3), TypeError);
 });
 
 test("an observer sees each lookup and each admission, eviction and skip with the bytes the cache holds", () => {
@@ -116,7 +134,7 @@ test("a derived fact is charged on the shared budget, evicts the least recently 
   cache.put("b", empty);
   events.length = 0;
 
-  assert.deepEqual(cache.putFact("f", "[1]"), { admitted: true, entryBytes: 4, evicted: 1 });
+  assert.deepEqual(cache.putFact("f", "[1]"), { admitted: true, entryBytes: 4, evicted: 1, value: [1] });
   assert.deepEqual(cache.getFact("f"), [1]);
   assert.equal(cache.getFact("g"), undefined);
   assert.deepEqual(cache.usage(), { factBytes: 4, retainedBytes: 4 + bytes("b", empty) });

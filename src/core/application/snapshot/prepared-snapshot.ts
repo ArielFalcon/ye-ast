@@ -1,3 +1,4 @@
+import { frozenValue } from "../../domain/shared/frozen-value.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { DeclaredScope, TrustMode } from "../../domain/shared/fact.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
@@ -78,9 +79,8 @@ export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache"
       if (kept?.output !== undefined) return kept.output as T;
       const output = await produce();
       if (signal?.aborted) return output;
-      const serialized = JSON.parse(JSON.stringify(output)) as T;
-      cache.put(outputKey, { sources: [], output: serialized });
-      return serialized;
+      const admitted = cache.put(outputKey, { sources: [], output });
+      return (admitted === undefined ? frozenValue(JSON.stringify(output)) : admitted.output) as T;
     },
   };
 }
