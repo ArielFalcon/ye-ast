@@ -5,6 +5,8 @@
   of the derived-fact memo proposed after measuring repeated MCP queries.
 - Amends: [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md) decision 2 and
   [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md) decision 1 (what the cache may retain)
+- Amended by: [ADR-0126](0126-the-snapshot-cache-keeps-decoded-frozen-values-and-names-a-file-by-its-blob-id.md)
+  (decisions 1 and 4: a fact is kept frozen and a hit and a miss answer it frozen; a file is named by its blob id)
 - Related: [ADR-0010](0010-trust-modes.md), [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md),
   [ADR-0029](0029-lexical-bindings-from-the-typescript-binder.md),
   [ADR-0031](0031-snapshot-data-is-keyed-by-the-written-files.md),
