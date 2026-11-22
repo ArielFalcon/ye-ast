@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaProject, scopeOf, type JavaProject } from "./java-symbols.ts";
-import { questions } from "./java-declaration-questions.ts";
+import { JAVA_MARKERS, NAMING_KINDS, PACKAGE_QUESTIONS, questions } from "./java-declaration-questions.ts";
 import { javaDeclarationIndex, UnknownDeclarationQuestionError, type JavaDeclarationIndex } from "./java-declaration-index.ts";
 import { declarationsOf } from "./java-declarations.ts";
 import { withJavaSources } from "./java-project.ts";
@@ -191,4 +191,72 @@ test("a member type a memo answers tells the reads of the computation that fille
   assert.ok(filledUnrecorded.later.includes(questions.file("app/Parent.java")));
   assert.deepEqual(filledRecorded.later, filledRecorded.first);
   assert.deepEqual(filledUnrecorded.later, filledRecorded.later);
+});
+
+/** Every question about a name, a package or a path that the sources state, plus names none states: what an edit could change. */
+async function questionsAbout(...snapshots: readonly (readonly { path: string; content: string }[])[]): Promise<string[]> {
+  const parser = await createJavaParser();
+  const asked = new Set<string>([questions.unread(), questions.listing(), questions.build("claimed"), questions.build("generatesInterfaces"), questions.declaring("app.Missing"), questions.named("Missing")]);
+  for (const marker of JAVA_MARKERS) asked.add(questions.marked(marker));
+  for (const source of snapshots.flat()) {
+    const entry = declarationsOf(parser, source, fingerprint);
+    for (const question of [questions.file(source.path), questions.declarations(source.path)]) asked.add(question);
+    const packageName = entry.header.packageName;
+    for (const [end] of packageName.split(".").entries()) {
+      for (const kind of PACKAGE_QUESTIONS) asked.add(questions.package(kind, packageName.split(".").slice(0, end + 1).join(".")));
+    }
+    const names = [...entry.body.unplacedSupertypes, ...entry.body.methodReferences, ...entry.types.flatMap((type) => [type.name, ...type.annotations, ...type.constantNames, ...type.supertypes.map(({ name }) => name)])];
+    for (const type of entry.types) asked.add(questions.declaring(type.fqn));
+    for (const name of names) {
+      asked.add(questions.named(name));
+      for (const kind of NAMING_KINDS) asked.add(questions.naming(kind, name));
+    }
+  }
+  return [...asked].sort();
+}
+
+/** The questions of `about` that `after` tells changed since `before`, and the ones whose answers differ. */
+async function changes(before: JavaDeclarationIndex, after: JavaDeclarationIndex, about: readonly string[]) {
+  const changed = after.changedSince(before.version);
+  assert.ok(changed !== undefined);
+  return { told: about.filter(changed), differing: about.filter((question) => before.answer(question) !== after.answer(question)) };
+}
+
+test("a body edit tells changed only the content of the edited file and the listing", async () => {
+  const edited = { ...IMPL, content: IMPL.content.replace('return ""', 'return "x"') };
+  const { told } = await changes(await indexOf([BASE, IMPL]), await indexOf([BASE, edited]), await questionsAbout([BASE, IMPL, edited]));
+  assert.deepEqual(told, [questions.file(IMPL.path), questions.listing()]);
+});
+
+test("a signature edit tells changed the edited file's questions and the names in its difference, and no other name", async () => {
+  const edited = { ...IMPL, content: IMPL.content.replace("extends Base", "extends Other") };
+  const { told } = await changes(await indexOf([BASE, IMPL]), await indexOf([BASE, edited]), await questionsAbout([BASE, IMPL, edited]));
+  assert.deepEqual(told, [questions.declarations(IMPL.path), questions.file(IMPL.path), questions.listing(), questions.naming("supertype", "Base"), questions.naming("supertype", "Other")].sort());
+});
+
+test("every question whose answer an edit changes is told changed, whatever the edit", async () => {
+  const base = [BASE, IMPL];
+  const replaced = (file: typeof IMPL, from: string, to: string) => ({ ...file, content: file.content.replace(from, to) });
+  const edits: readonly { name: string; after: readonly (typeof BASE)[]; inputs?: typeof INPUTS }[] = [
+    { name: "a type renamed", after: [replaced(BASE, "class Base", "class Root"), IMPL] },
+    { name: "a package moved", after: [replaced(BASE, "package app;", "package app.inner;"), IMPL] },
+    { name: "a platform package claimed", after: [replaced(BASE, "package app;", "package org.springframework.boot.custom;"), IMPL] },
+    { name: "an annotation, a constant and a marker", after: [replaced(BASE, "public class Base { static final String KEY", "@Aspect public class Base { static final String OTHER"), IMPL] },
+    { name: "a method reference and an anonymous class", after: [BASE, replaced(IMPL, "Impl::name; Object o = new Base() {};", "Impl::other; Object o = new Runnable() {};")] },
+    { name: "a file that appears", after: [...base, UNPARSED, { path: "other/Late.java", content: "package other; class Late extends Base { static final int KEY = 1; }" }] },
+    { name: "a file that disappears", after: [IMPL] },
+    { name: "a file that stops parsing", after: [BASE, UNPARSED, { ...IMPL, content: "package app; class {" }] },
+    { name: "a body that stops parsing", after: [BASE, replaced(IMPL, 'return ""', "return ;")] },
+    { name: "the inputs", after: base, inputs: { generatesInterfaces: true, unreadJvm: true } },
+  ];
+  const before = await indexOf(base);
+  for (const edit of edits) {
+    const { told, differing } = await changes(before, await indexOf(edit.after, edit.inputs), await questionsAbout(base, edit.after));
+    assert.ok(differing.length > 0, edit.name);
+    assert.deepEqual(differing.filter((question) => !told.includes(question)), [], edit.name);
+  }
+});
+
+test("an index cannot tell what changed since a version it did not make", async () => {
+  assert.equal((await indexOf([BASE])).changedSince({}), undefined);
 });
