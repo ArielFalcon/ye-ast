@@ -79,6 +79,11 @@ earlier index, which is exactly "`changedAt` newer than `verifiedAt`".
 - After a body edit, a kept entry that did not record the edited file's content or the listing is answered without a
   question; one that did asks only those questions.
 - A signature edit derives again exactly the entries that recorded a question whose answer it changed.
+- Measured as in the context table (median of five, candidate against the tree before it): questions asked 2,904 to 3
+  (`trace`) and 4,442 to 3 (`callers`) on jhipster-monolith/application, 48,370 to 5 and 95,677 to 28 on
+  shopizer/backend; time verifying 25.9 to 5.4 ms and 44.9 to 10.3 ms on shopizer/backend, under 1 ms on jhipster. The
+  entries derived again and every answer are unchanged. The wall time of those calls is unchanged within noise: after an
+  edit it is spent deriving the entries that recorded the edited file or the listing, and in other stages.
 - Two indexes over other sources (families that alternate) compare their whole difference once per switch, which is
   still correct and at worst what ADR-0128 asked.
 - The mapping from a file's entry to its contributions must follow the answers of the index; the fitness test fails when
