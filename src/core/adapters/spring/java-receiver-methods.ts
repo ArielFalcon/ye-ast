@@ -148,7 +148,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       const places = sortedPlaces(entries.map(([, site]) => site));
       const subject = { path, content, sites: places, generatesInterfaces: build.generatesInterfaces === true, generated };
       const placeIndex = new Map(places.map(([line, column, member], at) => [callKey(line, column, member), at]));
-      const readings = await kept.ofReads(SITES_SLOT, subject, index.answerIfKnown, async (record) => {
+      const readings = await kept.ofReads(SITES_SLOT, subject, index, async (record) => {
         const { project, files } = await projectOf();
         const asked = (question: string): string => {
           const answer = index.answer(question);

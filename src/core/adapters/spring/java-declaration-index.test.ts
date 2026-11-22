@@ -31,6 +31,18 @@ async function indexOf(sources: readonly { path: string; content: string }[], in
   return javaDeclarationIndex(rememberingFacts(), await createJavaParser(), sources, inputs);
 }
 
+test("the fingerprint is equal for the same files in any order, and moves with a file's content and with each input", async () => {
+  const fingerprintOf = async (sources: readonly { path: string; content: string }[], inputs = INPUTS) => (await indexOf(sources, inputs)).fingerprint;
+  const base = await fingerprintOf([BASE, IMPL]);
+  assert.equal(await fingerprintOf([IMPL, BASE]), base);
+  const moved = [
+    await fingerprintOf([BASE, { ...IMPL, content: IMPL.content.replace('return ""', 'return "x"') }]),
+    await fingerprintOf([BASE, IMPL], { ...INPUTS, unreadJvm: true }),
+    await fingerprintOf([BASE, IMPL], { ...INPUTS, generatesInterfaces: true }),
+  ];
+  assert.deepEqual(moved.map((other) => other === base), [false, false, false]);
+});
+
 test("the declarations of a file are plain data: its names, its supertypes and what its bodies write", async () => {
   const entry = declarationsOf(await createJavaParser(), IMPL, fingerprint);
   assert.deepEqual(JSON.parse(JSON.stringify(entry)), entry);

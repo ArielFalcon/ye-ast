@@ -166,7 +166,7 @@ async function keptByReads(
   try {
     for (const { path } of sources) {
       const subject = { path, content: index.answer(questions.file(path)), incomplete: options.incomplete, generatesInterfaces: build.generatesInterfaces === true };
-      results.push(await facts.ofReads(RELATIONS_SLOT, subject, index.answerIfKnown, async (record) => {
+      results.push(await facts.ofReads(RELATIONS_SLOT, subject, index, async (record) => {
         const { project, files } = await heldOver();
         const asked = (question: string): string => {
           const answer = index.answer(question);

@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import type { DerivedFactDisk, DerivedFactStore } from "../../ports/derived-fact-store.port.ts";
+import type { RecordedAnswers } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import { createDerivedFacts } from "./derived-facts.ts";
 import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
@@ -12,6 +13,13 @@ const BUDGET = 1 << 20;
 function counting<T>(value: T): { derive: () => T; derived: () => number } {
   let count = 0;
   return { derive: () => (count++, value), derived: () => count };
+}
+
+let indexes = 0;
+
+/** Answers whose fingerprint never repeats: every hit asks its recorded questions. */
+function asking(answerIfKnown: (question: string) => string | undefined): RecordedAnswers {
+  return { get fingerprint() { return `index-${++indexes}`; }, answerIfKnown };
 }
 
 test("a fact kept for a file answers the value a derivation answered, without deriving again", () => {
@@ -179,11 +187,11 @@ test("a derivation is kept until an answer it recorded differs, and then replace
     return { derived: derivations };
   };
 
-  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, answerNow, derive), { derived: 1 });
-  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, answerNow, derive), { derived: 1 });
+  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, asking(answerNow), derive), { derived: 1 });
+  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, asking(answerNow), derive), { derived: 1 });
   world = { ...world, file: "h2" };
-  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, answerNow, derive), { derived: 2 });
-  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, answerNow, derive), { derived: 2 });
+  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, asking(answerNow), derive), { derived: 2 });
+  assert.deepEqual(await facts.ofReads("slot", { path: "b" }, asking(answerNow), derive), { derived: 2 });
   assert.equal(derivations, 2);
   assert.deepEqual({ hits: facts.drain().hits }, { hits: 2 });
 });
@@ -194,7 +202,7 @@ test("a question that answered nothing is recorded, so an answer that appears is
   const answerNow = () => JSON.stringify(declared);
   const counted = counting("v");
 
-  const read = () => facts.ofReads("slot", { path: "b" }, answerNow, async (record) => (record("declaring|Missing", answerNow()), counted.derive()));
+  const read = () => facts.ofReads("slot", { path: "b" }, asking(answerNow), async (record) => (record("declaring|Missing", answerNow()), counted.derive()));
   await read();
   await read();
   assert.equal(counted.derived(), 1);
@@ -208,7 +216,7 @@ test("an answer longer than the inline bound is compared whole, and another subj
   const long = (tail: string) => `${"x".repeat(80)}${tail}`;
   let tail = "a";
   const counted = counting("v");
-  const read = (subject: object) => facts.ofReads("slot", subject, () => long(tail), async (record) => (record("q", long(tail)), counted.derive()));
+  const read = (subject: object) => facts.ofReads("slot", subject, asking(() => long(tail)), async (record) => (record("q", long(tail)), counted.derive()));
 
   await read({ path: "one" });
   await read({ path: "one" });
@@ -222,17 +230,48 @@ test("an answer longer than the inline bound is compared whole, and another subj
 
 test("a derivation that throws keeps nothing for ofReads", async () => {
   const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
-  await assert.rejects(facts.ofReads("slot", { path: "a" }, () => "1", async (record) => { record("q", "1"); throw new Error("cut"); }));
+  await assert.rejects(facts.ofReads("slot", { path: "a" }, asking(() => "1"), async (record) => { record("q", "1"); throw new Error("cut"); }));
   const counted = counting("v");
-  await facts.ofReads("slot", { path: "a" }, () => "1", async () => counted.derive());
+  await facts.ofReads("slot", { path: "a" }, asking(() => "1"), async () => counted.derive());
   assert.equal(counted.derived(), 1);
+});
+
+/** Answers with a fixed fingerprint that count the questions asked of them. */
+function counted(fingerprint: string, answerIfKnown: (question: string) => string | undefined = () => "[]"): RecordedAnswers & { asked: () => number } {
+  let asked = 0;
+  return { fingerprint, answerIfKnown: (question) => (asked++, answerIfKnown(question)), asked: () => asked };
+}
+
+test("a kept derivation asks nothing of answers with the fingerprint it was last verified against, from any view of the cache", async () => {
+  const cache = createSnapshotDataCache(BUDGET);
+  const derivation = counting({ derived: true });
+  const read = (answers: RecordedAnswers) => createDerivedFacts(cache, digest, "untrusted").ofReads("slot", { path: "a" }, answers, async (record) => (record("declaring|A", "[]"), derivation.derive()));
+  await read(counted("F"));
+
+  const same = counted("F");
+  assert.deepEqual(await read(same), { derived: true });
+  const other = counted("G");
+  await read(other);
+  const otherAgain = counted("G");
+  await read(otherAgain);
+
+  assert.deepEqual([derivation.derived(), same.asked(), other.asked(), otherAgain.asked()], [1, 0, 1, 0]);
+});
+
+test("a derivation read from disk asks its questions even of answers with the fingerprint it was derived against", async () => {
+  const disk = { store: memoryStore(), versions: { slot: "1" } };
+  const read = (answers: RecordedAnswers) => viewOver(disk).ofReads("slot", { path: "a" }, answers, async (record) => (record("declaring|A", "[]"), { derived: true }));
+  await read(counted("F"));
+  const fromDisk = counted("F");
+  await read(fromDisk);
+  assert.equal(fromDisk.asked(), 1);
 });
 
 function readsOver(disk: DerivedFactDisk, world: { answers: Record<string, string> }, slot = "slot", subject: object = { path: "a" }) {
   const facts = viewOver(disk);
   let derived = 0;
   const answerNow = (question: string): string => world.answers[question] ?? "[]";
-  const read = () => facts.ofReads(slot, subject, answerNow, async (record) => {
+  const read = () => facts.ofReads(slot, subject, asking(answerNow), async (record) => {
     derived++;
     record("declaring|A", answerNow("declaring|A"));
     return { derived };
@@ -279,7 +318,7 @@ test("a stored derivation that recorded a question the snapshot cannot answer is
   const forged = JSON.stringify({ value: { forged: true }, reads: [["gone|Q", "x"]] });
   const counted = counting({ derived: true });
   const answerNow = (question: string): string | undefined => (question === "declaring|A" ? "[]" : undefined);
-  const read = (facts = viewOver(disk)) => facts.ofReads("slot", { path: "a" }, answerNow, async (record) => (record("declaring|A", "[]"), counted.derive()));
+  const read = (facts = viewOver(disk)) => facts.ofReads("slot", { path: "a" }, asking(answerNow), async (record) => (record("declaring|A", "[]"), counted.derive()));
   await read();
   const [key] = [...disk.store.entries.keys()];
   disk.store.entries.set(key!, forged);
@@ -297,18 +336,18 @@ test("a stored derivation that recorded a question the snapshot cannot answer is
 test("a derivation of a slot with no version, and one that throws, are never stored", async () => {
   const disk = { store: memoryStore(), versions: { slot: "1" } };
   await readsOver(disk, { answers: {} }, "unversioned").read();
-  await assert.rejects(viewOver(disk).ofReads("slot", { path: "a" }, () => "[]", async (record) => { record("q", "[]"); throw new Error("cut"); }));
+  await assert.rejects(viewOver(disk).ofReads("slot", { path: "a" }, asking(() => "[]"), async (record) => { record("q", "[]"); throw new Error("cut"); }));
   assert.deepEqual([...disk.store.entries], []);
 });
 
 test("a kept fact is frozen whether it was found or derived, and a hit decodes nothing", async (t) => {
   const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
   const derived = facts.ofFile("slot", FILE, () => ({ starts: [3, 1] }));
-  const read = await facts.ofReads("reads", { path: "a" }, () => undefined, async () => ({ names: ["b"] }));
+  const read = await facts.ofReads("reads", { path: "a" }, asking(() => undefined), async () => ({ names: ["b"] }));
   const parse = t.mock.method(JSON, "parse");
 
   const found = facts.ofFile("slot", FILE, () => ({ starts: [] }));
-  const readAgain = await facts.ofReads("reads", { path: "a" }, () => undefined, async () => ({ names: [] }));
+  const readAgain = await facts.ofReads("reads", { path: "a" }, asking(() => undefined), async () => ({ names: [] }));
 
   assert.equal(parse.mock.callCount(), 0);
   assert.equal(found, derived);

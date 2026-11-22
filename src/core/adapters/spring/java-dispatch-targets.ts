@@ -252,7 +252,7 @@ export function createJavaOutsideSupertypes(parser: () => Promise<JavaParser>, s
     if (sites.length === 0) return [];
     if (reads !== undefined) {
       const index = await reads.index();
-      return reads.facts.ofReads(OUTSIDE_SUPERTYPES_SLOT, { sites, generatesInterfaces: build.generatesInterfaces === true }, index.answerIfKnown, async (record) => {
+      return reads.facts.ofReads(OUTSIDE_SUPERTYPES_SLOT, { sites, generatesInterfaces: build.generatesInterfaces === true }, index, async (record) => {
         for (const question of [questions.listing(), questions.unread()]) record(question, index.answer(question));
         const held = await heldJavaProject(reads.hold, parser, sources, [], build);
         return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);

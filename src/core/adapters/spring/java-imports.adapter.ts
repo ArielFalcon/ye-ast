@@ -100,7 +100,7 @@ async function readKept(parser: JavaParser, facts: DerivedFacts, sources: readon
     for (const source of sources) {
       if (skipped.has(source.path) || (selected !== undefined && !selected.has(source.path))) continue;
       const statements = facts.ofFile(STATEMENTS_SLOT, source, () => statementsOfSource(parser, source));
-      const targets = statements.length === 0 ? [] : await facts.ofReads(TARGETS_SLOT, { path: source.path, content: index.answer(questions.file(source.path)) }, index.answerIfKnown, async (record) => {
+      const targets = statements.length === 0 ? [] : await facts.ofReads(TARGETS_SLOT, { path: source.path, content: index.answer(questions.file(source.path)) }, index, async (record) => {
         const { project, files } = universe.open();
         const file = files.get(source.path);
         const asked = (question: string): string => {
