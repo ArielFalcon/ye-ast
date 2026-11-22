@@ -74,7 +74,7 @@ export async function keptByFile<S extends { file: string }, A>(
     if (content === "") continue;
     const places = [...new Map(entries.map(([, site]) => [placeOf(site), site])).entries()].sort(([a], [b]) => byText(a, b));
     const subject = { path, content, places: places.map(([place]) => place), generatesInterfaces: reading.build.generatesInterfaces === true };
-    const answers = await kept.facts.ofReads(reading.slot, subject, index.answerIfKnown, async (record) => {
+    const answers = await kept.facts.ofReads(reading.slot, subject, index, async (record) => {
       const { project: over, files } = await projectOf();
       const asked = (question: string): string => {
         const answer = index.answer(question);
@@ -108,7 +108,7 @@ export async function keptFirstByFile<A>(
     const content = index.answer(questions.file(path));
     if (content === "") continue;
     const subject = { path, content, generatesInterfaces: reading.build.generatesInterfaces === true };
-    const answer = await kept.facts.ofReads<A>(reading.slot, subject, index.answerIfKnown, async (record) => {
+    const answer = await kept.facts.ofReads<A>(reading.slot, subject, index, async (record) => {
       const { project: over, files } = await projectOf();
       const asked = (question: string): string => {
         const answer = index.answer(question);

@@ -263,7 +263,7 @@ async function keptByReads(
   for (const { path } of sources) {
     if (unreadPaths.has(path)) continue;
     const subject = { path, content: index.answer(questions.file(path)), environment: environmentKey };
-    reading.files.push(await facts.ofReads(ROUTES_SLOT, subject, index.answerIfKnown, async (record) => {
+    reading.files.push(await facts.ofReads(ROUTES_SLOT, subject, index, async (record) => {
       const { project, files: held } = await heldOver();
       return project.reading((question) => void record(question, index.answer(question)), () => routesOfFile(held.get(path)!, project, environment));
     }));
@@ -272,7 +272,7 @@ async function keptByReads(
   for (const { path } of sources) {
     if (unparsedPaths.has(path)) continue;
     const subject = { path, content: index.answer(questions.file(path)) };
-    callbacks.push(await facts.ofReads(CALLBACKS_SLOT, subject, index.answerIfKnown, async (record) => {
+    callbacks.push(await facts.ofReads(CALLBACKS_SLOT, subject, index, async (record) => {
       const { project, files: held } = await heldOver();
       return project.reading((question) => void record(question, index.answer(question)), () => callbacksOfFile(held.get(path)!, project, INVOKED_CONTRACTS, createSpringAnnotations(project)));
     }));

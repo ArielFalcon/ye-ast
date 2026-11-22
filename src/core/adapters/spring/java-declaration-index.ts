@@ -1,4 +1,4 @@
-import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import type { DerivedFacts, RecordedAnswers } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { BUILD_PARTS, JAVA_DECLARATIONS_SLOT, JAVA_MARKERS, NAMING_KINDS, PACKAGE_QUESTIONS, type BuildPart, type JavaMarker, type NamingKind, type PackageQuestion } from "./java-declaration-questions.ts";
@@ -14,9 +14,10 @@ export interface DeclarationIndexInputs {
 
 /**
  * The declarations every Java source of a snapshot states, answered by the ten primitive questions of RFC-0039: each
- * answer is plain, sorted data, compared as a string.
+ * answer is plain, sorted data, compared as a string. Its fingerprint digests every file and input the answers depend on
+ * (ADR-0128).
  */
-export interface JavaDeclarationIndex {
+export interface JavaDeclarationIndex extends RecordedAnswers {
   /** The answer to a question the vocabulary names; any other question is an `UnknownDeclarationQuestionError`. */
   answer(question: string): string;
   /** What a derivation kept earlier asks of a snapshot that may not know the question: `undefined` when the vocabulary does not name it. */
@@ -56,6 +57,7 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
   const marked = lazily(() => grouped(entries.flatMap(({ path, entry }) => entry.body.markers.map((marker) => [marker, path] as const))));
   const claimed = lazily(() => list(new Set(inProject.flatMap(({ entry }) => claimedPlatformPackage(entry.header.packageName) ?? []))));
   const listing = lazily(() => fingerprint({ listing: entries.map(({ path, entry }) => [path, entry.content]).sort(([a], [b]) => (a! < b! ? -1 : a! > b! ? 1 : 0)) }));
+  const indexed = lazily(() => fingerprint({ listing: listing(), inputs }));
   const unreadAnswer = lazily(() => JSON.stringify({ files: entries.filter(({ entry }) => entry.state !== "read").map(({ path, entry }) => [path, entry.state]).sort(([a], [b]) => (a! < b! ? -1 : a! > b! ? 1 : 0)), unreadJvm: inputs.unreadJvm }));
 
   const answers = new Map<string, string>();
@@ -99,6 +101,9 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
   };
 
   return {
+    get fingerprint() {
+      return indexed();
+    },
     unread: () => entries.filter(({ entry }) => entry.state !== "read").map(({ path, entry }): { path: string; state: DeclarationState } => ({ path, state: entry })),
     answerIfKnown,
     answer: (question) => {
