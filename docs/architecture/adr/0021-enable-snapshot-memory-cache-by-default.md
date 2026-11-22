@@ -8,6 +8,8 @@
   capture uses this cache and its budget)
 - Amended by: [ADR-0112](0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) (decision 1: the
   default budget is a floor that the entries of the latest reads may exceed)
+- Amended by: [ADR-0127](0127-the-default-snapshot-cache-floor-is-the-working-set-the-corpus-measures.md) (decision 1: the
+  default floor is 128 MiB)
 - Related: [RFC-0006](../rfc/0006-configuration.md)
 
 ## Context
