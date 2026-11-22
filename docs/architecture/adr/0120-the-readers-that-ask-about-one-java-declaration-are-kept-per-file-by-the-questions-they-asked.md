@@ -56,7 +56,9 @@ anything (`provesBinding`), which ADR-0119 already answers from the index.
    and stays in memory: an unchanged read answers it without a project, and an edit of any source derives it again, as
    today. Its per-closure form is decided by its own unit.
 7. **Not moved here:** the dispatch readers, which keep the held project, and parse on demand (M5), which waits for
-   them.
+   them. RFC-0040 L15 leaves out the dispatch targets, which read cross-file reachability no question records (the
+   subtype closure, aspect advice and every file's function values), and the data effects, which read MyBatis XML
+   outside the index and whose port hands over no derived facts nor parse hold.
 
 ## Consequences
 
