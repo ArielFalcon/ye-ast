@@ -1,9 +1,9 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { CodeGraphReader, GraphNodeId } from "../../ports/code-graph.port.ts";
+import { INDEX_STORE_DIRECTORY, type CodeGraphReader, type GraphNodeId } from "../../ports/code-graph.port.ts";
 import { createCodeGraph, defaultCodeGraphDeps } from "./codegraph.adapter.ts";
 
 const BASE: Readonly<Record<string, string>> = {
@@ -169,4 +169,34 @@ test("chained syncs through one worker each match a fresh build, but for what th
     }
   }
   assert.equal(started, 1);
+});
+
+test("syncs over a kept store a mirror adopted each match a fresh build, and the kept store keeps every byte", async () => {
+  const kept = join(mkdtempSync(join(tmpdir(), "ye-ast-parity-")), "kept");
+  scratches.push(dirname(kept));
+  assert.ok((await graph.index(mirrorOf(BASE), kept)).ok);
+  const keptBytes = () => readdirSync(join(kept, INDEX_STORE_DIRECTORY)).filter((name) => !name.endsWith("-shm")).map((name) => [name, readFileSync(join(kept, INDEX_STORE_DIRECTORY, name)).toString("base64")]);
+  const before = keptBytes();
+  const live = mirrorOf(BASE);
+  const adopted = await graph.adoptMirror(live, kept);
+  assert.ok(adopted.ok, adopted.ok ? "" : adopted.fault.detail);
+  assert.deepEqual(adopted.value.filesNotIndexed, (await freshBuildOf(live)).rebuilt.filesNotIndexed);
+  const changed: Record<string, string | null> = {};
+  for (const shape of SHAPES.filter((candidate) => ["a file is added", "a symbol used elsewhere is renamed", "a file is deleted"].includes(candidate.name))) {
+    apply(live, shape.change);
+    Object.assign(changed, shape.change);
+    const synced = await graph.syncMirror(live, Object.keys(shape.change));
+    assert.ok(synced.ok, synced.ok ? "" : synced.fault.detail);
+    const { fresh } = await freshBuildOf(live);
+    const liveReader = graph.open(live);
+    const freshReader = graph.open(fresh);
+    assert.ok(liveReader.ok && freshReader.ok);
+    try {
+      assert.deepEqual(projection(liveReader.value, allFiles(changed), true), projection(freshReader.value, allFiles(changed), true), shape.name);
+    } finally {
+      liveReader.value.close();
+      freshReader.value.close();
+    }
+  }
+  assert.deepEqual(keptBytes(), before);
 });

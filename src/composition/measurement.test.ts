@@ -125,6 +125,9 @@ test("an index build emits its own line, with its duration and the bytes it left
       buildMirror: async () => {
         throw new Error("not under test");
       },
+      adoptMirror: async () => {
+        throw new Error("not under test");
+      },
       syncMirror: async () => {
         throw new Error("not under test");
       },
@@ -151,6 +154,9 @@ test("an index that throws is reported as a throw and still answers the throw", 
     buildMirror: async () => {
       throw new Error("not under test");
     },
+    adoptMirror: async () => {
+      throw new Error("not under test");
+    },
     syncMirror: async () => {
       throw new Error("not under test");
     },
@@ -173,6 +179,7 @@ test("an index build that answers a fault reports that fault, never built", asyn
     index: async () => ({ ok: false, fault: { kind: "store-unreadable", detail: "the store vanished" } }),
     open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    adoptMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
   };
 
@@ -189,6 +196,7 @@ test("a mirror build emits the index line a live session would otherwise hide", 
     index: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
     buildMirror: async () => ({ ok: true, value: summary }),
+    adoptMirror: async () => ({ ok: true, value: summary }),
     syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [], filesUnparsed: [] } }),
   };
 
@@ -207,20 +215,22 @@ test("an outline query emits its own query line", async () => {
   assert.equal(recordOf(lines[0]).method, "outline");
 });
 
-test("a mirror sync reports synced, so a host never mistakes an incremental sync for a full build", async () => {
+test("a mirror sync reports synced and a copied kept store adopted, so a host never mistakes either for a full build", async () => {
   const { lines, sink } = collecting();
   const summary = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "1.6.2", schema: 11, extraction: 27 } };
   const graph: CodeGraph = {
     index: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
     buildMirror: async () => ({ ok: true, value: summary }),
+    adoptMirror: async () => ({ ok: true, value: summary }),
     syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [], filesUnparsed: [] } }),
   };
 
   await measuredGraph(graph, { sink, redaction }).syncMirror("/mirror", ["src/a.ts"]);
+  await measuredGraph(graph, { sink, redaction }).adoptMirror("/mirror", "/kept");
 
   assert.equal(recordOf(lines[0]).event, "index");
-  assert.equal(recordOf(lines[0]).outcome, "synced");
+  assert.deepEqual(lines.map((line) => recordOf(line).outcome), ["synced", "adopted"]);
 });
 
 test("opening a store writes a stage line with the fault it answered", () => {
@@ -229,6 +239,7 @@ test("opening a store writes a stage line with the fault it answered", () => {
     index: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    adoptMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
   };
 

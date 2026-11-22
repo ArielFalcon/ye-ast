@@ -4,8 +4,9 @@ import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { isWritten, liveExport } from "../../domain/snapshot/live-export.ts";
 import { retentionDiscards, type LiveRetentionPolicy, type LiveScopeUsage } from "../../domain/snapshot/live-retention.ts";
-import type { CodeGraph, CodeGraphReader } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
+import type { IndexCache } from "../../ports/index-cache.port.ts";
 import type { LiveFault, LiveFailure, LiveUnavailable, LiveStaleNotice } from "../../ports/live-queries.port.ts";
 import type { LiveMirror, MirrorFault, MirrorLocation, MirrorState, MirrorVersions } from "../../ports/live-mirror.port.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
@@ -25,6 +26,8 @@ export interface LiveDeps {
   now: () => number;
   /** A token no other commit of any mirror, in this process or another, has used: the store generation a build or sync commits. */
   newStoreGeneration: () => string;
+  /** Full indexes kept by content: a full build of the mirror copies the one its content names, built there when absent (ADR-0129). */
+  indexes?: IndexCache | undefined;
 }
 
 export type { LiveFailure, LiveUnavailable } from "../../ports/live-queries.port.ts";
@@ -250,7 +253,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   const writtenSet = new Set(written);
   const held = state?.indexed ?? [];
   let staging = sorted([...(state?.pending ?? []), ...changed].filter((path) => writtenSet.has(path)));
-  let pruning = held.filter((path) => !writtenSet.has(path));
+  let pruning = sorted([...held, ...(state?.pending ?? [])].filter((path) => !writtenSet.has(path)));
   let behind = sorted([...staging, ...pruning]);
 
   const current: MirrorState = {
@@ -322,7 +325,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   let notHeld: readonly string[];
   let unparsed: readonly string[] = [];
   if (needsBuild) {
-    const built = await graph.buildMirror(indexRoot, signal);
+    const built = await buildInFull(deps, indexRoot, stateId, signal);
     if (!built.ok) return unavailable(built.fault.detail);
     notHeld = built.value.filesNotIndexed;
   } else {
@@ -333,7 +336,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     if (synced.ok && !staleForAnswer) {
       notHeld = sorted([...synced.value.filesNotIndexed, ...synced.value.filesFailed]);
     } else {
-      const rebuilt = await graph.buildMirror(indexRoot, signal);
+      const rebuilt = await buildInFull(deps, indexRoot, stateId, signal);
       if (!rebuilt.ok) return unavailable(rebuilt.fault.detail);
       notHeld = rebuilt.value.filesNotIndexed;
       full = true;
@@ -344,6 +347,27 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   if (!writtenState.ok) return mirrorFailure(writtenState.fault);
   proof.open = () => storeServes(deps, indexRoot, committed);
   return { ok: true, value: { tree: tree(committed), state: committed, reshaped: created || full } };
+}
+
+/**
+ * Builds the index tree's store in full. With an index cache it is the kept index of the tree's content, built and
+ * published there as a commit's is when absent, then copied into the mirror; a sync-derived store never reaches the cache.
+ * A cache or a copy that fails builds the mirror in place, unpublished (ADR-0129).
+ */
+async function buildInFull(deps: LiveDeps, indexRoot: string, stateId: string, signal: AbortSignal | undefined): Promise<Result<IndexSummary, CodeGraphFault>> {
+  if (deps.indexes !== undefined) {
+    const kept = await deps.indexes.obtain({ content: stateId, snapshot: indexRoot, signal });
+    if (!kept.ok && kept.fault.kind === "aborted") return kept;
+    if (kept.ok) {
+      try {
+        const adopted = await deps.graph.adoptMirror(indexRoot, kept.value.directory, signal);
+        if (adopted.ok || adopted.fault.kind === "aborted") return adopted;
+      } finally {
+        kept.value.store.close();
+      }
+    }
+  }
+  return deps.graph.buildMirror(indexRoot, signal);
 }
 
 /** The fault a query answers for a failed live open, with an unfinished refresh as `aborted` for the families that have no `unknown` to answer. */

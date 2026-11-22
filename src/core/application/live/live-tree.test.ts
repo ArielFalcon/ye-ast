@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pathSelection } from "../../domain/shared/scope.ts";
 import { liveScope } from "../../domain/snapshot/live-export.ts";
+import type { Result } from "../../domain/shared/result.ts";
+import type { CodeGraphFault, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
+import type { IndexedSnapshot } from "../../ports/index-cache.port.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
 import { fakeLive, NOW, VERSIONS, type FakeLive } from "./fake-live.testing.ts";
 import { openLive, type LiveTree } from "./live-tree.ts";
@@ -649,4 +652,95 @@ test("cancellation during release overrides an earlier refresh failure", async (
   const result = await query(fake, { signal: controller.signal });
   assert.equal(!result.ok && result.fault.kind, "aborted");
   assert.equal(fake.held.locks, fake.held.released);
+});
+
+const KEPT_SUMMARY: IndexSummary = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "1.0.0", schema: 11, extraction: 27 } };
+
+/** An index cache that keeps every content it is asked for at `/kept/<content>`; closing the kept store is logged in the fake's calls. */
+function withIndexes(fake: FakeLive, answer: Result<void, CodeGraphFault> = { ok: true, value: undefined }): { obtained: { content: string; snapshot: string }[] } {
+  const kept = { obtained: [] as { content: string; snapshot: string }[] };
+  fake.deps.indexes = {
+    obtain: async ({ content, snapshot }): Promise<Result<IndexedSnapshot, CodeGraphFault>> => {
+      kept.obtained.push({ content, snapshot });
+      if (!answer.ok) return answer;
+      const store = { close: () => void fake.calls.push("close-kept") } as unknown as CodeGraphReader;
+      return { ok: true, value: { store, summary: KEPT_SUMMARY, directory: `/kept/${content}` } };
+    },
+  };
+  return kept;
+}
+
+test("with an index cache, a full build copies the kept index of the tree's content into the mirror, builds nothing in place and releases the kept index only after the copy", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  const kept = withIndexes(fake);
+
+  const first = await tree(fake);
+
+  assert.deepEqual(kept.obtained, [{ content: first.stateId, snapshot: "/index" }]);
+  assert.deepEqual(fake.adopted, [["/index", `/kept/${first.stateId}`]]);
+  assert.equal(fake.builds, 0);
+  assert.ok(fake.calls.indexOf("adoptMirror") < fake.calls.indexOf("close-kept"), "the lease outlives the copy");
+  assert.deepEqual(first.origin, { kind: "full" });
+  assert.equal(fake.state.current?.fullBuildStateId, first.stateId);
+});
+
+test("a sync never reaches the index cache, so a sync-derived store is never published", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  const kept = withIndexes(fake);
+  await tree(fake);
+  fake.tree.set("src/A.java", "2");
+
+  const synced = await tree(fake);
+
+  assert.equal(fake.syncs.length, 1);
+  assert.deepEqual(synced.origin?.kind, "sync");
+  assert.equal(kept.obtained.length, 1);
+  assert.equal(fake.adopted.length, 1);
+});
+
+test("the full rebuild that replaces a sync the engine cannot do copies the kept index of the new content", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  const kept = withIndexes(fake);
+  await tree(fake);
+  fake.tree.set("src/A.java", "2");
+  fake.engine.sync = { ok: false, fault: { kind: "index-failed", detail: "the engine cannot sync" } };
+
+  const rebuilt = await tree(fake);
+
+  assert.deepEqual(kept.obtained.map((asked) => asked.content), [kept.obtained[0]!.content, rebuilt.stateId]);
+  assert.equal(fake.builds, 0);
+  assert.deepEqual(rebuilt.origin, { kind: "full" });
+});
+
+test("a cache that cannot serve or a copy that fails builds the mirror in place, and an abort in either builds nothing", async () => {
+  const cases: { name: string; obtain?: Result<void, CodeGraphFault>; adopt?: Result<IndexSummary, CodeGraphFault>; builds: number; answered: boolean }[] = [
+    { name: "cache unavailable", obtain: { ok: false, fault: { kind: "cache-unavailable", detail: "refused" } }, builds: 1, answered: true },
+    { name: "kept index build failed", obtain: { ok: false, fault: { kind: "index-failed", detail: "failed" } }, builds: 1, answered: true },
+    { name: "copy failed", adopt: { ok: false, fault: { kind: "index-failed", detail: "copy failed" } }, builds: 1, answered: true },
+    { name: "obtain aborted", obtain: { ok: false, fault: { kind: "aborted", detail: "aborted" } }, builds: 0, answered: false },
+    { name: "copy aborted", adopt: { ok: false, fault: { kind: "aborted", detail: "aborted" } }, builds: 0, answered: false },
+  ];
+  for (const { name, obtain, adopt, builds, answered } of cases) {
+    const fake = fakeLive({ "src/A.java": "1" });
+    withIndexes(fake, obtain);
+    if (adopt !== undefined) fake.engine.adopt = adopt;
+
+    const outcome = await query(fake);
+
+    assert.equal(outcome.ok, answered, name);
+    if (!outcome.ok) assert.equal(outcome.fault.kind, "unavailable", name);
+    assert.equal(fake.builds, builds, name);
+    assert.equal(fake.calls.filter((call) => call === "close-kept").length, obtain === undefined ? 1 : 0, `${name}: the kept index is released`);
+  }
+});
+
+test("a path a crashed refresh copied into the index tree and the export no longer writes is pruned before the store is refreshed", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  await tree(fake);
+  fake.state.current = { ...fake.state.current!, pending: ["src/Gone.java"] };
+
+  await tree(fake);
+
+  assert.deepEqual(fake.pruned, [["src/Gone.java"]]);
+  assert.deepEqual(fake.state.current?.pending, []);
 });

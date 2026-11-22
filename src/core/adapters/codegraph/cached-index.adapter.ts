@@ -60,7 +60,7 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
       if (opened.ok) opened.value.close();
       return { state: "unusable" };
     }
-    return { state: "usable", indexed: { store: opened.value, summary: { ...summary, versions: opened.value.versions } } };
+    return { state: "usable", indexed: { store: opened.value, summary: { ...summary, versions: opened.value.versions }, directory: entry } };
   }
 
   async function exists(path: string): Promise<boolean> {

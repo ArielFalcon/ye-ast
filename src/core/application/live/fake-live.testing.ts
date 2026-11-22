@@ -33,6 +33,8 @@ export interface FakeLive {
   /** Roots each build and each sync was told to index, in call order. */
   built: string[];
   synced: string[];
+  /** The mirror root and the kept store each `adoptMirror` copied, in call order. */
+  adopted: [string, string][];
   builds: number;
   objectFormat: { value: string };
   /** Every location a lock was taken for, in call order: its `scope` is the identity the sweep answers for. */
@@ -52,6 +54,7 @@ export interface FakeLive {
   syncGenerations: (SyncGenerations | undefined)[];
   engine: {
     build: Result<IndexSummary, CodeGraphFault>;
+    adopt: Result<IndexSummary, CodeGraphFault>;
     sync: Result<MirrorSyncSummary, CodeGraphFault>;
     lock: Result<void, { kind: "aborted" | "refused"; detail: string }>;
     /** What the retention sweep reads; set it between queries. */
@@ -73,6 +76,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     pruned: [],
     built: [],
     synced: [],
+    adopted: [],
     builds: 0,
     objectFormat: { value: "sha1" },
     locations: [],
@@ -85,6 +89,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     syncGenerations: [],
     engine: {
       build: { ok: true, value: SUMMARY },
+      adopt: { ok: true, value: SUMMARY },
       sync: { ok: true, value: { ...SUMMARY, filesFailed: [], filesUnparsed: [] } },
       lock: { ok: true, value: undefined },
       usage: { ok: true, value: { scopes: [], debris: [] } },
@@ -177,6 +182,11 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.built.push(mirrorRoot);
       fake.builds++;
       return fake.engine.build;
+    },
+    adoptMirror: async (mirrorRoot, store) => {
+      fake.calls.push("adoptMirror");
+      fake.adopted.push([mirrorRoot, store]);
+      return fake.engine.adopt;
     },
     syncMirror: async (mirrorRoot, paths, _signal, generations) => {
       fake.calls.push("syncMirror");

@@ -92,6 +92,7 @@ export function measuredGraph(graph: CodeGraph, deps: MeasurementDeps): CodeGrap
       return opened.ok ? { ok: true, value: measuredTalliedStages(opened.value, GRAPH_READER_STAGES, deps) } : opened;
     },
     buildMirror: (mirror, signal) => measuredBuild("built", () => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
+    adoptMirror: (mirror, store, signal) => measuredBuild("adopted", () => graph.adoptMirror(mirror, store, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
     syncMirror: (mirror, paths, signal, generations) => measuredBuild("synced", () => graph.syncMirror(mirror, paths, signal, generations), join(mirror, INDEX_STORE_DIRECTORY), deps),
   };
 }
@@ -210,7 +211,7 @@ function timedStage<T>(call: () => T, settled: (outcome: string, started: number
 }
 
 /** One index line per build or sync: `built` or `synced` only when a store came out of it, the fault's own kind otherwise. */
-async function measuredBuild<T, F extends { kind: string }>(succeeded: "built" | "synced", call: () => Promise<Result<T, F>>, store: string, deps: MeasurementDeps): Promise<Result<T, F>> {
+async function measuredBuild<T, F extends { kind: string }>(succeeded: "built" | "synced" | "adopted", call: () => Promise<Result<T, F>>, store: string, deps: MeasurementDeps): Promise<Result<T, F>> {
   const started = performance.now();
   try {
     const result = await call();

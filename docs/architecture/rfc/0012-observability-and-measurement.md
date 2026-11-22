@@ -200,7 +200,9 @@ the two apart would need a request-scoped context threaded through the whole cal
 the event worth recording is the one that costs seconds. `store_bytes` is read once per build, never per request.
 
 A live mirror writes the same line: `built` for its first or a recovering full build, `synced` for the incremental
-sync of the paths that changed, so a session of edits never reads as a series of full builds.
+sync of the paths that changed, so a session of edits never reads as a series of full builds. With an index cache a full
+build of the mirror is the cache's (`built` only when the cache had to build it) followed by `adopted`, the copy of the
+kept store into the mirror ([ADR-0129](../adr/0129-a-full-live-build-goes-through-the-index-cache-so-one-content-is-indexed-once.md)).
 
 A **stage line**, one per call of a reader a request runs over the whole snapshot (the export listing, writing its files,
 opening the store, entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java
