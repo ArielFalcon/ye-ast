@@ -791,3 +791,20 @@ test("a full build over a tree no staging refreshed is checked too: a planted st
   }
   assert.deepEqual(planted.staged, [], "the planted state staged nothing");
 });
+
+test("discarding a mirror retires what the engine keeps running for it: a mirror built by other engines, and one the sweep discards", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  fake.deps.mirror.indexRoot = (location) => `/index/${location.scope}`;
+  await tree(fake);
+  fake.retired.length = 0;
+  fake.state.current = { ...fake.state.current!, versions: { ...VERSIONS, codegraph: "0.9.0" } };
+  const current = fake.locations[0]!.scope;
+
+  await tree(fake);
+  assert.deepEqual(fake.retired, [`/index/${current}`]);
+
+  fake.engine.usage = { ok: true, value: { scopes: [{ scope: "other", versions: null, bytes: 1, lastUsedMs: NOW, locked: false }], debris: [] } };
+  fake.state.current = { ...fake.state.current!, versions: { ...VERSIONS, codegraph: "0.9.0" } };
+  await tree(fake);
+  assert.deepEqual(fake.retired, [`/index/${current}`, `/index/${current}`, "/index/other"]);
+});

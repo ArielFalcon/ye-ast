@@ -35,6 +35,8 @@ export interface FakeLive {
   /** Roots each build and each sync was told to index, in call order. */
   built: string[];
   synced: string[];
+  /** The roots each `retireMirror` named, in call order. */
+  retired: string[];
   /** The mirror root and the kept store each `adoptMirror` copied, in call order. */
   adopted: [string, string][];
   builds: number;
@@ -82,6 +84,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     built: [],
     synced: [],
     adopted: [],
+    retired: [],
     builds: 0,
     objectFormat: { value: "sha1" },
     locations: [],
@@ -206,6 +209,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.syncs.push([...paths]);
       return fake.engine.sync;
     },
+    retireMirror: (mirrorRoot) => void fake.retired.push(mirrorRoot),
     open: ((_store: string, generation?: string) => {
       if (!fake.openable.value) return { ok: false, fault: { kind: "store-unreadable", detail: "the store cannot be opened" } };
       fake.stores.opened++;

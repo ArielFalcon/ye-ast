@@ -196,7 +196,10 @@ async function sweep(deps: LiveDeps, repo: string, current: string): Promise<boo
       versionsMatch: scope.versions !== null && sameVersions(scope.versions, deps.versions),
     }));
     const discards = retentionDiscards({ scopes, debris: measured.value.debris }, current, deps.retention, deps.now());
-    for (const scope of discards.scopes) await deps.mirror.discardIfIdle({ repo, scope });
+    for (const scope of discards.scopes) {
+      await deps.mirror.discardIfIdle({ repo, scope });
+      deps.graph.retireMirror(deps.mirror.indexRoot({ repo, scope }));
+    }
     if (discards.debris.length > 0) await deps.mirror.discardDebris(repo, discards.debris);
     return true;
   } catch {
@@ -231,6 +234,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   if (created) {
     const discarded = await mirror.discard(location);
     if (!discarded.ok) return mirrorFailure(discarded.fault);
+    graph.retireMirror(mirror.indexRoot(location));
     state = null;
   }
 
