@@ -149,6 +149,7 @@ export async function openLive<A>(deps: LiveDeps, request: OpenLive, use: (tree:
     try {
       proof.reader?.close();
       proof.reader = undefined;
+      proof.open = undefined;
     } finally {
       await lock.value.release();
     }

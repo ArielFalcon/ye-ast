@@ -808,3 +808,15 @@ test("discarding a mirror retires what the engine keeps running for it: a mirror
   await tree(fake);
   assert.deepEqual(fake.retired, [`/index/${current}`, `/index/${current}`, "/index/other"]);
 });
+
+test("a takeStore called after the query returned cannot open the store the refresh committed, outside the lock", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  await tree(fake);
+  fake.tree.set("src/A.java", "2");
+  const opened = fake.stores.opened;
+
+  const late = await tree(fake);
+
+  assert.equal(late.takeStore?.(), undefined);
+  assert.equal(fake.stores.opened, opened);
+});
