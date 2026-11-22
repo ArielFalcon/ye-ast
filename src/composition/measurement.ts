@@ -107,6 +107,7 @@ export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): L
     reconcile: "live-reconcile",
     changedSince: "live-staleness-compare",
     materialize: "live-materialize",
+    materializePinned: "live-materialize-pinned",
     prune: "live-prune",
     touch: "live-touch",
     usage: "live-usage",

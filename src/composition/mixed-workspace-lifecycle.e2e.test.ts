@@ -9,7 +9,7 @@ import { realWorkspaceFixture } from "./mixed-workspace.testing.ts";
 const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.com" };
 function git(repo: string, ...args: string[]) { return execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim(); }
 
-test("second capture lock failure releases the first real lease and permits retry", { timeout: 120_000 }, async (context) => {
+test("second capture lock failure leaves no lock held, after the first pin released its own, and permits retry", { timeout: 120_000 }, async (context) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "ye-ast-capture-fault-")));
   const orders = join(dir, "orders"), web = join(dir, "web"), scratch = join(dir, "scratch");
   const controller = new AbortController();
@@ -33,7 +33,7 @@ test("second capture lock failure releases the first real lease and permits retr
       assert.equal(signal, controller.signal);
       if (!injected && location.repo === web) {
         injected = true;
-        assert.deepEqual([...fixture.active], [orders]);
+        assert.deepEqual([...fixture.active], [], "the first capture released its lock once pinned");
         return { ok: false, fault: { kind: "refused", detail: "injected second lock" } };
       }
       return lock(location, signal);
@@ -43,7 +43,8 @@ test("second capture lock failure releases the first real lease and permits retr
     const failed = await first;
     assert.equal(injected, true);
     assert.deepEqual(failed, { ok: false, fault: { kind: "workspace-capture-unavailable", repo: "web", detail: "live capture unavailable", cause: { kind: "live-mirror-failed", detail: "refused: injected second lock" } } });
-    assert.equal(fixture.discoveries.length, 0); assert.equal(fixture.extracted.length, 0); assert.equal(fixture.reads.length, 0);
+    assert.equal(fixture.discoveries.length, 0); assert.equal(fixture.extracted.length, 0);
+    assert.deepEqual(fixture.reads.map(({ root }) => root.startsWith(`${orders}/.ye-ast-graph/live/`)), [true], "only the first pin read its sources");
     assert.equal(fixture.active.size, 0); assert.deepEqual(readdirSync(scratch), []);
     for (const repo of [orders, web]) {
       const live = join(repo, ".ye-ast-graph", "live");
@@ -111,7 +112,7 @@ test("live change compares removed base route and untracked route with a real co
   } finally { context.signal.removeEventListener("abort", cancel); cancel(); await Promise.allSettled(pending); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("aborting inside a real incoming-edge walk closes readers and releases both leases", { timeout: 120_000 }, async (context) => {
+test("aborting inside a real incoming-edge walk, with no lock held, closes the pinned readers and leaves no lock", { timeout: 120_000 }, async (context) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "ye-ast-walk-abort-")));
   const orders = join(dir, "orders"), web = join(dir, "web"), scratch = join(dir, "scratch");
   const controller = new AbortController(); const pending: Promise<unknown>[] = [];
@@ -126,13 +127,13 @@ test("aborting inside a real incoming-edge walk closes readers and releases both
     const lock = fixture.mirror.lock; const lockSignals: (AbortSignal | undefined)[] = [];
     fixture.mirror.lock = (location, signal) => { lockSignals.push(signal); return lock(location, signal); };
     const open = fixture.graph.open; let opened = 0, closed = 0, walked = false;
-    fixture.graph.open = (store) => {
-      const result = open(store); if (!result.ok) return result;
+    fixture.graph.open = (...args) => {
+      const result = open(...args); if (!result.ok) return result;
       opened++; const reader = result.value;
       return { ok: true, value: new Proxy(reader, { get(target, property) {
         if (property === "incomingEdges") return (...args: Parameters<typeof reader.incomingEdges>) => {
           const edges = reader.incomingEdges(...args);
-          if (!walked && edges.length > 0 && fixture.discoveries.length > 0 && fixture.active.size === 2) {
+          if (!walked && edges.length > 0 && fixture.discoveries.length > 0 && fixture.active.size === 0) {
             assert.deepEqual(lockSignals, [controller.signal, controller.signal]);
             walked = true; assert.equal(controller.signal.aborted, false); controller.abort();
           }

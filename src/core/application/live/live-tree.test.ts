@@ -359,54 +359,81 @@ test("a sweep that could not measure the mirrors runs again on the next answer",
   assert.equal(fake.calls.filter((call) => call === "usage").length, 2);
 });
 
-test("a query over an unchanged store opens it once and hands that reader to the answer, which then owns it", async () => {
+test("the lock covers the refresh and the pin, and the answer runs after its release on the store pinned under it", async () => {
   const fake = fakeLive({ "src/A.java": "1" });
   await tree(fake);
-  fake.stores.opened = 0;
-  fake.stores.closed = 0;
+  fake.tree.set("src/A.java", "2");
+  const seen: string[] = [];
 
-  let taken: unknown;
-  let again: unknown;
-  const answered = await query(fake, {}, async (tree) => {
-    taken = tree.takeStore?.();
-    again = tree.takeStore?.();
-    return undefined;
+  const answered = await openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: true }, async (pinnedTree, pinned: string) => {
+    seen.push(`use:${fake.held.locks - fake.held.released}:${pinned}`);
+    return pinnedTree.store !== undefined;
+  }, async (pinnedTree) => {
+    seen.push(`pin:${fake.held.locks - fake.held.released}:${fake.stores.opened}:${pinnedTree.store !== undefined}`);
+    return "pinned";
   });
 
-  assert.ok(answered.ok);
-  assert.ok(taken !== undefined, "the reader that proved the store is handed over");
-  assert.equal(again, undefined, "it is handed over once");
-  assert.deepEqual(fake.stores, { opened: 1, closed: 0 });
+  assert.deepEqual(answered, { ok: true, value: true });
+  assert.deepEqual(fake.syncs, [["src/A.java"]]);
+  assert.deepEqual(seen, ["pin:1:2:true", "use:0:pinned"], "the pin runs with the lock held and the synced store open; the answer runs with it released");
+  assert.equal(fake.openedAt.at(-1), fake.state.current?.storeGeneration, "the store is pinned at the generation the sync committed");
 });
 
-test("a reader nobody takes is closed before the query returns, whatever the answer does, and none outlives a rebuild", async () => {
+test("an unchanged store is pinned through the reader that proved it, shared by every reading of the answer and closed once the query returns", async () => {
   const fake = fakeLive({ "src/A.java": "1" });
   await tree(fake);
   fake.stores.opened = 0;
   fake.stores.closed = 0;
 
+  const answered = await query(fake, {}, async (tree) => {
+    tree.store?.close();
+    tree.store?.close();
+    return { ...fake.stores };
+  });
+
+  assert.deepEqual(answered, { ok: true, value: { opened: 1, closed: 0 } }, "closing the shared store closes nothing");
+  assert.deepEqual(fake.stores, { opened: 1, closed: 1 });
+});
+
+test("the pinned store is closed whatever the answer does, a query that reads no store pins none, and none outlives a rebuild", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
   await tree(fake);
+  fake.stores.opened = 0;
+  fake.stores.closed = 0;
+
   await assert.rejects(query(fake, {}, async () => { throw new Error("boom"); }));
-  assert.deepEqual(fake.stores, { opened: 2, closed: 2 });
+  assert.deepEqual(fake.stores, { opened: 1, closed: 1 });
+  const storeless = await query(fake, { store: false }, async (tree) => tree.store);
+  assert.deepEqual([storeless, fake.stores], [{ ok: true, value: undefined }, { opened: 1, closed: 1 }]);
 
   fake.state.current = { ...fake.state.current!, unparsedSinceBuild: ["src/app.component.html"] };
-  let handed: unknown;
-  const rebuilt = await query(fake, { synthesized: true }, async (tree) => { handed = tree.takeStore?.(); return undefined; });
+  let pinned: unknown;
+  const rebuilt = await query(fake, { synthesized: true }, async (tree) => { pinned = tree.store; return undefined; });
 
   assert.ok(rebuilt.ok);
-  assert.ok(handed !== undefined, "the store the rebuild committed is handed over");
+  assert.ok(pinned !== undefined, "the store the rebuild committed is pinned");
   assert.equal(fake.builds, 2);
-  assert.deepEqual(fake.stores, { opened: 4, closed: 3 }, "the reader opened before the build is closed, and the one handed over is opened after it");
+  assert.deepEqual(fake.stores, { opened: 3, closed: 3 }, "the reader opened before the build is closed, and the one pinned is opened after it");
   assert.equal(fake.openedAt.at(-1), fake.state.current?.storeGeneration);
 });
 
-/** Runs a query that takes the store, and answers its stateId, the generation it committed and the one it opened the store at. */
+test("a committed state that names no store generation does not serve: the store is rebuilt and pinned at the generation it commits", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  await tree(fake);
+  fake.state.current = { ...fake.state.current!, storeGeneration: "" };
+  const before = fake.openedAt.length;
+
+  const answered = await query(fake, {}, async (tree) => tree.store !== undefined);
+
+  assert.deepEqual(answered, { ok: true, value: true });
+  assert.equal(fake.builds, 2);
+  assert.deepEqual(fake.openedAt.slice(before), [fake.state.current?.storeGeneration]);
+});
+
+/** Runs a query, and answers its stateId, the generation it committed and the one it pinned the store at. */
 async function generationOf(fake: FakeLive, options: { store?: boolean; synthesized?: boolean } = {}): Promise<{ stateId: string; committed: string | undefined; opened: (string | undefined)[] }> {
   const before = fake.openedAt.length;
-  const answered = await query(fake, options, async (tree) => {
-    tree.takeStore?.();
-    return tree.stateId;
-  });
+  const answered = await query(fake, options, async (tree) => tree.stateId);
   assert.ok(answered.ok, JSON.stringify(answered));
   return { stateId: answered.value as string, committed: fake.state.current?.storeGeneration, opened: fake.openedAt.slice(before) };
 }
@@ -425,7 +452,7 @@ test("every committed build or sync commits a new store generation, a full rebui
   const committed = [built, synced, rebuilt].map(({ committed }) => committed);
   assert.ok(committed.every((generation) => generation !== undefined && generation !== ""));
   assert.equal(new Set(committed).size, 3);
-  assert.deepEqual([built, synced, rebuilt].map(({ opened }) => opened.at(-1)), committed, "the store handed over is read at the generation just committed");
+  assert.deepEqual([built, synced, rebuilt].map(({ opened }) => opened.at(-1)), committed, "the store pinned is read at the generation just committed");
   assert.deepEqual([unchanged.committed, unchanged.opened], [rebuilt.committed, [rebuilt.committed]], "an unchanged store keeps its generation");
 });
 

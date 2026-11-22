@@ -213,7 +213,7 @@ function setup(options: Options = {}) {
     ...(options.exportBudget && { budget: options.exportBudget }),
     ...(options.trust && { trust: options.trust }),
     ...(options.absentCapabilities && { absentCapabilities: options.absentCapabilities }),
-    ...(options.live && { live: options.live.deps }),
+    ...(options.live && { live: (options.live.storeReader = reader, options.live.deps) }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.trivia && { tokens: { tokensOf: async (file: SourceFile) => tokenReading(file, options.trivia!) } }),
@@ -1567,7 +1567,7 @@ test("a live query whose lock is still held at the deadline is unknown index-una
   }
 });
 
-test("a live ofChange seeds from the paths whose blob differs from the merge base, exports their merge-base version and copies their mirror version", async () => {
+test("a live ofChange seeds from the paths whose blob differs from the merge base, exports their merge-base version and copies the mirror version the capture pinned", async () => {
   const live = fakeLive({ "src/A.java": "2", "src/C.java": "1", "src/Same.java": "1", "README.md": "1" });
   const exports = {
     [FORK]: { files: [{ path: "src/A.java", blob: "1", written: true }, { path: "src/B.java", blob: "1", written: true }, { path: "src/Same.java", blob: "1", written: true }, { path: "README.md", blob: "1", written: false }], skipped: [] },
@@ -1579,12 +1579,26 @@ test("a live ofChange seeds from the paths whose blob differs from the merge bas
 
   const changed = ["src/A.java", "src/B.java", "src/C.java"];
   assert.deepEqual(log.plans.filter((plan) => plan.sha === FORK).map((plan) => plan.wanted), [["src/A.java", "src/B.java", "src/Same.java"], changed.filter((path) => path !== "src/C.java")]);
-  assert.deepEqual(live.materialized, [changed]);
+  assert.deepEqual(live.pinnedCopies, [[{ path: "src/A.java", blob: "2" }, { path: "src/C.java", blob: "1" }]], "each changed path the pinned export writes, at its pinned blob; a deleted path is not copied");
   assert.equal(log.compared.length, 1);
   assert.notEqual(log.compared[0]![0], log.compared[0]![1]);
   assert.equal(answer.snapshot.kind, "live");
   assert.equal(answer.status !== "unknown" && answer.value.mergeBase, FORK);
   assert.deepEqual(answer.status !== "unknown" && answer.value.seeds.map((seed) => seed.file), ["src/A.java"]);
+});
+
+test("a live ofChange whose changed file another process rewrote after the pin answers unknown with source-unreadable and compares nothing", async () => {
+  const live = fakeLive({ "src/A.java": "2" });
+  live.movedSincePin = ["src/A.java"];
+  const exports = { [FORK]: { files: [{ path: "src/A.java", blob: "1", written: true }], skipped: [] } };
+  const { log, queries } = setup({ trust: TRUSTED, live, exports, directoryChanges: { ok: true, value: [change("src/A.java")] }, nodes: LIVE_NODES });
+
+  const answer = fact(await queries.ofChange({ ...LIVE_BASE, base: "base", live: true }));
+
+  assert.deepEqual(live.pinnedCopies, [[{ path: "src/A.java", blob: "2" }]]);
+  assert.equal(answer.status === "unknown" && answer.reason, "source-unreadable");
+  assert.equal(answer.snapshot.kind, "live");
+  assert.equal(log.compared.length, 0, "no diff is built from bytes of another state");
 });
 
 test("a live ofChange on a clean tree compares nothing and reads as the same tree on both sides", async () => {
@@ -1593,7 +1607,7 @@ test("a live ofChange on a clean tree compares nothing and reads as the same tre
 
   const answer = fact(await queries.ofChange({ ...LIVE_BASE, base: "base", live: true }));
 
-  assert.deepEqual(live.materialized, [[]]);
+  assert.deepEqual(live.pinnedCopies, [[]]);
   assert.equal(log.compared.length, 1);
   assert.equal(answer.status, "complete");
   assert.deepEqual(answer.status === "complete" && answer.value.changedEntrypoints, []);

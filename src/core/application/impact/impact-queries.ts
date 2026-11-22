@@ -375,10 +375,13 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const wanted = new Set(changed);
         const exportedBase = await vcs.exportCommit(repo, mergeBase, before, { write: (path) => wanted.has(path) }, signal);
         if (!exportedBase.ok) return exportedBase;
-        const copied = await held.deps.live!.mirror.materialize(tree.location, changed, after, signal);
+        const pinnedBlobs = new Map(tree.export.files.filter((file) => file.written).map((file) => [file.path, file.blob]));
+        const pinnedChanges = changed.flatMap((path) => { const blob = pinnedBlobs.get(path); return blob === undefined ? [] : [{ path, blob }]; });
+        const copied = await held.deps.live!.mirror.materializePinned(tree.location, pinnedChanges, after, signal);
         if (!copied.ok) return { ok: false, fault: { kind: "live-mirror-failed", detail: `${copied.fault.kind}: ${copied.fault.detail}` } };
-        const diff = await vcs.diffDirectories(before, after, signal);
         const unreadable = JSON.stringify([mergeBase, head]);
+        if (copied.value.length > 0) return unknownFact(reading.base(unreadable), "source-unreadable");
+        const diff = await vcs.diffDirectories(before, after, signal);
         if (!diff.ok) return diff.fault.kind === "git-failed" ? unknownFact(reading.base(unreadable), "source-unreadable") : diff;
         if (signal?.aborted) return ABORTED;
         const radius = blastRadius(mergeBase, diff.value.filter((file) => selected(file.path)));

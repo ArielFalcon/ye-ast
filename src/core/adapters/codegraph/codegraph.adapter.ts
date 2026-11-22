@@ -102,8 +102,9 @@ export interface CodeGraphOptions {
    */
   imageBytes?: number;
   /**
-   * Opens a mirror's store at a committed store generation as an image read once and kept while it fits these bytes, by
-   * the identity of its database file and that generation; each store keeps only the image of its last generation.
+   * Keeps the image of a mirror's store at a committed store generation while it fits these bytes, by the identity of its
+   * database file and that generation; each store keeps only the image of its last generation. Without it the image is
+   * read at every open and kept by none.
    */
   liveImageBytes?: number;
   /** Ends the long-lived sync workers; without it they end with the host process. */
@@ -112,7 +113,7 @@ export interface CodeGraphOptions {
 
 export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, options: CodeGraphOptions = {}): CodeGraph {
   const images = options.imageBytes === undefined ? undefined : keptGraphImages(options.imageBytes);
-  const liveImages = options.liveImageBytes === undefined ? undefined : keptGraphImages(options.liveImageBytes);
+  const liveImages = keptGraphImages(options.liveImageBytes ?? 0);
   const workers = createSyncWorkers(deps.spawnWorker, options.shutdown);
 
   function openGraph(store: string): Result<{ sdk: Sdk; graph: SdkGraph; versions: StoreVersions }, CodeGraphFault> {
@@ -140,7 +141,7 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, opti
   }
 
   function open(store: string, generation?: string): Result<CodeGraphReader, CodeGraphFault> {
-    if (generation !== undefined && generation !== "" && liveImages !== undefined) return openImage(store, liveImages, generation);
+    if (generation !== undefined && generation !== "") return openImage(store, liveImages, generation);
     if (images !== undefined) return openImage(store, images);
     const opened = openGraph(store);
     return opened.ok ? { ok: true, value: createReader(opened.value.graph, opened.value.versions) } : opened;

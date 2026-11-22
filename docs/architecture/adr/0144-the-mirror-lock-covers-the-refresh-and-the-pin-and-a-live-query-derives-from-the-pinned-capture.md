@@ -77,6 +77,8 @@ refresh:
   for a store reads it, so no query pays a load it did not pay before.
 - An of-change query can answer `unknown` with `source-unreadable` when another process synced one of its changed
   files between its pin and its diff. The window is the of-change derivation; the next query answers the new state.
+- `CodeGraph.open` changed, so the staging rules version moves to 15 and every mirror is rebuilt once, through the index
+  cache when it holds the content (ADR-0129).
 
 ## Not decided here
 

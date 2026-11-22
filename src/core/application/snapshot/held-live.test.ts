@@ -27,7 +27,9 @@ import type { EntrypointReading } from "../../ports/entrypoint-extractor.port.ts
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { SnapshotDataCache } from "./read-snapshot.ts";
 import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
-import { createHeadReader, createHeldLive, withLiveCaptures } from "./head-reading.ts";
+import { createHeadReader, pinHeldLive, withLiveCaptures, type HeadReaderDeps, type HeldLive } from "./head-reading.ts";
+import type { LiveTree } from "../live/live-tree.ts";
+import type { LiveFailure } from "../../ports/live-queries.port.ts";
 import { openLive } from "../live/live-tree.ts";
 import { liveScope } from "../../domain/snapshot/live-export.ts";
 import { pathSelection } from "../../domain/shared/scope.ts";
@@ -140,7 +142,7 @@ function setup(options: Options = {}) {
     angularEngines: {},
     ...(options.exportBudget && { budget: options.exportBudget }),
     ...(options.trust && { trust: options.trust }),
-    ...(options.live && { live: options.live.deps }),
+    ...(options.live && { live: (options.live.storeReader = reader, options.live.deps) }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
@@ -164,6 +166,15 @@ const TRUSTED: TrustRecordReader = { read: async () => ({ ok: true, value: "trus
 const LIVE_BASE = { repo: "/repo", repoId: "repo" } as const;
 const LIVE_NODES = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 1, 3)];
 
+/** Pins a capture of the fake mirror as `withLiveCaptures` does, and runs `use` on it once the lock is released. */
+function withPinned<T>(live: FakeLive, deps: HeadReaderDeps, use: (held: HeldLive, tree: LiveTree) => Promise<T>) {
+  const scope = liveScope();
+  return openLive(live.deps, { repo: "/repo", scope, selected: pathSelection(scope, () => false), store: true }, async (tree, pinned: Result<HeldLive, LiveFailure>) => {
+    assert.ok(pinned.ok, JSON.stringify(pinned));
+    return use(pinned.value, tree);
+  }, (tree) => pinHeldLive({ repo: "/repo", repoId: "repo", head: HEAD, scope, tree, trust: "trusted", deps }));
+}
+
 test("an installed held-live provider with no matching capture fails without reopening", async () => {
   const live = fakeLive({ "src/A.java": "1" });
   const { deps, queries } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES });
@@ -185,16 +196,15 @@ test("held live callers and change reuse one captured tree, head, sources and ex
   const seen: string[] = [];
   let mirrorBytes = "";
   deps.reader.read = async (root, paths) => { if (root === "/index") { log.reads++; seen.push(mirrorBytes); return [{ path: "src/A.java", content: mirrorBytes }]; } return reader(root, paths); };
-  const scope = liveScope();
-  const opened = await openLive(live.deps, { repo: "/repo", scope, selected: pathSelection(scope, () => false), store: true }, async (tree) => {
-    const held = createHeldLive({ repo: "/repo", repoId: "repo", head: HEAD, scope, tree, trust: "trusted", deps });
+  mirrorBytes = live.tree.get("src/A.java")!;
+  const opened = await withPinned(live, deps, async (held, tree) => {
     deps.heldLive = () => held;
-    mirrorBytes = live.tree.get("src/A.java")!;
+    mirrorBytes = "rewritten by a later sync";
     live.tree.set("src/A.java", "changed after capture");
     currentHead = "d".repeat(40);
     const exported = await createHeadReader(deps).atExport({ repo: "/repo", repoId: "repo", live: true }, { declaredConfig: {}, engines: {} }, async (head) => ({ ok: true, value: { ...head.base("export"), status: "complete", value: true } }));
     assert.ok(exported.ok);
-    assert.equal(log.reads, 0);
+    assert.equal(log.reads, 1, "the pin read the sources once, under the lock");
     assert.equal(log.extractions, 0);
     const callers = await queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true });
     assert.ok(callers.ok);
@@ -202,12 +212,13 @@ test("held live callers and change reuse one captured tree, head, sources and ex
     assert.ok(changed.ok);
     assert.deepEqual(callers.value.snapshot, { repo: "repo", kind: "live", head: HEAD, stateId: tree.stateId });
     assert.deepEqual(changed.value.snapshot, callers.value.snapshot);
-    assert.equal(live.held.released, 0);
-    assert.equal(log.closed, 2);
-    assert.deepEqual(live.materialized, [["src/A.java", "src/New.java", "src/Old.java"]]);
+    assert.equal(live.held.released, 1, "both queries derive with the lock released");
+    assert.deepEqual(live.stores, { opened: 1, closed: 0 }, "both readings share the store pinned under the lock");
+    assert.deepEqual(live.pinnedCopies, [[{ path: "src/A.java", blob: "2" }, { path: "src/New.java", blob: "new" }]], "the change copies the pinned blob of each path the pinned export writes");
     return undefined;
   });
   assert.ok(opened.ok);
+  assert.deepEqual(live.stores, { opened: 1, closed: 1 });
   assert.deepEqual(resolved, ["base"]);
   assert.deepEqual(merges, [HEAD]);
   assert.deepEqual(seen, ["2"]);
@@ -218,9 +229,7 @@ test("held live callers and change reuse one captured tree, head, sources and ex
 test("held capture rejects root, identity, scope and reader dependency mismatches without reopening", async () => {
   const live = fakeLive({ "src/A.java": "1" });
   const { deps, queries } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES });
-  const scope = liveScope();
-  const result = await openLive(live.deps, { repo: "/repo", scope, selected: pathSelection(scope, () => false), store: true }, async (tree) => {
-    const held = createHeldLive({ repo: "/repo", repoId: "repo", head: HEAD, scope, tree, trust: "trusted", deps });
+  const result = await withPinned(live, deps, async (held, tree) => {
     for (const invalid of [
       { ...held, repo: "/other" },
       { ...held, repoId: "other" },
@@ -231,7 +240,7 @@ test("held capture rejects root, identity, scope and reader dependency mismatche
       deps.heldLive = () => invalid;
       const answer = await queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true });
       assert.ok(!answer.ok && answer.fault.kind === "live-mirror-failed");
-      assert.deepEqual(live.held, { locks: 1, released: 0 });
+      assert.deepEqual(live.held, { locks: 1, released: 1 });
     }
   });
   assert.ok(result.ok);
@@ -242,9 +251,7 @@ test("a held capture over the content of an earlier one reads nothing, and a cap
   const live = fakeLive({ "src/A.java": "1" });
   const snapshotCache = createSnapshotDataCache(1 << 20);
   const { deps, queries, log } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES, snapshotCache });
-  const scope = liveScope();
-  const capture = (use: (held: ReturnType<typeof createHeldLive>) => Promise<void>) => openLive(live.deps, { repo: "/repo", scope, selected: pathSelection(scope, () => false), store: true }, async (tree) => {
-    const held = createHeldLive({ repo: "/repo", repoId: "repo", head: HEAD, scope, tree, trust: "trusted", deps });
+  const capture = (use: (held: HeldLive) => Promise<void>) => withPinned(live, deps, async (held) => {
     deps.heldLive = () => held;
     await use(held);
   });
@@ -265,46 +272,56 @@ test("a held capture over the content of an earlier one reads nothing, and a cap
   assert.deepEqual([log.reads, log.extractions], [2, 2]);
 });
 
-for (const stage of ["sources", "extraction"] as const) {
-  test(`held live callers retry a rejected ${stage} promise within the same capture`, async () => {
-    const live = fakeLive({ "src/A.java": "1" });
-    const { deps, queries, log } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES });
-    const transient = new Error(`transient ${stage} failure`);
-    let attempts = 0;
-    if (stage === "sources") {
-      const read = deps.reader.read;
-      deps.reader.read = async (...args) => {
-        if (++attempts === 1) throw transient;
-        return read(...args);
-      };
-    } else {
-      const extract = deps.extractor.extract;
-      deps.extractor.extract = async (...args) => {
-        if (++attempts === 1) throw transient;
-        return extract(...args);
-      };
-    }
-    const scope = liveScope();
-    const result = await openLive(live.deps, { repo: "/repo", scope, selected: pathSelection(scope, () => false), store: true }, async (tree) => {
-      const held = createHeldLive({ repo: "/repo", repoId: "repo", head: HEAD, scope, tree, trust: "trusted", deps });
-      deps.heldLive = () => held;
-      const ask = () => queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true });
-      await assert.rejects(ask(), (error) => error === transient);
-      const retry = await ask();
-      assert.ok(retry.ok);
-      assert.deepEqual(retry.value.snapshot, { repo: "repo", kind: "live", head: HEAD, stateId: tree.stateId });
-      assert.ok((await ask()).ok);
-      assert.equal(attempts, 2);
-      assert.equal(log.reads, 1);
-      assert.equal(log.extractions, 1);
-      assert.deepEqual(live.held, { locks: 1, released: 0 });
-    });
-    assert.ok(result.ok);
-    assert.deepEqual(live.held, { locks: 1, released: 1 });
+test("held live callers retry a rejected extraction promise within the same capture", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const { deps, queries, log } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES });
+  const transient = new Error("transient extraction failure");
+  let attempts = 0;
+  const extract = deps.extractor.extract;
+  deps.extractor.extract = async (...args) => {
+    if (++attempts === 1) throw transient;
+    return extract(...args);
+  };
+  const result = await withPinned(live, deps, async (held, tree) => {
+    deps.heldLive = () => held;
+    const ask = () => queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true });
+    await assert.rejects(ask(), (error) => error === transient);
+    const retry = await ask();
+    assert.ok(retry.ok);
+    assert.deepEqual(retry.value.snapshot, { repo: "repo", kind: "live", head: HEAD, stateId: tree.stateId });
+    assert.ok((await ask()).ok);
+    assert.equal(attempts, 2);
+    assert.equal(log.reads, 1);
+    assert.equal(log.extractions, 1);
   });
-}
+  assert.ok(result.ok);
+  assert.deepEqual(live.held, { locks: 1, released: 1 });
+});
 
-test("multiple live captures acquire in root order and release in reverse", async () => {
+test("a pin whose sources cannot be read rejects with the lock released, nothing reads them after release, and the next capture reads them again", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const { deps, log } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES });
+  const transient = new Error("transient read failure");
+  let attempts = 0;
+  const read = deps.reader.read;
+  deps.reader.read = async (...args) => {
+    if (++attempts === 1) throw transient;
+    return read(...args);
+  };
+  let used = false;
+
+  await assert.rejects(withPinned(live, deps, async () => { used = true; }), (error) => error === transient);
+  assert.deepEqual([used, live.held, live.stores], [false, { locks: 1, released: 1 }, { opened: 1, closed: 1 }]);
+
+  const second = await withPinned(live, deps, async (held) => {
+    assert.ok((await held.sources()).ok);
+    assert.ok((await held.sources()).ok);
+  });
+  assert.ok(second.ok);
+  assert.deepEqual([attempts, log.reads], [2, 1]);
+});
+
+test("multiple live captures pin one mirror at a time in root order, and the callback runs with every lock released", async () => {
   const live = fakeLive({ "src/A.java": "1" });
   const { deps } = setup({ live });
   const events: string[] = [];
@@ -318,11 +335,11 @@ test("multiple live captures acquire in root order and release in reverse", asyn
   const selections = ["/b", "/a"].map((repo) => ({ repo, repoId: repo, head: HEAD, scope: liveScope(), trust: "trusted" as const }));
   const result = await withLiveCaptures(deps, selections, undefined, async (captures) => {
     assert.deepEqual([...captures.keys()], ["/a", "/b"]);
-    assert.deepEqual(events, ["lock:/a", "lock:/b"]);
+    assert.deepEqual(events, ["lock:/a", "release:/a", "lock:/b", "release:/b"]);
     return 42;
   });
   assert.ok(result.ok && result.value === 42);
-  assert.deepEqual(events, ["lock:/a", "lock:/b", "release:/b", "release:/a"]);
+  assert.deepEqual(events, ["lock:/a", "release:/a", "lock:/b", "release:/b"]);
 });
 
 test("duplicate roots or identities are rejected before any live lock", async () => {
@@ -355,7 +372,7 @@ function deferred() {
 
 const threeSelections = ["/c", "/b", "/a"].map((repo) => ({ repo, repoId: repo, head: HEAD, scope: liveScope(), trust: "trusted" as const }));
 
-test("later acquisition failure keeps its cause and releases earlier leases in reverse", async () => {
+test("later acquisition failure keeps its cause, and the earlier pins released their locks before it", async () => {
   const live = fakeLive({});
   const { deps } = setup({ live });
   const lock = live.deps.mirror.lock;
@@ -366,11 +383,11 @@ test("later acquisition failure keeps its cause and releases earlier leases in r
   assert.ok(!result.ok);
   assert.equal(result.fault.repoId, "/c");
   assert.deepEqual(result.fault.cause, { kind: "live-mirror-failed", detail: "refused: locked" });
-  assert.deepEqual(events, ["lock:/a", "lock:/b", "lock:/c", "release:/b", "release:/a"]);
+  assert.deepEqual(events, ["lock:/a", "release:/a", "lock:/b", "release:/b", "lock:/c"]);
   assert.deepEqual(live.held, { locks: 2, released: 2 });
 });
 
-test("abort during a later acquisition identifies that repository and unwinds earlier leases", async () => {
+test("abort during a later acquisition identifies that repository, with the earlier locks already released", async () => {
   const live = fakeLive({});
   const { deps } = setup({ live });
   const controller = new AbortController();
@@ -384,11 +401,11 @@ test("abort during a later acquisition identifies that repository and unwinds ea
   assert.ok(!result.ok);
   assert.equal(result.fault.repoId, "/c");
   assert.equal(result.fault.cause.kind, "aborted");
-  assert.deepEqual(events, ["lock:/a", "lock:/b", "lock:/c", "release:/b", "release:/a"]);
+  assert.deepEqual(events, ["lock:/a", "release:/a", "lock:/b", "release:/b", "lock:/c"]);
   assert.deepEqual(live.held, { locks: 2, released: 2 });
 });
 
-test("callback throw and cancellation release all leases in reverse", async () => {
+test("callback throw and cancellation run with every lock released and close every pinned store", async () => {
   for (const cancel of [false, true]) {
     const live = fakeLive({});
     const { deps } = setup({ live });
@@ -398,8 +415,8 @@ test("callback throw and cancellation release all leases in reverse", async () =
     const operation = withLiveCaptures(deps, threeSelections, controller.signal, async () => { if (cancel) { controller.abort(); return 1; } throw error; });
     if (cancel) { const result = await operation; assert.ok(!result.ok && result.fault.cause.kind === "aborted"); }
     else await assert.rejects(operation, (thrown) => thrown === error);
-    assert.deepEqual(events, ["lock:/a", "lock:/b", "lock:/c", "release:/c", "release:/b", "release:/a"]);
-    assert.deepEqual(live.held, { locks: 3, released: 3 });
+    assert.deepEqual(events, ["lock:/a", "release:/a", "lock:/b", "release:/b", "lock:/c", "release:/c"]);
+    assert.deepEqual([live.held, live.stores], [{ locks: 3, released: 3 }, { opened: 3, closed: 3 }]);
   }
 });
 
@@ -422,11 +439,11 @@ test("overlapping operations hold independent capture maps for distinct roots", 
     assert.ok(seen[0]!.get("/a"));
     assert.ok(seen[1]!.get("/b"));
     assert.notEqual(seen[0]!.get("/a"), seen[1]!.get("/b"));
-    assert.deepEqual(live.held, { locks: 2, released: 0 });
+    assert.deepEqual([live.held, live.stores], [{ locks: 2, released: 2 }, { opened: 2, closed: 0 }], "both callbacks derive with no lock held, each on its pinned store");
   } finally { release.resolve(); }
   const results = await Promise.all(operations);
   assert.ok(results.every((result) => result.ok));
-  assert.deepEqual(live.held, { locks: 2, released: 2 });
+  assert.deepEqual([live.held, live.stores], [{ locks: 2, released: 2 }, { opened: 2, closed: 2 }]);
 });
 
 test("input order does not affect capture order", async () => {

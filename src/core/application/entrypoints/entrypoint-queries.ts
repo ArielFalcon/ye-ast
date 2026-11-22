@@ -15,7 +15,7 @@ import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import { heldPaths } from "../navigation/snapshot-files.ts";
 import { scopeNotice } from "../snapshot/scope-selection.ts";
 import type { ScopeFault } from "../../ports/scope-fault.port.ts";
-import { liveSnapshotReaders } from "../snapshot/live-snapshot.ts";
+import { pinLiveSnapshot, type LiveSnapshotReaders } from "../snapshot/live-snapshot.ts";
 
 export interface EntrypointQueriesDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
@@ -46,11 +46,12 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
     const scope = liveScope(requested);
     const selected = pathSelection(scope, deps.matcher.matches);
     const exported = mapReading(scope, deps.matcher.matches);
-    const opened = await openLive(deps.live, { repo, scope, selected: exported, store: false, signal, onStale }, async (tree) => {
+    const opened = await openLive(deps.live, { repo, scope, selected: exported, store: false, signal, onStale }, async (tree, readers: Result<LiveSnapshotReaders, VcsFault>) => {
       const paths = heldPaths(tree.export)?.filter(selected);
       const notice = scopeNotice(scope, deps.matcher.matches, paths);
       if (!notice.ok) return notice;
-      const extracted = await liveSnapshotReaders(deps, { repo, scope, trust, root: tree.root, export: tree.export }).extract(signal);
+      if (!readers.ok) return readers;
+      const extracted = await readers.value.extract(signal);
       if (!extracted.ok) return extracted;
       const base = {
         ...factBaseOf(deps, { repoId, sha: head.value, trust, scope, content: contentFingerprint(extracted.value.export), declaredConfig: {}, engines: deps.engines }),
@@ -59,7 +60,7 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
       };
       const map: Result<EntrypointMapFact, VcsFault> = { ok: true, value: scopedMap(base, extracted.value, selected) };
       return map;
-    });
+    }, (tree) => pinLiveSnapshot(deps, { repo, scope, trust, root: tree.root, export: tree.export }, undefined, signal));
     return opened.ok ? opened.value : { ok: false, fault: asFault(opened.fault) };
   }
 

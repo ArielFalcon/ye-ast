@@ -26,7 +26,7 @@ export class OrderApi {
 function write(repo: string, path: string, content: string) { mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), content); }
 function git(repo: string, ...args: string[]) { return execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim(); }
 
-test("workspace change analysis uses both held live captures after originals move", { timeout: 120_000 }, async (context) => {
+test("workspace change analysis derives from both pinned live captures, with no lock held, after originals move", { timeout: 120_000 }, async (context) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "ye-ast-real-captures-")));
   const web = join(dir, "web"); const orders = join(dir, "orders"); const scratch = join(dir, "scratch");
   const abort = new AbortController();
@@ -49,8 +49,9 @@ test("workspace change analysis uses both held live captures after originals mov
     const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
     const remotes = fixture.vcs.remotes;
     let armed = true;
+    const pinned = (root: string) => fixture.reads.some((read) => read.root.startsWith(`${root}/.ye-ast-graph/live/`));
     fixture.vcs.remotes = async (repo, signal) => {
-      if (armed && fixture.active.size === 2) {
+      if (armed && pinned(web) && pinned(orders)) {
         armed = false; fixture.guard(); enterGate();
         await Promise.race([gate, new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }))]);
       }
@@ -59,8 +60,8 @@ test("workspace change analysis uses both held live captures after originals mov
     const request = { repo: { path: web, id: "web", live: true as const }, repos: [{ path: orders, id: "orders", live: true as const }], base: "HEAD", changed: [tsPath], budget: { depth: 1 }, signal: abort.signal };
     const running = fixture.impact.ofChange(request); pending = running;
     await Promise.race([entered, running.then((result) => { throw new Error(`query settled before gate: ${JSON.stringify(result)}`); })]);
-    assert.deepEqual([...fixture.active].sort(), [orders, web].sort());
-    assert.equal(fixture.reads.length, 0);
+    assert.deepEqual([...fixture.active], [], "the derivation runs with no mirror lock held");
+    assert.equal(fixture.reads.length, 2, "each capture read its sources once, at its pin");
     assert.equal(fixture.extracted.length, 0);
     assert.equal(fixture.discoveries.length, 0);
     write(web, tsPath, consumer("after", "after-marker")); write(orders, javaPath, controller("after"));
