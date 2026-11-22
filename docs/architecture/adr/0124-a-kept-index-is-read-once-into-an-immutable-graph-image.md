@@ -6,6 +6,8 @@
   The targets it serves (translated): "Times must sit between a few hundred milliseconds and, for the most critical
   jobs, 3-5 s in specific cases; the p75 should be below 1 s [...] without sacrificing functionality and quality."
 - Amends: [RFC-0003](../rfc/0003-codegraph-integration.md) "Access: SDK first, raw SQL remainder"
+- Amended by: [ADR-0125](0125-a-live-store-is-read-into-a-graph-image-named-by-its-committed-store-generation.md)
+  (decision 4: a live store is read into an image named by its committed store generation)
 - Related: [RFC-0040](../rfc/0040-resident-generations-and-answer-latency.md) §2 M1, §3.2, §5;
   [ADR-0015](0015-index-reuse-by-content.md), [ADR-0027](0027-retention-of-immutable-index-entries.md)
 

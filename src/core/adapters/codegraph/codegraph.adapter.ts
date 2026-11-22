@@ -18,6 +18,7 @@ import {
   type IndexSummary,
   type MirrorSyncSummary,
   type StoreVersions,
+  type SyncGenerations,
 } from "../../ports/code-graph.port.ts";
 import { listMirror, storedFiles, unindexedFiles, type StoredFiles } from "./mirror-files.ts";
 import { removeStaged, stageSnapshot } from "./stage-snapshot.ts";
@@ -100,12 +101,18 @@ export interface CodeGraphOptions {
    * Only for stores nothing writes after they are built, such as the kept indexes of the index cache.
    */
   imageBytes?: number;
+  /**
+   * Opens a mirror's store at a committed store generation as an image read once and kept while it fits these bytes, by
+   * the identity of its database file and that generation; each store keeps only the image of its last generation.
+   */
+  liveImageBytes?: number;
   /** Ends the long-lived sync workers; without it they end with the host process. */
   shutdown?: AbortSignal | undefined;
 }
 
 export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, options: CodeGraphOptions = {}): CodeGraph {
   const images = options.imageBytes === undefined ? undefined : keptGraphImages(options.imageBytes);
+  const liveImages = options.liveImageBytes === undefined ? undefined : keptGraphImages(options.liveImageBytes);
   const workers = createSyncWorkers(deps.spawnWorker, options.shutdown);
 
   function openGraph(store: string): Result<{ sdk: Sdk; graph: SdkGraph; versions: StoreVersions }, CodeGraphFault> {
@@ -132,13 +139,18 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, opti
     }
   }
 
-  function open(store: string): Result<CodeGraphReader, CodeGraphFault> {
+  function open(store: string, generation?: string): Result<CodeGraphReader, CodeGraphFault> {
+    if (generation !== undefined && generation !== "" && liveImages !== undefined) return openImage(store, liveImages, generation);
     if (images !== undefined) return openImage(store, images);
     const opened = openGraph(store);
     return opened.ok ? { ok: true, value: createReader(opened.value.graph, opened.value.versions) } : opened;
   }
 
-  function openImage(store: string, images: GraphImages): Result<CodeGraphReader, CodeGraphFault> {
+  /**
+   * The store's image, kept by its database file's identity; a `generation` keeps one image per database file instead,
+   * named by the file's place and that generation, since a store synced in place keeps its inode and may keep its size.
+   */
+  function openImage(store: string, images: GraphImages, generation?: string): Result<CodeGraphReader, CodeGraphFault> {
     const bundle = deps.resolveBundle();
     if (bundle === null) return platformPackageMissing();
     try {
@@ -156,8 +168,9 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, opti
         }
       };
       const file = statSync(database, { throwIfNoEntry: false });
-      const image = file === undefined ? load() : images.obtain([database, file.dev, file.ino, file.size, file.mtimeMs, file.ctimeMs].join("\0"), load);
-      return { ok: true, value: image.reader() };
+      if (file === undefined) return { ok: true, value: load().reader() };
+      const identity = generation === undefined ? [database, file.dev, file.ino, file.size, file.mtimeMs, file.ctimeMs] : [database, file.dev, file.ino, generation];
+      return { ok: true, value: images.obtain(identity.join("\0"), load, generation === undefined ? undefined : database).reader() };
     } catch (error) {
       if (error instanceof UnopenedStoreError) return { ok: false, fault: error.fault };
       return fault("store-unreadable", errorDetail(error));
@@ -211,14 +224,14 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, opti
     return { ok: true, value: { filesIndexed, filesSkipped, filesErrored, filesNotIndexed, versions } };
   }
 
-  async function syncMirror(mirror: string, paths: readonly string[], signal?: AbortSignal): Promise<Result<MirrorSyncSummary, CodeGraphFault>> {
+  async function syncMirror(mirror: string, paths: readonly string[], signal?: AbortSignal, generations?: SyncGenerations): Promise<Result<MirrorSyncSummary, CodeGraphFault>> {
     if (paths.length === 0) return fault("index-failed", "a mirror sync needs at least one path");
     if (signal?.aborted) return ABORTED;
     const bundle = deps.resolveBundle();
     if (bundle === null) return platformPackageMissing();
     const root = resolve(mirror);
     const launch = async () => ({ command: process.execPath, args: ["--liftoff-only", WORKER_SCRIPT, bundle, root], env: await indexerEnvironment(deps.environment, root) });
-    const answered = await workers.sync(root, paths, launch, signal);
+    const answered = await workers.sync(root, paths, launch, signal, generations);
     if (answered === "aborted") return ABORTED;
     return answered === null ? syncOnce(root, bundle, paths, signal) : fromWorker(answered);
   }

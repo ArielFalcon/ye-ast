@@ -1,4 +1,4 @@
-import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary, MirrorSyncSummary } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphFault, IndexSummary, MirrorSyncSummary, SyncGenerations } from "../../ports/code-graph.port.ts";
 import type { MirrorEntry, MirrorFault, MirrorState, MirrorUsage, MirrorVersions, LiveMirror, MirrorLocation } from "../../ports/live-mirror.port.ts";
 import type { SkippedEntry } from "../../ports/vcs.port.ts";
 import type { WorkingTree } from "../../ports/working-tree.port.ts";
@@ -46,6 +46,10 @@ export interface FakeLive {
   openable: { value: boolean };
   /** Readers the engine opened and closed. */
   stores: { opened: number; closed: number };
+  /** The store generation each `open` named, in call order; `undefined` when it named none. */
+  openedAt: (string | undefined)[];
+  /** The generations each `syncMirror` was handed, in call order. */
+  syncGenerations: (SyncGenerations | undefined)[];
   engine: {
     build: Result<IndexSummary, CodeGraphFault>;
     sync: Result<MirrorSyncSummary, CodeGraphFault>;
@@ -77,6 +81,8 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     touches: 0,
     openable: { value: true },
     stores: { opened: 0, closed: 0 },
+    openedAt: [],
+    syncGenerations: [],
     engine: {
       build: { ok: true, value: SUMMARY },
       sync: { ok: true, value: { ...SUMMARY, filesFailed: [], filesUnparsed: [] } },
@@ -86,6 +92,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     },
     deps: undefined as unknown as LiveDeps,
   };
+  let generations = 0;
   const entryOf = (path: string, blob: string): MirrorEntry => ({ path, size: blob.length, mtimeNs: blob, ctimeNs: blob, ino: "1", blob });
 
   const workingTree: WorkingTree = {
@@ -171,18 +178,20 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.builds++;
       return fake.engine.build;
     },
-    syncMirror: async (mirrorRoot, paths) => {
+    syncMirror: async (mirrorRoot, paths, _signal, generations) => {
       fake.calls.push("syncMirror");
+      fake.syncGenerations.push(generations);
       fake.synced.push(mirrorRoot);
       fake.syncs.push([...paths]);
       return fake.engine.sync;
     },
-    open: (() => {
+    open: ((_store: string, generation?: string) => {
       if (!fake.openable.value) return { ok: false, fault: { kind: "store-unreadable", detail: "the store cannot be opened" } };
       fake.stores.opened++;
+      fake.openedAt.push(generation);
       return { ok: true, value: { close: () => void fake.stores.closed++ } };
     }) as CodeGraph["open"],
   };
-  fake.deps = { workingTree, mirror, graph, digest, versions: VERSIONS, retention: RETENTION, now: () => NOW };
+  fake.deps = { workingTree, mirror, graph, digest, versions: VERSIONS, retention: RETENTION, now: () => NOW, newStoreGeneration: () => `generation-${++generations}` };
   return fake;
 }

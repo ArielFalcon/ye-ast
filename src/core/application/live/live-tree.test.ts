@@ -391,9 +391,70 @@ test("a reader nobody takes is closed before the query returns, whatever the ans
   const rebuilt = await query(fake, { synthesized: true }, async (tree) => { handed = tree.takeStore?.(); return undefined; });
 
   assert.ok(rebuilt.ok);
-  assert.equal(handed, undefined, "a reader opened before a build is not handed over");
+  assert.ok(handed !== undefined, "the store the rebuild committed is handed over");
   assert.equal(fake.builds, 2);
-  assert.deepEqual(fake.stores, { opened: 3, closed: 3 });
+  assert.deepEqual(fake.stores, { opened: 4, closed: 3 }, "the reader opened before the build is closed, and the one handed over is opened after it");
+  assert.equal(fake.openedAt.at(-1), fake.state.current?.storeGeneration);
+});
+
+/** Runs a query that takes the store, and answers its stateId, the generation it committed and the one it opened the store at. */
+async function generationOf(fake: FakeLive, options: { store?: boolean; synthesized?: boolean } = {}): Promise<{ stateId: string; committed: string | undefined; opened: (string | undefined)[] }> {
+  const before = fake.openedAt.length;
+  const answered = await query(fake, options, async (tree) => {
+    tree.takeStore?.();
+    return tree.stateId;
+  });
+  assert.ok(answered.ok, JSON.stringify(answered));
+  return { stateId: answered.value as string, committed: fake.state.current?.storeGeneration, opened: fake.openedAt.slice(before) };
+}
+
+test("every committed build or sync commits a new store generation, a full rebuild at an unchanged stateId too, and the answer reads the store at it", async () => {
+  const fake = fakeLive({ "src/a.component.ts": "1", "src/a.component.html": "1" });
+  const built = await generationOf(fake);
+  fake.tree.set("src/a.component.html", "2");
+  fake.engine.sync = { ok: true, value: { ...(fake.engine.sync.ok ? fake.engine.sync.value : (undefined as never)), filesUnparsed: ["src/a.component.html"] } };
+  const synced = await generationOf(fake);
+  const rebuilt = await generationOf(fake, { synthesized: true });
+  const unchanged = await generationOf(fake);
+
+  assert.equal(rebuilt.stateId, synced.stateId, "the rebuild keeps the stateId");
+  assert.equal(fake.builds, 2);
+  const committed = [built, synced, rebuilt].map(({ committed }) => committed);
+  assert.ok(committed.every((generation) => generation !== undefined && generation !== ""));
+  assert.equal(new Set(committed).size, 3);
+  assert.deepEqual([built, synced, rebuilt].map(({ opened }) => opened.at(-1)), committed, "the store handed over is read at the generation just committed");
+  assert.deepEqual([unchanged.committed, unchanged.opened], [rebuilt.committed, [rebuilt.committed]], "an unchanged store keeps its generation");
+});
+
+test("a refresh clears the generation while it writes the store and hands the worker the one committed before, and never opens the store at a generation while paths are pending", async () => {
+  const fake = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
+  const first = (await generationOf(fake)).committed!;
+  const written: [readonly string[], string][] = [];
+  const write = fake.deps.mirror.writeState;
+  fake.deps.mirror.writeState = (location, state) => {
+    written.push([state.pending, state.storeGeneration]);
+    return write(location, state);
+  };
+
+  fake.tree.set("src/A.java", "2");
+  const second = await generationOf(fake);
+  assert.deepEqual(written, [[["src/A.java"], ""], [[], second.committed]]);
+
+  fake.tree.set("src/B.java", "2");
+  const copied = await generationOf(fake, { store: false });
+  assert.deepEqual([fake.state.current?.pending, copied.committed, copied.opened], [["src/B.java"], second.committed, []], "copying files keeps the generation of the store it left alone");
+  const third = await generationOf(fake);
+  assert.deepEqual(third.opened, [third.committed]);
+
+  fake.state.current = { ...fake.state.current!, pending: ["src/A.java"], storeGeneration: "" };
+  const recovered = await generationOf(fake);
+
+  assert.deepEqual(fake.syncGenerations, [
+    { held: first, next: second.committed },
+    { held: second.committed, next: third.committed },
+    { held: "", next: recovered.committed },
+  ]);
+  assert.deepEqual(recovered.opened, [recovered.committed]);
 });
 
 test("every successful refresh touches the state, including one that writes nothing", async () => {
