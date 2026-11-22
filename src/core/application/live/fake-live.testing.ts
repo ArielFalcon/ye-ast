@@ -1,5 +1,5 @@
 import type { CodeGraph, CodeGraphFault, IndexSummary, MirrorSyncSummary, SyncGenerations } from "../../ports/code-graph.port.ts";
-import type { MirrorEntry, MirrorFault, MirrorState, MirrorUsage, MirrorVersions, LiveMirror, MirrorLocation } from "../../ports/live-mirror.port.ts";
+import type { IndexTreeDeviation, MirrorEntry, MirrorFault, MirrorState, MirrorUsage, MirrorVersions, LiveMirror, MirrorLocation } from "../../ports/live-mirror.port.ts";
 import type { SkippedEntry } from "../../ports/vcs.port.ts";
 import type { WorkingTree } from "../../ports/working-tree.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -30,6 +30,8 @@ export interface FakeLive {
   staged: string[][];
   /** Paths each `prune` was asked to remove from the index tree, in call order. */
   pruned: string[][];
+  /** The written files each `verifyIndexTree` was handed, in call order. */
+  verified: { path: string; blob: string }[][];
   /** Roots each build and each sync was told to index, in call order. */
   built: string[];
   synced: string[];
@@ -60,6 +62,8 @@ export interface FakeLive {
     /** What the retention sweep reads; set it between queries. */
     usage: Result<MirrorUsage, MirrorFault>;
     touch: Result<void, MirrorFault>;
+    /** What `verifyIndexTree` finds; an exact tree by default. */
+    verify: Result<IndexTreeDeviation, MirrorFault>;
   };
 }
 
@@ -74,6 +78,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     materialized: [],
     staged: [],
     pruned: [],
+    verified: [],
     built: [],
     synced: [],
     adopted: [],
@@ -94,6 +99,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       lock: { ok: true, value: undefined },
       usage: { ok: true, value: { scopes: [], debris: [] } },
       touch: { ok: true, value: undefined },
+      verify: { ok: true, value: { missing: [], foreign: [] } },
     },
     deps: undefined as unknown as LiveDeps,
   };
@@ -142,6 +148,11 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       if (destination === "/index") fake.staged.push([...paths]);
       else fake.materialized.push([...paths]);
       return { ok: true, value: undefined };
+    },
+    verifyIndexTree: async (_location, files) => {
+      fake.calls.push("verifyIndexTree");
+      fake.verified.push(files.map(({ path, blob }) => ({ path, blob })));
+      return fake.engine.verify;
     },
     prune: async (_location, paths) => {
       fake.calls.push("prune");

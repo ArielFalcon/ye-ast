@@ -108,6 +108,7 @@ export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): L
     changedSince: "live-staleness-compare",
     materialize: "live-materialize",
     prune: "live-prune",
+    verifyIndexTree: "live-verify-index-tree",
     touch: "live-touch",
     usage: "live-usage",
     discardIfIdle: "live-discard-idle",

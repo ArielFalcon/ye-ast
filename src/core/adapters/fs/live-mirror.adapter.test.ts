@@ -831,3 +831,45 @@ test("changedSince answers aborted when its signal is aborted", async () => {
 
   assert.equal(faultKind(await mirror.changedSince(location, listed("a.ts"), first, controller.signal)), "aborted");
 });
+
+test("verifyIndexTree rehashes what the index tree holds: a foreign, an altered or a linked file and a missing one depart, and what staging leaves out never does", async () => {
+  const { repo, location } = await fresh();
+  await mkdir(join(repo, "src"), { recursive: true });
+  for (const name of ["a", "b", "c", "d"]) await writeFile(join(repo, "src", `${name}.ts`), name.repeat(4));
+  const mirror = createLiveMirror();
+  const { manifest } = ok(await mirror.reconcile(location, listed("src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"), []));
+  const files = manifest.map(({ path, blob }) => ({ path, blob }));
+  const root = mirror.indexRoot(location);
+  ok(await mirror.materialize(location, ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"], root));
+  await mkdir(join(root, ".ye-ast-graph"), { recursive: true });
+  await writeFile(join(root, ".ye-ast-graph", "store.db"), "engine");
+  await symlink(join(root, ".ye-ast-graph", "store.db"), join(root, ".ye-ast-graph", "store.db-wal"));
+  await writeFile(join(root, "src", ".gitignore"), "*");
+
+  assert.deepEqual(ok(await mirror.verifyIndexTree(location, files)), { missing: [], foreign: [] }, "an exact tree, with the store and a .gitignore beside it");
+
+  await writeFile(join(root, "src", "planted.ts"), "planted");
+  await writeFile(join(root, "src", "b.ts"), "BBBB");
+  await rm(join(root, "src", "c.ts"));
+  await rm(join(root, "src", "d.ts"));
+  await symlink(join(repo, "src", "d.ts"), join(root, "src", "d.ts"));
+
+  assert.deepEqual(ok(await mirror.verifyIndexTree(location, files)), { missing: ["src/c.ts", "src/d.ts"], foreign: ["src/b.ts", "src/d.ts", "src/planted.ts"] });
+});
+
+test("verifyIndexTree of a mirror without an index tree names every file missing, and refuses a linked index tree", async () => {
+  const { repo, location } = await fresh();
+  const mirror = createLiveMirror();
+  const files = [{ path: "a.ts", blob: "0" }];
+
+  assert.deepEqual(ok(await mirror.verifyIndexTree(location, files)), { missing: ["a.ts"], foreign: [] });
+
+  await writeFile(join(repo, "a.ts"), "a");
+  ok(await mirror.reconcile(location, listed("a.ts"), []));
+  const elsewhere = join(repo, "..", "elsewhere");
+  await mkdir(elsewhere, { recursive: true });
+  await mkdir(join(mirror.root(location), ".ye-ast-graph"), { recursive: true, mode: 0o700 });
+  await symlink(elsewhere, mirror.indexRoot(location));
+
+  assert.equal(faultKind(await mirror.verifyIndexTree(location, files)), "refused");
+});

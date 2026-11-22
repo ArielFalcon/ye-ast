@@ -249,7 +249,8 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
 
   // The store's universe is the export's written set, never the listing: a test file the export does not write must not
   // reach the engine, or the live answer would diverge from the commit's (RFC-0010 "The mirror").
-  const written = exported.files.filter((file) => file.written).map((file) => file.path);
+  const writtenFiles = exported.files.filter((file) => file.written);
+  const written = writtenFiles.map((file) => file.path);
   const writtenSet = new Set(written);
   const held = state?.indexed ?? [];
   let staging = sorted([...(state?.pending ?? []), ...changed].filter((path) => writtenSet.has(path)));
@@ -325,7 +326,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   let notHeld: readonly string[];
   let unparsed: readonly string[] = [];
   if (needsBuild) {
-    const built = await buildInFull(deps, indexRoot, stateId, signal);
+    const built = await buildInFull(deps, location, writtenFiles, stateId, signal);
     if (!built.ok) return unavailable(built.fault.detail);
     notHeld = built.value.filesNotIndexed;
   } else {
@@ -336,7 +337,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     if (synced.ok && !staleForAnswer) {
       notHeld = sorted([...synced.value.filesNotIndexed, ...synced.value.filesFailed]);
     } else {
-      const rebuilt = await buildInFull(deps, indexRoot, stateId, signal);
+      const rebuilt = await buildInFull(deps, location, writtenFiles, stateId, signal);
       if (!rebuilt.ok) return unavailable(rebuilt.fault.detail);
       notHeld = rebuilt.value.filesNotIndexed;
       full = true;
@@ -352,13 +353,21 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
 /**
  * Builds the index tree's store in full. With an index cache it is the kept index of the tree's content, built and
  * published there as a commit's is when absent, then copied into the mirror; a sync-derived store never reaches the cache.
- * A cache or a copy that fails builds the mirror in place, unpublished (ADR-0129).
+ * The tree is published only once it is shown to hold exactly the written files, byte for byte, since it sits inside
+ * the repository and its recorded state is only a claim. A tree that departs from them, a check, a cache or a copy that
+ * fails builds the mirror in place, unpublished, and a written file the tree lacks is one the store does not hold (ADR-0129).
  */
-async function buildInFull(deps: LiveDeps, indexRoot: string, stateId: string, signal: AbortSignal | undefined): Promise<Result<IndexSummary, CodeGraphFault>> {
+async function buildInFull(deps: LiveDeps, location: MirrorLocation, writtenFiles: readonly { path: string; blob: string }[], stateId: string, signal: AbortSignal | undefined): Promise<Result<IndexSummary, CodeGraphFault>> {
+  const indexRoot = deps.mirror.indexRoot(location);
+  let missing: readonly string[] = [];
   if (deps.indexes !== undefined) {
-    const kept = await deps.indexes.obtain({ content: stateId, snapshot: indexRoot, signal });
-    if (!kept.ok && kept.fault.kind === "aborted") return kept;
-    if (kept.ok) {
+    const checked = await deps.mirror.verifyIndexTree(location, writtenFiles, signal);
+    if (!checked.ok && checked.fault.kind === "aborted") return { ok: false, fault: { kind: "aborted", detail: checked.fault.detail } };
+    if (checked.ok) missing = checked.value.missing;
+    const exact = checked.ok && missing.length === 0 && checked.value.foreign.length === 0;
+    const kept = exact ? await deps.indexes.obtain({ content: stateId, snapshot: indexRoot, signal }) : undefined;
+    if (kept !== undefined && !kept.ok && kept.fault.kind === "aborted") return kept;
+    if (kept?.ok) {
       try {
         const adopted = await deps.graph.adoptMirror(indexRoot, kept.value.directory, signal);
         if (adopted.ok || adopted.fault.kind === "aborted") return adopted;
@@ -367,7 +376,8 @@ async function buildInFull(deps: LiveDeps, indexRoot: string, stateId: string, s
       }
     }
   }
-  return deps.graph.buildMirror(indexRoot, signal);
+  const built = await deps.graph.buildMirror(indexRoot, signal);
+  return built.ok && missing.length > 0 ? { ok: true, value: { ...built.value, filesNotIndexed: sorted([...built.value.filesNotIndexed, ...missing]) } } : built;
 }
 
 /** The fault a query answers for a failed live open, with an unfinished refresh as `aborted` for the families that have no `unknown` to answer. */

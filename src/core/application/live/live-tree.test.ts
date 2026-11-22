@@ -744,3 +744,50 @@ test("a path a crashed refresh copied into the index tree and the export no long
   assert.deepEqual(fake.pruned, [["src/Gone.java"]]);
   assert.deepEqual(fake.state.current?.pending, []);
 });
+
+test("a full build publishes the index tree only when it holds exactly the written files; one that departs or cannot be checked is built in place, unpublished, and a written file it lacks is not held", async () => {
+  const cases: { name: string; verify: FakeLive["engine"]["verify"]; obtained: number; builds: number; notHeld?: string[]; answered: boolean }[] = [
+    { name: "exact", verify: { ok: true, value: { missing: [], foreign: [] } }, obtained: 1, builds: 0, answered: true },
+    { name: "foreign file", verify: { ok: true, value: { missing: [], foreign: ["src/Planted.java"] } }, obtained: 0, builds: 1, notHeld: [], answered: true },
+    { name: "missing file", verify: { ok: true, value: { missing: ["src/B.java"], foreign: [] } }, obtained: 0, builds: 1, notHeld: ["src/B.java"], answered: true },
+    { name: "unreadable tree", verify: { ok: false, fault: { kind: "unreadable", detail: "cannot read" } }, obtained: 0, builds: 1, notHeld: [], answered: true },
+    { name: "aborted check", verify: { ok: false, fault: { kind: "aborted", detail: "aborted" } }, obtained: 0, builds: 0, answered: false },
+  ];
+  for (const { name, verify, obtained, builds, notHeld, answered } of cases) {
+    const fake = fakeLive({ "src/A.java": "1", "src/B.java": "2", "src/A.spec.ts": "3" });
+    const kept = withIndexes(fake);
+    fake.engine.verify = verify;
+
+    const outcome = await query(fake);
+
+    assert.equal(outcome.ok, answered, name);
+    assert.deepEqual(fake.verified, [[{ path: "src/A.java", blob: "1" }, { path: "src/B.java", blob: "2" }]], `${name}: the written files and their blobs are checked`);
+    assert.equal(kept.obtained.length, obtained, name);
+    assert.equal(fake.builds, builds, name);
+    if (notHeld !== undefined) assert.deepEqual(fake.state.current?.notHeld, notHeld, name);
+  }
+});
+
+test("a full build over a tree no staging refreshed is checked too: a planted state that names every written file, or a state whose store cannot be opened", async () => {
+  const planted = fakeLive({ "src/A.java": "1" });
+  const plantedKept = withIndexes(planted);
+  await tree(planted);
+  planted.state.current = { ...planted.state.current!, fullBuildStateId: "", storeGeneration: "" };
+  const unreadable = fakeLive({ "src/A.java": "1" });
+  const unreadableKept = withIndexes(unreadable);
+  await tree(unreadable);
+  unreadable.openable.value = false;
+
+  for (const [name, fake, kept] of [["planted state", planted, plantedKept], ["unreadable store", unreadable, unreadableKept]] as const) {
+    fake.engine.verify = { ok: true, value: { missing: [], foreign: ["src/Planted.java"] } };
+    fake.staged.length = 0;
+    fake.verified.length = 0;
+
+    await tree(fake);
+
+    assert.equal(fake.verified.length, 1, name);
+    assert.equal(kept.obtained.length, 1, `${name}: only the first, exact build was published`);
+    assert.equal(fake.builds, 1, `${name}: built in place`);
+  }
+  assert.deepEqual(planted.staged, [], "the planted state staged nothing");
+});
