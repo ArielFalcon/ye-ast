@@ -300,3 +300,33 @@ test("a derivation of a slot with no version, and one that throws, are never sto
   await assert.rejects(viewOver(disk).ofReads("slot", { path: "a" }, () => "[]", async (record) => { record("q", "[]"); throw new Error("cut"); }));
   assert.deepEqual([...disk.store.entries], []);
 });
+
+test("a kept fact is frozen whether it was found or derived, and a hit decodes nothing", async (t) => {
+  const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
+  const derived = facts.ofFile("slot", FILE, () => ({ starts: [3, 1] }));
+  const read = await facts.ofReads("reads", { path: "a" }, () => undefined, async () => ({ names: ["b"] }));
+  const parse = t.mock.method(JSON, "parse");
+
+  const found = facts.ofFile("slot", FILE, () => ({ starts: [] }));
+  const readAgain = await facts.ofReads("reads", { path: "a" }, () => undefined, async () => ({ names: [] }));
+
+  assert.equal(parse.mock.callCount(), 0);
+  assert.equal(found, derived);
+  assert.equal(readAgain, read);
+  assert.throws(() => derived.starts.sort(), TypeError);
+  assert.throws(() => read.names.push("c"), TypeError);
+});
+
+test("a file read from a listing is named by its blob id, never by its content, and never equals a file named by content", (t) => {
+  const named = t.mock.fn(digest.of);
+  const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), { of: named }, "untrusted");
+  const { derive, derived } = counting({ starts: [1] });
+
+  facts.ofFile("slot", { ...FILE, blob: "b1" }, derive);
+  facts.ofFile("slot", { path: FILE.path, content: "another reading of the same blob", blob: "b1" }, derive);
+  facts.ofFile("slot", { ...FILE, blob: "b2" }, derive);
+  facts.ofFile("slot", { path: FILE.path, content: "b1" }, derive);
+
+  assert.equal(derived(), 3);
+  assert.equal(named.mock.calls.filter(({ arguments: [text] }) => text.includes("another reading")).length, 0);
+});

@@ -1,3 +1,4 @@
+import { frozenValue } from "../../domain/shared/frozen-value.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { SCHEMA, type TrustMode } from "../../domain/shared/fact.ts";
 import type { DerivedFactDisk } from "../../ports/derived-fact-store.port.ts";
@@ -27,17 +28,27 @@ interface Address {
 
 /**
  * The derived facts of one snapshot read under `trust`, kept in the snapshot data cache (ADR-0035) and, for a slot that
- * `disk` gives a version, in its store across processes (ADR-0077). An input that is a file's content is named by its digest.
+ * `disk` gives a version, in its store across processes (ADR-0077). In memory a file is named by its path and blob id,
+ * or by the digest of its content when no listing named it; on disk always by the digest of its content (ADR-0126).
+ * Every value answered is frozen.
  */
 export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, trust: TrustMode, disk?: DerivedFactDisk): DerivedFacts {
   const contentDigests = new WeakMap<SourceFile, string>();
+  const contentOf = (file: SourceFile): string => {
+    let content = contentDigests.get(file);
+    if (content === undefined) {
+      content = digest.of(file.content);
+      contentDigests.set(file, content);
+    }
+    return content;
+  };
   let tally = { ...NO_COUNTS };
-  const addressOf = (slot: string, inputs: object): Address => {
+  const addressOf = (slot: string, inputs: object, diskInputs: () => object = () => inputs): Address => {
     const version = disk?.versions[slot];
     let named: { key: string | undefined } | undefined;
     return {
       key: digest.of(canonicalJson({ schema: SCHEMA, fact: slot, trust, inputs })),
-      diskKey: () => (named ??= { key: version === undefined ? undefined : digest.of(canonicalJson({ schema: SCHEMA, fact: slot, version, inputs })) }).key,
+      diskKey: () => (named ??= { key: version === undefined ? undefined : digest.of(canonicalJson({ schema: SCHEMA, fact: slot, version, inputs: diskInputs() })) }).key,
     };
   };
   const admit = (key: string, json: string): unknown => {
@@ -46,7 +57,7 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     tally.admittedBytes += admission.admitted ? admission.entryBytes : 0;
     tally.skipped += admission.admitted ? 0 : 1;
     tally.evicted += admission.evicted;
-    return JSON.parse(json);
+    return admission.value;
   };
   const named = (answer: string): string => (answer.length > MAX_INLINE_ANSWER ? digest.of(answer) : answer);
   const storedJson = ({ diskKey: diskKeyOf }: Address): string | undefined => {
@@ -77,12 +88,8 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
   };
   return {
     ofFile(slot, file, derive) {
-      let content = contentDigests.get(file);
-      if (content === undefined) {
-        content = digest.of(file.content);
-        contentDigests.set(file, content);
-      }
-      const address = addressOf(slot, { path: file.path, content });
+      const byContent = (): object => ({ path: file.path, content: contentOf(file) });
+      const address = file.blob === undefined ? addressOf(slot, byContent()) : addressOf(slot, { path: file.path, blob: file.blob }, byContent);
       const value = kept(address);
       return value === undefined ? keep(address, derive()) : (value as ReturnType<typeof derive>);
     },
@@ -99,14 +106,12 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
       });
       const inMemory = cache.getFact(address.key) as ReadsEntry | undefined;
       const stored = inMemory === undefined ? storedJson(address) : undefined;
-      const entry = inMemory ?? (stored === undefined ? undefined : (JSON.parse(stored) as ReadsEntry));
+      const entry = inMemory ?? (stored === undefined ? undefined : (frozenValue(stored) as ReadsEntry));
       if (entry !== undefined && stillHolds(entry)) {
         tally.hits++;
-        if (stored !== undefined) {
-          tally.diskHits++;
-          admit(address.key, stored);
-        }
-        return entry.value as Awaited<ReturnType<typeof derive>>;
+        if (stored === undefined) return entry.value as Awaited<ReturnType<typeof derive>>;
+        tally.diskHits++;
+        return (admit(address.key, stored) as ReadsEntry).value as Awaited<ReturnType<typeof derive>>;
       }
       tally.misses++;
       const reads = new Map<string, string>();

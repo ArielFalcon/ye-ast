@@ -1,6 +1,7 @@
+import { frozenValue } from "../../domain/shared/frozen-value.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 
-/** Derived facts in memory, recording each derivation as `slot` or `slot path`. */
+/** Derived facts in memory, frozen as the snapshot data cache answers them (ADR-0126), recording each derivation as `slot` or `slot path`. */
 export function rememberingFacts(): DerivedFacts & { derived: string[] } {
   const kept = new Map<string, string>();
   const derived: string[] = [];
@@ -12,7 +13,7 @@ export function rememberingFacts(): DerivedFacts & { derived: string[] } {
         derived.push(`${slot} ${file.path}`);
         kept.set(key, JSON.stringify(derive()));
       }
-      return JSON.parse(kept.get(key)!);
+      return frozenValue(kept.get(key)!) as never;
     },
     async ofInputs(slot, inputs, derive) {
       const key = JSON.stringify([slot, inputs]);
@@ -20,7 +21,7 @@ export function rememberingFacts(): DerivedFacts & { derived: string[] } {
         derived.push(slot);
         kept.set(key, JSON.stringify(await derive()));
       }
-      return JSON.parse(kept.get(key)!);
+      return frozenValue(kept.get(key)!) as never;
     },
     ofReads: (_slot, _subject, _answerNow, derive) => derive(() => undefined),
     fingerprint: (inputs) => JSON.stringify(inputs),

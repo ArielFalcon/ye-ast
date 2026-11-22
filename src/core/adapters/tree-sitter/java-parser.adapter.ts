@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { Language, Parser, type Node } from "web-tree-sitter";
 import type { Result } from "../../domain/shared/result.ts";
+import { sourceKey } from "../../domain/shared/source-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHolds } from "../../ports/parse-holds.port.ts";
 
@@ -68,7 +69,7 @@ export function createJavaTreeHolds(): JavaTreeHolds {
     held(source, read) {
       const trees = keptBy.get(source)?.trees;
       if (trees === undefined) return undefined;
-      const file = `${source.path}\0${source.content}`;
+      const file = sourceKey(source);
       let tree = trees.get(file);
       if (tree === undefined) {
         tree = read();
