@@ -1,6 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import type { PrimingOutcome } from "../core/application/live/live-priming.ts";
 import type { SnapshotCacheEvent } from "../core/application/snapshot/snapshot-data-cache.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY, type CodeGraph, type CodeGraphReader } from "../core/ports/code-graph.port.ts";
@@ -118,6 +119,15 @@ export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): L
     },
   });
   return stages;
+}
+
+/**
+ * Runs launch priming and writes one `prime` line: how it ended, how many times it waited for queries, and its time. It never rejects: what priming could not derive, the query that needs it derives, and that query answers its fault.
+ */
+export async function measuredPriming(prime: () => Promise<PrimingOutcome>, deps: MeasurementDeps | undefined): Promise<void> {
+  const started = performance.now();
+  const ended = await prime().then(({ kind, yields }) => ({ outcome: kind, yields }), () => ({ outcome: "threw" }));
+  if (deps !== undefined) reportBestEffort({ event: "prime", ...ended, duration_ms: elapsed(started) }, deps);
 }
 
 /** The snapshot data cache's decisions, one `cache` line each; the key never leaves the cache. */

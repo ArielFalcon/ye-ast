@@ -110,7 +110,7 @@ export async function runMcp(commandLine: readonly string[], host: ProcessHost):
     transport: wire,
     onerror: (error) => host.err(`ye-ast: ${queries.redaction.redactError(error)}`),
   });
-  void queries.warmLive(repo, host.signal).then((line) => {
+  void queries.warmLive(repo, host.signal, repoId).then((line) => {
     if (line !== null) host.err(line);
   });
   const stop = (): void => void handle.close();
