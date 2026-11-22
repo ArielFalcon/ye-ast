@@ -1,6 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import type { PrimingOutcome } from "../core/application/live/live-priming.ts";
 import type { SnapshotCacheEvent } from "../core/application/snapshot/snapshot-data-cache.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY, type CodeGraph, type CodeGraphReader } from "../core/ports/code-graph.port.ts";
@@ -92,6 +93,7 @@ export function measuredGraph(graph: CodeGraph, deps: MeasurementDeps): CodeGrap
       return opened.ok ? { ok: true, value: measuredTalliedStages(opened.value, GRAPH_READER_STAGES, deps) } : opened;
     },
     buildMirror: (mirror, signal) => measuredBuild("built", () => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
+    adoptMirror: (mirror, store, signal) => measuredBuild("adopted", () => graph.adoptMirror(mirror, store, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
     syncMirror: (mirror, paths, signal, generations) => measuredBuild("synced", () => graph.syncMirror(mirror, paths, signal, generations), join(mirror, INDEX_STORE_DIRECTORY), deps),
   };
 }
@@ -118,6 +120,15 @@ export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): L
     },
   });
   return stages;
+}
+
+/**
+ * Runs launch priming and writes one `prime` line: how it ended, how many times it waited for queries, and its time. It never rejects: what priming could not derive, the query that needs it derives, and that query answers its fault.
+ */
+export async function measuredPriming(prime: () => Promise<PrimingOutcome>, deps: MeasurementDeps | undefined): Promise<void> {
+  const started = performance.now();
+  const ended = await prime().then(({ kind, yields }) => ({ outcome: kind, yields }), () => ({ outcome: "threw" }));
+  if (deps !== undefined) reportBestEffort({ event: "prime", ...ended, duration_ms: elapsed(started) }, deps);
 }
 
 /** The snapshot data cache's decisions, one `cache` line each; the key never leaves the cache. */
@@ -210,7 +221,7 @@ function timedStage<T>(call: () => T, settled: (outcome: string, started: number
 }
 
 /** One index line per build or sync: `built` or `synced` only when a store came out of it, the fault's own kind otherwise. */
-async function measuredBuild<T, F extends { kind: string }>(succeeded: "built" | "synced", call: () => Promise<Result<T, F>>, store: string, deps: MeasurementDeps): Promise<Result<T, F>> {
+async function measuredBuild<T, F extends { kind: string }>(succeeded: "built" | "synced" | "adopted", call: () => Promise<Result<T, F>>, store: string, deps: MeasurementDeps): Promise<Result<T, F>> {
   const started = performance.now();
   try {
     const result = await call();

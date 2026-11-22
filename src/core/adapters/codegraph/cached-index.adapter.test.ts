@@ -33,6 +33,7 @@ function fakeGraph(gate?: () => Promise<void>) {
   const reader = { versions: SUMMARY.versions, close: () => void log.closed++ } as unknown as CodeGraphReader;
   const graph: CodeGraph = {
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
+    adoptMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     index: async (_snapshot, store) => {
       log.built++;

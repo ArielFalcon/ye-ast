@@ -19,6 +19,12 @@ interface ReadsEntry {
   reads: readonly (readonly [question: string, answer: string])[];
 }
 
+/**
+ * The fingerprint of the answers each kept `ofReads` entry was last derived or verified against (ADR-0128), by the
+ * frozen entry the snapshot data cache holds: memory only, dropped with the entry.
+ */
+const verifiedAt = new WeakMap<ReadsEntry, string>();
+
 interface Address {
   /** In the snapshot data cache: the slot, the trust and the inputs. */
   key: string;
@@ -98,25 +104,31 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
       const value = kept(address);
       return value === undefined ? keep(address, await derive()) : (value as Awaited<ReturnType<typeof derive>>);
     },
-    async ofReads(slot, subject, answerNow, derive) {
+    async ofReads(slot, subject, answers, derive) {
       const address = addressOf(slot, subject);
+      const { fingerprint } = answers;
+      const verified = (entry: ReadsEntry): ReadsEntry => (verifiedAt.set(entry, fingerprint), entry);
       const stillHolds = (entry: ReadsEntry): boolean => entry.reads.every(([question, answer]) => {
-        const now = answerNow(question);
+        const now = answers.answerIfKnown(question);
         return now !== undefined && named(now) === answer;
       });
       const inMemory = cache.getFact(address.key) as ReadsEntry | undefined;
+      if (inMemory !== undefined && verifiedAt.get(inMemory) === fingerprint) {
+        tally.hits++;
+        return inMemory.value as Awaited<ReturnType<typeof derive>>;
+      }
       const stored = inMemory === undefined ? storedJson(address) : undefined;
       const entry = inMemory ?? (stored === undefined ? undefined : (frozenValue(stored) as ReadsEntry));
       if (entry !== undefined && stillHolds(entry)) {
         tally.hits++;
-        if (stored === undefined) return entry.value as Awaited<ReturnType<typeof derive>>;
+        if (stored === undefined) return verified(entry).value as Awaited<ReturnType<typeof derive>>;
         tally.diskHits++;
-        return (admit(address.key, stored) as ReadsEntry).value as Awaited<ReturnType<typeof derive>>;
+        return verified(admit(address.key, stored) as ReadsEntry).value as Awaited<ReturnType<typeof derive>>;
       }
       tally.misses++;
       const reads = new Map<string, string>();
       const value = await derive((question, answer) => void reads.set(question, named(answer)));
-      return (keep(address, { value, reads: [...reads] }) as ReadsEntry).value as typeof value;
+      return verified(keep(address, { value, reads: [...reads] }) as ReadsEntry).value as typeof value;
     },
     fingerprint: (inputs) => digest.of(canonicalJson(inputs)),
     drain() {

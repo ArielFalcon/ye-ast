@@ -101,6 +101,7 @@ function setup(options: Options = {}) {
   };
   const graph: CodeGraph = {
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
+    adoptMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     index: async () => {
       log.indexed++;
@@ -128,7 +129,7 @@ function setup(options: Options = {}) {
       indexes: {
         obtain: async ({ content }) => {
           log.obtained.push(content);
-          return options.cache === true ? { ok: true, value: { store: reader, summary: SUMMARY } } : { ok: false, fault: options.cache! };
+          return options.cache === true ? { ok: true, value: { store: reader, summary: SUMMARY, directory: "/kept" } } : { ok: false, fault: options.cache! };
         },
       },
     }),

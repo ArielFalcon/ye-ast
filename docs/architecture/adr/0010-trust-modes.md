@@ -6,6 +6,8 @@
   running on a server with secrets etc. Evaluate whether this is the best way to approach it", and "the decisions must
   be based on evidence". This record is that evaluation; the owner accepted it on 2026-10-30 (translated): "both look
   fine to me", answering whether to accept this record and ADR-0011 as written.
+- Amended by: [ADR-0129](0129-a-full-live-build-goes-through-the-index-cache-so-one-content-is-indexed-once.md)
+  (decision 2: under `untrusted` ye-ast also opens a kept index its live mirror published for the same content)
 - Related: [ADR-0001](0001-product-scope-and-priority.md), [ADR-0006](0006-qayaba-graph-state-per-run.md),
   [ADR-0011](0011-query-protocol-in-the-mvp.md), [RFC-0002](../rfc/0002-facts-contract.md),
   [RFC-0006](../rfc/0006-configuration.md)

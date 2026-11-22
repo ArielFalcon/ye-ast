@@ -33,10 +33,10 @@ export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: {
       }
       return frozenValue(kept.get(key)!) as never;
     },
-    async ofReads(slot, subject, answerNow, derive) {
+    async ofReads(slot, subject, answers, derive) {
       const key = JSON.stringify([slot, subject]);
       const entry = entries.has(key) ? (frozenValue(entries.get(key)!) as { value: never; reads: [string, string][] }) : undefined;
-      if (entry !== undefined && entry.reads.every(([question, answer]) => answerNow(question) === answer)) {
+      if (entry !== undefined && entry.reads.every(([question, answer]) => answers.answerIfKnown(question) === answer)) {
         reads.hits++;
         tallyOf(slot).hits++;
         return entry.value;

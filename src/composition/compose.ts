@@ -8,7 +8,7 @@ import type { ImpactQueriesDeps } from "../core/application/impact/impact-querie
 import type { HeadReaderDeps } from "../core/application/snapshot/head-reading.ts";
 import type { WorkspaceQueriesDeps } from "../core/application/topology/workspace-queries.ts";
 import { randomUUID } from "node:crypto";
-import { dirname, extname, join, sep } from "node:path";
+import { basename, dirname, extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { takeCacheFlag } from "../cli/cache-flag.ts";
 import { EXIT_CODE, run, type CliIo } from "../cli/main.ts";
@@ -27,7 +27,8 @@ import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-lay
 import { createInstall } from "../core/application/install/install.ts";
 import { createImpactQueries } from "../core/application/impact/impact-queries.ts";
 import { createOutlineQueries } from "../core/application/outline/outline-queries.ts";
-import { createTraceQueries } from "../core/application/trace/trace-queries.ts";
+import { createTraceQueries, type TraceQueriesDeps } from "../core/application/trace/trace-queries.ts";
+import { primeLive } from "../core/application/live/live-priming.ts";
 import { createWorkspaceQueries, createWorkspaceReadOperation } from "../core/application/topology/workspace-queries.ts";
 import { createCapturedWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
 import { createCapturedDecisionQueries } from "../core/application/decisions/decision-queries.ts";
@@ -88,8 +89,9 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
+import { measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
 import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
+import { queriesFirst } from "./priming-turns.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -97,7 +99,8 @@ const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"]
 const TEMPLATE_ENGINE = "@angular/compiler";
 const CODEGRAPH_PACKAGE = "@colbymchenry/codegraph";
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SNAPSHOT_CACHE_BYTES = 32 * 1024 * 1024;
+/** The floor of the snapshot data cache (ADR-0127): the 112 MiB the largest corpus repository's interleaved families retain in all, rounded up to 128 MiB, so the families no longer evict each other. */
+const SNAPSHOT_CACHE_BYTES = 128 * 1024 * 1024;
 /** The graph images of kept indexes a process holds (ADR-0124): eight of the largest corpus store's measured charge, about 32 MiB each. */
 const GRAPH_IMAGE_BYTES = 256 * 1024 * 1024;
 /** The graph images of live mirrors a process holds, one per mirror (ADR-0125): four of the largest corpus store's measured charge. */
@@ -127,7 +130,7 @@ export interface CompositionOptions {
   exportBudget?: ExportBudget;
   /** Directory that keeps full indexes between calls; every call builds and discards its own when absent. */
   indexCache?: string;
-  /** UTF-8 bytes retained as serialized snapshot entries, keys included; 32 MiB by default, zero disables retention. */
+  /** UTF-8 bytes retained as serialized snapshot entries, keys included; 128 MiB as a floor by default (ADR-0127), a hard cap when set, zero disables retention. */
   snapshotCacheBytes?: number;
   /** Bytes of graph images of kept indexes held in memory, charged by the text and numbers they hold; 256 MiB by default. */
   graphImageBytes?: number;
@@ -171,10 +174,12 @@ export interface ComposedQueries {
   /** Canonical filesystem root of the selected worktree. */
   canonicalRepositoryRoot: Vcs["canonicalRoot"];
   /**
-   * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, so the first live query
-   * finds it ready. Resolves to a redacted line describing why it could not, or `null`; it never rejects.
+   * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, then primes the snapshot
+   * facts no target narrows, letting any query run first between steps, so the first live query finds both ready.
+   * `repoId` is the id the queries name the repository by; the repository's name when absent. Resolves once priming
+   * ended, to a redacted line describing why the mirror could not be built, or `null`; it never rejects.
    */
-  warmLive(repo: string, signal?: AbortSignal): Promise<string | null>;
+  warmLive(repo: string, signal?: AbortSignal, repoId?: string): Promise<string | null>;
 }
 
 export function composeQueries(options: CompositionOptions = {}): ComposedQueries {
@@ -223,6 +228,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const bareGraph = createCodeGraph(defaultCodeGraphDeps, { liveImageBytes: LIVE_GRAPH_IMAGE_BYTES, shutdown: options.signal });
   const graph = measurement === undefined ? bareGraph : measuredGraph(bareGraph, measurement);
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
+  const keptGraph = createCodeGraph(defaultCodeGraphDeps, { imageBytes: options.graphImageBytes ?? GRAPH_IMAGE_BYTES, shutdown: options.signal });
+  const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph: measurement === undefined ? keptGraph : measuredGraph(keptGraph, measurement), digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const bareLiveMirror = createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten });
   const liveMirror = measurement === undefined ? bareLiveMirror : measuredLiveMirror(bareLiveMirror, measurement);
   const live: LiveDeps = {
@@ -234,11 +241,10 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     retention: options.liveRetention ?? LIVE_RETENTION,
     now: () => Date.now(),
     newStoreGeneration: () => randomUUID(),
+    indexes,
   };
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, holds, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, snapshotCache: snapshotCache.snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
-  const keptGraph = createCodeGraph(defaultCodeGraphDeps, { imageBytes: options.graphImageBytes ?? GRAPH_IMAGE_BYTES, shutdown: options.signal });
-  const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph: measurement === undefined ? keptGraph : measuredGraph(keptGraph, measurement), digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= javaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });
@@ -286,16 +292,6 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }),
   };
   const bareImpact = createImpactQueries(impactDeps);
-  const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {
-    try {
-      if ((await trustOf(trust ?? {}, repo)) !== "trusted") return null;
-      const scope = liveScope();
-      const warmed = await openLive(live, { repo, scope, selected: exportSelection(scope, matcher.matches, isExtractorConfiguration), store: true, signal }, async () => undefined);
-      return warmed.ok ? null : redaction.redact(`ye-ast: live index not built (${warmed.fault.kind}): ${warmed.fault.detail}`);
-    } catch (error) {
-      return redaction.redact(`ye-ast: live index not built: ${redaction.redactError(error)}`);
-    }
-  };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
   const headDeps: HeadReaderDeps & Pick<ImpactQueriesDeps, "engines"> = {
     ...snapshotCache,
@@ -351,7 +347,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     ...trust,
   };
   const operation = createWorkspaceReadOperation(workspaceDeps);
-  const bareTrace = createTraceQueries({
+  const traceDeps: TraceQueriesDeps = {
     frameworks,
     deferredValues: createDeferredValueReader(typescriptFrameworks.flatMap((plugin) => plugin.deferrals ?? [])),
     workspace: operation,
@@ -382,8 +378,27 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     checkerInputs: createRevisionSources({ ...headDeps, sourceSelection: isTypeCheckerInput }),
     libraries: createJdkLibrarySource(),
     ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }),
-  });
+  };
+  const bareTrace = createTraceQueries(traceDeps);
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
+  const priority = queriesFirst();
+  const prime = (repo: string, repoId: string | undefined, signal?: AbortSignal): Promise<void> => measuredPriming(async () => {
+    const named = repoId === undefined ? await vcs.repositoryName(repo, signal) : { ok: true as const, value: repoId };
+    const request = { repo, repoId: named.ok ? named.value : basename(repo), ...(signal === undefined ? {} : { signal }) };
+    return primeLive({ ...traceDeps, memberNames: merged.memberNames }, request, priority.turns);
+  }, measurement);
+  const warmLive = async (repo: string, signal?: AbortSignal, repoId?: string): Promise<string | null> => {
+    try {
+      if ((await trustOf(trust ?? {}, repo)) !== "trusted") return null;
+      const scope = liveScope();
+      const warmed = await openLive(live, { repo, scope, selected: exportSelection(scope, matcher.matches, isExtractorConfiguration), store: true, signal }, async () => undefined);
+      if (!warmed.ok) return redaction.redact(`ye-ast: live index not built (${warmed.fault.kind}): ${warmed.fault.detail}`);
+    } catch (error) {
+      return redaction.redact(`ye-ast: live index not built: ${redaction.redactError(error)}`);
+    }
+    await prime(repo, repoId, signal);
+    return null;
+  };
   const bareWorkspace = createWorkspaceQueries(workspaceDeps, operation);
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
   // One measurement line per read: the workspace impact reports through the impact family it walks with.
@@ -399,7 +414,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const contractConsequences = measurement === undefined ? bareContractConsequences : measuredContractConsequences(bareContractConsequences, measurement);
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
-  return { version, entrypoints, impact, outline, trace, workspace, workspaceImpact, contractConsequences, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
+  const { counted } = priority;
+  return { version, entrypoints: counted(entrypoints), impact: counted(impact), outline: counted(outline), trace: counted(trace), workspace: counted(workspace), workspaceImpact: counted(workspaceImpact), contractConsequences: counted(contractConsequences), decisions: counted(decisions), redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {

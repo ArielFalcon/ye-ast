@@ -6,7 +6,9 @@
   facts on a `sync`-updated index with the index's origin recorded in `inputs`, and bring the `sync` parity test
   forward".
 - Supersedes: [ADR-0006](0006-qayaba-graph-state-per-run.md) decision 2.
-- Amended by: [ADR-0027](0027-retention-of-immutable-index-entries.md) (retention of kept indexes)
+- Amended by: [ADR-0027](0027-retention-of-immutable-index-entries.md) (retention of kept indexes),
+  [ADR-0129](0129-a-full-live-build-goes-through-the-index-cache-so-one-content-is-indexed-once.md) (a full live build
+  publishes through the cache; a sync-derived store never does)
 - Related: [ADR-0010](0010-trust-modes.md), [RFC-0002](../rfc/0002-facts-contract.md),
   [RFC-0003](../rfc/0003-codegraph-integration.md), [RFC-0005](../rfc/0005-transports.md),
   [RFC-0010](../rfc/0010-impact-queries.md)
