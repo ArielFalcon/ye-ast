@@ -1,7 +1,7 @@
 import type { DerivedFacts, RecordedAnswers } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { BUILD_PARTS, JAVA_DECLARATIONS_SLOT, JAVA_MARKERS, NAMING_KINDS, PACKAGE_QUESTIONS, type BuildPart, type JavaMarker, type NamingKind, type PackageQuestion } from "./java-declaration-questions.ts";
+import { BUILD_PARTS, JAVA_DECLARATIONS_SLOT, JAVA_MARKERS, NAMING_KINDS, PACKAGE_QUESTIONS, questions, type BuildPart, type JavaMarker, type NamingKind, type PackageQuestion } from "./java-declaration-questions.ts";
 import { declarationsOf, type BodySummary, type DeclaredType, type DeclarationState, type JavaDeclarations } from "./java-declarations.ts";
 import { claimedPlatformPackage, writtenSimpleName } from "./java-symbols.ts";
 
@@ -24,6 +24,9 @@ export interface JavaDeclarationIndex extends RecordedAnswers {
   answerIfKnown(question: string): string | undefined;
   /** The sources not read in full, in the order of the sources: unparsed, read for their declarations only, or with declarations that cannot be listed. */
   unread(): readonly { path: string; state: DeclarationState }[];
+  readonly version: object;
+  /** The questions that may answer otherwise than in the index `earlier` is the version of: the ones the edited files' difference names (ADR-0145). */
+  changedSince(earlier: object): ((question: string) => boolean) | undefined;
 }
 
 export class UnknownDeclarationQuestionError extends Error {
@@ -100,9 +103,23 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
     return answer;
   };
 
+  const version: IndexVersion = { files: byPath, inputs };
+  versions.add(version);
+  const changedSinceVersion = new WeakMap<IndexVersion, ReadonlySet<string>>();
   return {
     get fingerprint() {
       return indexed();
+    },
+    version,
+    changedSince: (earlier) => {
+      if (!versions.has(earlier)) return undefined;
+      const known = earlier as IndexVersion;
+      let changed = changedSinceVersion.get(known);
+      if (changed === undefined) {
+        changed = changedQuestions(known, version);
+        changedSinceVersion.set(known, changed);
+      }
+      return (question) => changed.has(question);
     },
     unread: () => entries.filter(({ entry }) => entry.state !== "read").map(({ path, entry }): { path: string; state: DeclarationState } => ({ path, state: entry })),
     answerIfKnown,
@@ -112,6 +129,55 @@ export function createDeclarationIndex(entries: readonly Located[], inputs: Decl
       return answer;
     },
   };
+}
+
+/** What an index keeps to tell later indexes which questions changed since it: its entries by path and its inputs. */
+interface IndexVersion {
+  files: ReadonlyMap<string, JavaDeclarations>;
+  inputs: DeclarationIndexInputs;
+}
+
+const versions = new WeakSet<object>();
+
+/** The questions whose answers may differ between two indexes: the ones whose value differs in what an edited file contributes to them, and the ones an input changed. */
+function changedQuestions(earlier: IndexVersion, later: IndexVersion): ReadonlySet<string> {
+  const changed = new Set<string>();
+  if (earlier.inputs.unreadJvm !== later.inputs.unreadJvm) changed.add(questions.unread());
+  if (earlier.inputs.generatesInterfaces !== later.inputs.generatesInterfaces) changed.add(questions.build("generatesInterfaces"));
+  for (const path of new Set([...earlier.files.keys(), ...later.files.keys()])) {
+    const before = earlier.files.get(path);
+    const after = later.files.get(path);
+    if (before?.content === after?.content) continue;
+    const was = contributionOf(path, before);
+    const is = contributionOf(path, after);
+    for (const question of new Set([...was.keys(), ...is.keys()])) if (was.get(question) !== is.get(question)) changed.add(question);
+  }
+  return changed;
+}
+
+/** What one file contributes to the answer of each question it takes part in, as a value two versions of the file compare: no question outside it depends on the file. */
+function contributionOf(path: string, entry: JavaDeclarations | undefined): ReadonlyMap<string, string> {
+  const values = new Map<string, string>();
+  if (entry === undefined) return values;
+  const add = (question: string, value: string) => values.set(question, values.has(question) ? `${values.get(question)}\n${value}` : value);
+  add(questions.file(path), entry.content);
+  add(questions.declarations(path), entry.declarationsDigest);
+  add(questions.listing(), entry.content);
+  if (entry.state !== "read") add(questions.unread(), entry.state);
+  const inProject = entry.state === "read" || entry.state === "unreadable";
+  const packageName = entry.header.packageName;
+  if (inProject) for (const prefix of prefixesOf(packageName)) add(questions.package("prefix", prefix), "");
+  if (entry.types.length > 0) add(questions.package("typed", packageName), "");
+  const claim = inProject ? claimedPlatformPackage(packageName) : undefined;
+  if (claim !== undefined) add(questions.build("claimed"), claim);
+  for (const type of entry.types) {
+    add(questions.declaring(type.fqn), "");
+    add(questions.named(type.name), type.fqn);
+  }
+  for (const marker of entry.body.markers) add(questions.marked(marker), "");
+  const namings = namingsOf([{ path, types: entry.types, body: entry.body }]);
+  for (const kind of NAMING_KINDS) for (const name of namings[kind].keys()) values.set(questions.naming(kind, name), "");
+  return values;
 }
 
 /** The index over `sources`: each file's declarations are the per-file fact `java-declarations`, derived again only for a file whose content changed (ADR-0116). */
