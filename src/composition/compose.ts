@@ -97,7 +97,8 @@ const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"]
 const TEMPLATE_ENGINE = "@angular/compiler";
 const CODEGRAPH_PACKAGE = "@colbymchenry/codegraph";
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SNAPSHOT_CACHE_BYTES = 32 * 1024 * 1024;
+/** The floor of the snapshot data cache (ADR-0127): the 112 MiB the largest corpus repository's interleaved families retain in all, rounded up to 128 MiB, so the families no longer evict each other. */
+const SNAPSHOT_CACHE_BYTES = 128 * 1024 * 1024;
 /** The graph images of kept indexes a process holds (ADR-0124): eight of the largest corpus store's measured charge, about 32 MiB each. */
 const GRAPH_IMAGE_BYTES = 256 * 1024 * 1024;
 /** The graph images of live mirrors a process holds, one per mirror (ADR-0125): four of the largest corpus store's measured charge. */
@@ -127,7 +128,7 @@ export interface CompositionOptions {
   exportBudget?: ExportBudget;
   /** Directory that keeps full indexes between calls; every call builds and discards its own when absent. */
   indexCache?: string;
-  /** UTF-8 bytes retained as serialized snapshot entries, keys included; 32 MiB by default, zero disables retention. */
+  /** UTF-8 bytes retained as serialized snapshot entries, keys included; 128 MiB as a floor by default (ADR-0127), a hard cap when set, zero disables retention. */
   snapshotCacheBytes?: number;
   /** Bytes of graph images of kept indexes held in memory, charged by the text and numbers they hold; 256 MiB by default. */
   graphImageBytes?: number;
