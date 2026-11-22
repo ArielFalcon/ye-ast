@@ -169,3 +169,18 @@ test("shutdown ends every worker", async () => {
   shutdown.abort();
   assert.equal(await exited, 0);
 });
+
+test("retiring a mirror ends its worker, and the next sync of that mirror starts another", { timeout: 60_000 }, async () => {
+  const seen = watched();
+  const mirror = mirrorOf(BASE);
+  unwrap(await seen.graph.buildMirror(mirror));
+  unwrap(await seen.graph.syncMirror(mirror, edit(mirror, "first")));
+  const exited = new Promise<number | null>((resolve) => seen.workers[0]!.once("exit", resolve));
+
+  seen.graph.retireMirror(mirror);
+  unwrap(await seen.graph.syncMirror(mirror, edit(mirror, "second")));
+
+  assert.deepEqual([seen.workers.length, seen.oneShotSyncs], [2, 0]);
+  assert.ok(declares(seen.graph, mirror, "second"));
+  assert.equal(await exited, 0);
+});

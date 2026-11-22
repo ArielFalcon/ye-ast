@@ -34,6 +34,8 @@ export interface SyncWorkers {
   sync(root: string, paths: readonly string[], launch: () => Promise<WorkerLaunch>, signal?: AbortSignal, generations?: SyncGenerations): Promise<Outcome<SyncAnswer>>;
   /** Closes the store the root's worker holds, so a rebuild replaces it without an open handle. */
   release(root: string, signal?: AbortSignal): Promise<"aborted" | undefined>;
+  /** Ends the root's worker input, as `close` does for every worker; the next sync of the root starts another. */
+  end(root: string): void;
   /** Ends every worker's input; each closes its store and exits once its request in flight is answered. */
   close(): void;
 }
@@ -117,11 +119,14 @@ export function createSyncWorkers(spawnWorker: SpawnWorker, shutdown?: AbortSign
     });
   }
 
+  function end(root: string): void {
+    const worker = workers.get(root);
+    workers.delete(root);
+    worker?.child.stdin?.end();
+  }
+
   function close(): void {
-    for (const [root, worker] of workers) {
-      workers.delete(root);
-      worker.child.stdin?.end();
-    }
+    for (const root of [...workers.keys()]) end(root);
   }
 
   shutdown?.addEventListener("abort", close, { once: true });
@@ -151,6 +156,7 @@ export function createSyncWorkers(spawnWorker: SpawnWorker, shutdown?: AbortSign
         worker.generation = "";
         return (await ask(worker, { op: "release" }, root, signal)) === "aborted" ? "aborted" : undefined;
       }),
+    end,
     close,
   };
 }

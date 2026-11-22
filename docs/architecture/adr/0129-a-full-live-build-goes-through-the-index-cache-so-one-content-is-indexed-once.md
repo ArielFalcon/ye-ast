@@ -1,6 +1,8 @@
 # ADR-0129: A full live build goes through the index cache, so one content is indexed once whichever query comes first
 
 - Status: Accepted, 2026-11-22, owner
+- Amended: 2026-11-22, by the phase-1 quality review of RFC-0040 (finding F1): decision 3 no longer rests on the recorded
+  state; the index tree is verified against the written files before it is published
 - Decision source: Owner, 2026-11-17: "al instalar el proyecto se haga el trabajo pesado de indexación de todo de fondo,
   para luego solo tener que reindexar lo que cambia y no hacer todo on-the-fly", and "Apruebo las decisiones" over
   RFC-0040, whose phase 1 lists "one index per content" (task L27, with review finding R13: the measured live-then-sha
@@ -55,9 +57,15 @@ store published from a trusted working tree is the store the commit's own export
    sync worker first as a build does, and answers what `buildMirror` answers for the same files. A later sync writes only
    the copy; the kept index stays immutable ([ADR-0015](0015-index-reuse-by-content.md) decision 1). The lease is held
    until the copy is made.
-3. **The index tree holds exactly the written paths** when a refresh stages it: every refresh removes the paths the last
-   state held, and the paths a refresh that did not finish left pending, that the export no longer writes. A store built
-   from the index tree is therefore built from the export's written set and nothing else.
+3. **Only an index tree shown to hold exactly the written files is published.** Every refresh removes the paths the last
+   state held, and the paths a refresh that did not finish left pending, that the export no longer writes; but the
+   recorded state (`indexed`, `pending`) is only a claim, and the mirror lives inside the repository, so its index tree
+   can hold what no state names or lack what the state says it holds. Before it asks the cache, a full build therefore
+   compares the index tree with the export's written files from the tree alone (`LiveMirror.verifyIndexTree`): every
+   entry staging would take, each file rehashed and compared with the blob id the manifest records, no other path, and no
+   link or special file. A tree that departs, or that cannot be checked, is built in place, unpublished, and a written
+   file it lacks is one the store does not hold (`notHeld`). A store published from the index tree is therefore built
+   from the export's written set and nothing else.
 4. **A sync-derived store is never published.** Only the cache's own build from files publishes an entry; no path copies
    a mirror's store into the cache. `sha` facts keep reading full builds alone ([ADR-0015](0015-index-reuse-by-content.md)
    decision 3).
@@ -70,8 +78,9 @@ store published from a trusted working tree is the store the commit's own export
    another key. ADR-0010 decision 2 is amended: under `untrusted` ye-ast opens the stores the host hands over and the
    ones it built itself, from its own export or from its live mirror's copy of the same content. Trust stays in every
    fact's inputs and in every memory key.
-6. **Fallback.** A cache that cannot be used (`cache-unavailable`), a build fault other than an abort, or a copy that
-   fails builds the mirror in place as before, unpublished. An abort answers as an aborted build did.
+6. **Fallback.** An index tree that departs from the written files or cannot be checked (decision 3), a cache that cannot
+   be used (`cache-unavailable`), a build fault other than an abort, or a copy that fails builds the mirror in place as
+   before, unpublished. An abort answers as an aborted build did.
 7. **No new lock.** The refresh obtains while it holds the mirror lock; the cache takes no lock of its own, so the order
    is always mirror lock, then lease, which a waiter never holds.
 8. **Measurement.** The copy writes one `index` line with outcome `adopted` and its store bytes
@@ -86,6 +95,8 @@ store published from a trusted working tree is the store the commit's own export
 - A full live build pays the cache's staging (hard links) and one copy of the store; the cache entry and the mirror
   each hold the store's bytes, which retention already counts for the cache (ADR-0027) and for the mirror (RFC-0010
   "Retention").
+- The verification of decision 3 rehashes the written files once per full live build: 39 to 42 ms on jhipster-monolith
+  (618 files, three fresh clones), beside a full build of about 1.6 s. A sync or a refresh that builds nothing never runs it.
 - Without an index cache (`composeQueries` without `indexCache`) the mirror builds in place, as before.
 - `STAGING_RULES_VERSION` moves from 13 to 14, since the adapter that builds indexes changed (the fitness test of
   ADR-0015 pins its sources). What a build produces is unchanged, but every kept index and live mirror of version 13 is

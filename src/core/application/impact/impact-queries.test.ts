@@ -166,6 +166,7 @@ function setup(options: Options = {}) {
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     adoptMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
+    retireMirror: () => undefined,
     index: async () => {
       log.indexed++;
       return options.index ?? { ok: true, value: SUMMARY };

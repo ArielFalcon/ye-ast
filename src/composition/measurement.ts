@@ -95,6 +95,7 @@ export function measuredGraph(graph: CodeGraph, deps: MeasurementDeps): CodeGrap
     buildMirror: (mirror, signal) => measuredBuild("built", () => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
     adoptMirror: (mirror, store, signal) => measuredBuild("adopted", () => graph.adoptMirror(mirror, store, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
     syncMirror: (mirror, paths, signal, generations) => measuredBuild("synced", () => graph.syncMirror(mirror, paths, signal, generations), join(mirror, INDEX_STORE_DIRECTORY), deps),
+    retireMirror: (mirror) => graph.retireMirror(mirror),
   };
 }
 
@@ -108,6 +109,7 @@ export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): L
     changedSince: "live-staleness-compare",
     materialize: "live-materialize",
     prune: "live-prune",
+    verifyIndexTree: "live-verify-index-tree",
     touch: "live-touch",
     usage: "live-usage",
     discardIfIdle: "live-discard-idle",

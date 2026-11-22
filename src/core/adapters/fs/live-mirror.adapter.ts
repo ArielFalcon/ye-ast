@@ -8,7 +8,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY } from "../../ports/code-graph.port.ts";
 import { isEngineConfiguration, isEngineEntry } from "../../ports/staging-rules.ts";
 import { DEBRIS_STALE_MS } from "../../ports/live-mirror.port.ts";
-import type { LiveMirror, MirrorEntry, MirrorFault, MirrorLocation, MirrorLock, MirrorReconciliation, MirrorScopeUsage, MirrorState, MirrorUsage } from "../../ports/live-mirror.port.ts";
+import type { IndexTreeDeviation, LiveMirror, MirrorEntry, MirrorFault, MirrorLocation, MirrorLock, MirrorReconciliation, MirrorScopeUsage, MirrorState, MirrorUsage } from "../../ports/live-mirror.port.ts";
 import type { SkippedEntry } from "../../ports/vcs.port.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 
@@ -405,6 +405,40 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       return { ok: true, value: undefined };
     },
 
+    async verifyIndexTree(location, files, signal) {
+      const prepared = await prepare(location, "store", false);
+      if (!prepared.ok) return prepared;
+      const root = indexRootOf(location);
+      const presence = prepared.value ? await inspect(root) : { ok: true as const, value: "absent" as const };
+      if (!presence.ok) return presence;
+      const expected = new Map(files.filter(({ path }) => staged(path)).map(({ path, blob }) => [path, blob]));
+      const held: string[] = [];
+      const foreign: string[] = [];
+      async function walk(relative: string): Promise<void> {
+        for (const entry of await readdir(join(root, relative), { withFileTypes: true })) {
+          const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
+          if (isEngineEntry(entry.name.toLowerCase())) continue;
+          if (entry.isDirectory()) await walk(path);
+          else if (!entry.isFile()) foreign.push(path);
+          else if (!staged(path)) continue;
+          else if (expected.has(path)) held.push(path);
+          else foreign.push(path);
+        }
+      }
+      try {
+        if (presence.value === "private") await walk("");
+        if (signal?.aborted) return aborted();
+        const hashed = await mapBounded(held, STAT_CONCURRENCY, (path) => hashFile(join(root, path)));
+        if (signal?.aborted) return aborted();
+        for (const [index, path] of held.entries()) if (hashed[index]!.bytes < 0 || hashed[index]!.blob !== expected.get(path)) foreign.push(path);
+      } catch (error) {
+        return fault("unreadable", error);
+      }
+      const present = new Set(held);
+      const deviation: IndexTreeDeviation = { missing: [...expected.keys()].filter((path) => !present.has(path)).sort(compareText), foreign: foreign.sort(compareText) };
+      return { ok: true, value: deviation };
+    },
+
     async prune(location, paths, signal) {
       const prepared = await prepare(location, "root", false);
       if (!prepared.ok) return prepared;
@@ -642,6 +676,12 @@ async function hashFile(file: string): Promise<{ blob: string; bytes: number }> 
 /** A user tool can set a modification time back but not the status-change time, and a replaced file has another inode. */
 function matches(entry: MirrorEntry, status: BigIntStats): boolean {
   return entry.size === Number(status.size) && entry.mtimeNs === status.mtimeNs.toString() && entry.ctimeNs === status.ctimeNs.toString() && entry.ino === status.ino.toString();
+}
+
+/** Whether an index of the tree stages `path`: staging compares names in lower case, as the engine reads them through the host's file system. */
+function staged(path: string): boolean {
+  const folded = path.toLowerCase();
+  return !isEngineEntry(folded) && !isEngineConfiguration(folded);
 }
 
 function sameFile(a: BigIntStats, b: BigIntStats): boolean {

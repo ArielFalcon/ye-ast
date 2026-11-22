@@ -35,6 +35,7 @@ function fakeGraph(gate?: () => Promise<void>) {
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     adoptMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
+    retireMirror: () => undefined,
     index: async (_snapshot, store) => {
       log.built++;
       await gate?.();
