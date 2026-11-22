@@ -1,3 +1,4 @@
+import { frozenValue } from "../../domain/shared/frozen-value.ts";
 import type { SnapshotData, SnapshotDataCache } from "./read-snapshot.ts";
 
 /**
@@ -24,9 +25,7 @@ const HELD_READS = 2;
  * the floor never holds more than the open queries used (ADR-0121).
  */
 export function createSnapshotDataCache(maxBytes: number, observe?: (event: SnapshotCacheEvent) => void, { floor = false }: { floor?: boolean } = {}): SnapshotDataCache {
-  const entries = new Map<string, { payload: Uint8Array; size: number; fact: boolean; read: number }>();
-  const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
+  const entries = new Map<string, { value: unknown; size: number; fact: boolean; read: number }>();
   const budget = Number.isSafeInteger(maxBytes) && maxBytes > 0 ? maxBytes : 0;
   let used = 0;
   let factBytes = 0;
@@ -41,16 +40,16 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
     if (entry.fact) factBytes -= entry.size;
     return entry.size;
   };
-  const lookup = (key: string): Uint8Array | undefined => {
+  const lookup = (key: string): { value: unknown; size: number } | undefined => {
     const entry = entries.get(key);
     if (entry === undefined) return undefined;
     entries.delete(key);
     entry.read = read;
     entries.set(key, entry);
-    return entry.payload;
+    return entry;
   };
   /** Evicts least recently used entries until `size` fits, then holds the entry; answers how many entries it evicted. */
-  const admit = (key: string, payload: Uint8Array, size: number, fact: boolean): number => {
+  const admit = (key: string, value: unknown, size: number, fact: boolean): number => {
     let evicted = 0;
     const from = heldFrom();
     while (used + size > budget) {
@@ -60,7 +59,7 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
       evicted++;
       observe?.({ outcome: "evicted", entryBytes: evictedBytes, retainedBytes: used });
     }
-    entries.set(key, { payload, size, fact, read });
+    entries.set(key, { value, size, fact, read });
     used += size;
     if (fact) factBytes += size;
     return evicted;
@@ -80,41 +79,40 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
       };
     },
     get(key) {
-      const payload = lookup(key);
-      if (payload === undefined) {
+      const entry = lookup(key);
+      if (entry === undefined) {
         observe?.({ outcome: "miss", retainedBytes: used });
         return undefined;
       }
-      observe?.({ outcome: "hit", entryBytes: entries.get(key)!.size, retainedBytes: used });
-      return JSON.parse(decoder.decode(payload)) as SnapshotData;
+      observe?.({ outcome: "hit", entryBytes: entry.size, retainedBytes: used });
+      return entry.value as SnapshotData;
     },
     put(key, data) {
       if (entries.has(key)) release(key);
-      if (budget === 0) return;
-      const lowerBound = encoder.encode(key).byteLength + data.sources.reduce((sum, source) => sum + Buffer.byteLength(source.content), 0);
+      if (budget === 0) return undefined;
+      const lowerBound = Buffer.byteLength(key) + data.sources.reduce((sum, source) => sum + Buffer.byteLength(source.content), 0);
       if (!floor && lowerBound > budget) {
         observe?.({ outcome: "oversize-skipped", entryBytes: lowerBound, retainedBytes: used });
-        return;
+        return undefined;
       }
-      const payload = encoder.encode(JSON.stringify(data));
-      const size = encoder.encode(key).byteLength + payload.byteLength;
+      const json = JSON.stringify(data);
+      const size = Buffer.byteLength(key) + Buffer.byteLength(json);
       if (!floor && size > budget) {
         observe?.({ outcome: "oversize-skipped", entryBytes: size, retainedBytes: used });
-        return;
+        return undefined;
       }
-      admit(key, payload, size, false);
+      const value = frozenValue(json) as SnapshotData;
+      admit(key, value, size, false);
       observe?.({ outcome: "admitted", entryBytes: size, retainedBytes: used });
+      return value;
     },
-    getFact(key) {
-      const payload = lookup(key);
-      return payload === undefined ? undefined : JSON.parse(decoder.decode(payload));
-    },
+    getFact: (key) => lookup(key)?.value,
     putFact(key, json) {
       if (entries.has(key)) release(key);
-      const payload = encoder.encode(json);
-      const size = encoder.encode(key).byteLength + payload.byteLength;
-      if (!floor && size > budget) return { admitted: false, entryBytes: size, evicted: 0 };
-      return { admitted: true, entryBytes: size, evicted: admit(key, payload, size, true) };
+      const value = frozenValue(json);
+      const size = Buffer.byteLength(key) + Buffer.byteLength(json);
+      if (!floor && size > budget) return { admitted: false, entryBytes: size, evicted: 0, value };
+      return { admitted: true, entryBytes: size, evicted: admit(key, value, size, true), value };
     },
     usage: () => ({ factBytes, retainedBytes: used }),
   };

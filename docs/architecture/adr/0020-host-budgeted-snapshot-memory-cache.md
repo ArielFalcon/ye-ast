@@ -17,6 +17,9 @@
   the default budget an admission does not evict what the latest reads used)
 - Amended by: [ADR-0123](0123-a-commit-listing-is-kept-by-its-sha-and-the-index-cache-sweeps-when-it-builds-or-once-per-interval.md) (decision 4: the listing of a full sha is kept by the sha and read again
   only when it is not kept)
+- Superseded in part by: [ADR-0126](0126-the-snapshot-cache-keeps-decoded-frozen-values-and-names-a-file-by-its-blob-id.md)
+  (decision 2: an entry holds the frozen value after its round trip; decision 5, last sentence: a hit answers that
+  frozen object, not a fresh decode)
 - Related: [ADR-0006](0006-qayaba-graph-state-per-run.md), [ADR-0010](0010-trust-modes.md),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0006](../rfc/0006-configuration.md)
 

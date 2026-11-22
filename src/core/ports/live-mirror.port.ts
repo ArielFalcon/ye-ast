@@ -45,6 +45,12 @@ export interface MirrorState {
   stateId: string;
   /** Mirror paths the store may not reflect yet: a refresh began to change them and did not finish, or only the files were refreshed. The next store refresh changes them again. */
   pending: readonly string[];
+  /**
+   * A token new at every committed build or sync of the store, even one that leaves `stateId` as it was; empty while a
+   * build or sync is under way and before the first one commits. It names the store's content in memory alone, never in a
+   * key on disk (RFC-0040 §3.1).
+   */
+  storeGeneration: string;
 }
 
 export interface MirrorReconciliation {

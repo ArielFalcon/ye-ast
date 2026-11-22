@@ -3,6 +3,7 @@
  * keeps the sources and frees every tree at the read's end, and `heldJavaProject` reads one project over them, split
  * into the read's own sources and the declarations a host declared (V4.2).
  */
+import { sourceKey } from "../../domain/shared/source-identity.ts";
 import { libraryPath, type LibrarySource } from "../../domain/topology/library-source.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
@@ -82,17 +83,17 @@ export function heldJavaProject(hold: ParseHold, parser: () => Promise<JavaParse
 
 const sourceKeys = new WeakMap<SourceFile, string>();
 
-function sourceKey(source: SourceFile): string {
+function keyOf(source: SourceFile): string {
   let key = sourceKeys.get(source);
   if (key === undefined) {
-    key = JSON.stringify([source.path, source.content]);
+    key = sourceKey(source);
     sourceKeys.set(source, key);
   }
   return key;
 }
 
 function projectKey(sources: readonly SourceFile[], declared: readonly SourceFile[], build: ProjectBuild): string {
-  return `[${sources.map(sourceKey).join()}]|[${declared.map(sourceKey).join()}]|${build.generatesInterfaces === true}`;
+  return `[${sources.map(keyOf).join()}]|[${declared.map(keyOf).join()}]|${build.generatesInterfaces === true}`;
 }
 
 async function buildHeldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[], build: ProjectBuild): Promise<HeldJavaProject> {

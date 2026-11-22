@@ -129,19 +129,22 @@ for (const loss of LOSSES) {
   });
 }
 
-test("a worker reopens the store after another writer changed it, and only then, whatever was read in between", async () => {
+test("a worker reopens the store unless the generation committed before a sync is the one its own last sync committed", async () => {
   const own = watched();
   const other = createCodeGraph();
   const mirror = mirrorOf(BASE);
   unwrap(await own.graph.buildMirror(mirror));
-  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "first")));
+  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "first"), undefined, { held: "built", next: "g1" }));
   assert.ok(declares(own.graph, mirror, "first"));
-  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "second")));
-  unwrap(await other.syncMirror(mirror, edit(mirror, "foreign")));
-  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "third")));
+  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "second"), undefined, { held: "g1", next: "g2" }));
+  unwrap(await other.syncMirror(mirror, edit(mirror, "foreign"), undefined, { held: "g2", next: "g3" }));
+  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "third"), undefined, { held: "g3", next: "g4" }));
+  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "unfinished"), undefined, { held: "", next: "g5" }));
+  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "unnamed")));
+  unwrap(await own.graph.syncMirror(mirror, edit(mirror, "last"), undefined, { held: "g6", next: "g7" }));
   const reopens = own.requests.map(({ request }) => request.op === "sync" && request.reopen);
-  assert.deepEqual(reopens, [false, false, true]);
-  assert.ok(declares(own.graph, mirror, "third"));
+  assert.deepEqual(reopens, [false, false, true, true, true, true]);
+  assert.ok(declares(own.graph, mirror, "last"));
 });
 
 test("an aborted sync stops its worker and answers aborted; the next sync starts another", async () => {

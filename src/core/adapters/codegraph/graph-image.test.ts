@@ -89,3 +89,57 @@ test("images are kept within their bytes, the least recently used first out; one
   obtain("failed", 1);
   assert.deepEqual(loads, ["a", "b", "c", "b", "a", "large", "large", "failed"]);
 });
+
+test("a slot keeps one image: obtaining it under another key drops the one before and frees its charge", () => {
+  const loads: string[] = [];
+  const images = keptGraphImages(8);
+  const obtain = (key: string, slot: string): void => {
+    images.obtain(key, () => (loads.push(key), { versions: { codegraph: "0", schema: 0, extraction: 0 }, bytes: 4, reader: () => assert.fail("never read") }), slot);
+  };
+  for (const [key, slot] of [["one", "store"], ["two", "store"], ["other", "elsewhere"], ["two", "store"], ["other", "elsewhere"], ["one", "store"]] as const) obtain(key, slot);
+  assert.deepEqual(loads, ["one", "two", "other", "one"]);
+});
+
+function mirrorOf(files: Readonly<Record<string, string>>): string {
+  const mirror = join(scratch, `mirror-${(built += 1)}`);
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(mirror, path)), { recursive: true });
+    writeFileSync(join(mirror, path), content);
+  }
+  return mirror;
+}
+
+const callersOfLoadOrder = (reader: CodeGraphReader): string[] => {
+  const loadOrder = reader.symbolsInFiles(["src/orders.ts"]).filter(({ name }) => name === "loadOrder").map(({ id }) => id);
+  return reader.symbolsByIds(reader.incomingEdges(loadOrder, ["calls"]).map(({ source }) => source)).map(({ name }) => name).sort();
+};
+
+test("a mirror's store is read once per committed generation: an edit synced under the next one reads the new edges, and a rebuild in place under another replaces the image", async () => {
+  const { deps, loads } = counting();
+  const shutdown = new AbortController();
+  after(() => shutdown.abort());
+  const graph = createCodeGraph(deps, { liveImageBytes: Number.MAX_SAFE_INTEGER, shutdown: shutdown.signal });
+  const mirror = mirrorOf(MIXED);
+  let reads = 0;
+  const at = (generation: string): CodeGraphReader => {
+    const before = loads();
+    const reader = graph.open(mirror, generation);
+    reads += loads() - before;
+    assert.ok(reader.ok, JSON.stringify(reader));
+    return reader.value;
+  };
+  assert.ok((await graph.buildMirror(mirror)).ok);
+  assert.deepEqual(callersOfLoadOrder(at("built")), ["LoadOrder", "run"]);
+  at("built");
+  assert.equal(reads, 1, "a second open at one generation reads nothing");
+
+  writeFileSync(join(mirror, "src/extra.ts"), "import { loadOrder } from './orders';\nexport function extra(): string {\n  return loadOrder('e');\n}\n");
+  assert.ok((await graph.syncMirror(mirror, ["src/extra.ts"], undefined, { held: "built", next: "synced" })).ok);
+  assert.deepEqual(callersOfLoadOrder(at("synced")), ["LoadOrder", "extra", "run"]);
+  assert.equal(reads, 2);
+
+  assert.ok((await graph.buildMirror(mirror)).ok);
+  at("rebuilt");
+  at("synced");
+  assert.equal(reads, 4, "the image of the generation a rebuild replaced is not kept");
+});

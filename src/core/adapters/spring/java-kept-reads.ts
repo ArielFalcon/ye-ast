@@ -89,3 +89,36 @@ export async function keptByFile<S extends { file: string }, A>(
   }
   return results;
 }
+
+/**
+ * One answer per file of `paths`, each derived over its file alone and kept by the questions it asked (ADR-0119), asked
+ * in order until `stops` holds of an answer: the first such answer, or `undefined` when none stops. A file the sources do
+ * not hold is skipped. Every derivation that misses shares one held project.
+ */
+export async function keptFirstByFile<A>(
+  kept: KeptReads,
+  reading: { slot: string; parser: () => Promise<JavaParser>; sources: readonly SourceFile[]; build: ProjectBuild; over: ReadOver },
+  paths: readonly string[],
+  stops: (answer: A) => boolean,
+  derive: (reading: FileReading, path: string) => A,
+): Promise<A | undefined> {
+  const index = await kept.index();
+  const projectOf = heldProjectOnce(kept.hold, reading.parser, reading.sources, reading.build, reading.over);
+  for (const path of paths) {
+    const content = index.answer(questions.file(path));
+    if (content === "") continue;
+    const subject = { path, content, generatesInterfaces: reading.build.generatesInterfaces === true };
+    const answer = await kept.facts.ofReads<A>(reading.slot, subject, index.answerIfKnown, async (record) => {
+      const { project: over, files } = await projectOf();
+      const asked = (question: string): string => {
+        const answer = index.answer(question);
+        record(question, answer);
+        return answer;
+      };
+      const recorded = { get: (at: string) => (asked(questions.file(at)), files.get(at)) };
+      return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, asked }, path));
+    });
+    if (stops(answer)) return answer;
+  }
+  return undefined;
+}

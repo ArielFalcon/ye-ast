@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, ImportOrigins, UseSite } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, withJavaSources } from "./java-project.ts";
 import { createJavaProject, isTypeDeclaration, qualifiedTypeName, type JavaFile, type JavaProject, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
@@ -64,35 +64,37 @@ export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sourc
       const files = new Map(parsed.map((file) => [file.path, file]));
       const project = createJavaProject(parsed, build);
       if (unparsed.length > 0 || project.unreadable.length > 0) return results;
-      const subtyped = subtypedTypes([...files.values()], project);
-      if (subtyped === undefined) return results;
+      if ([...files.values()].some((file) => opensPlatformTypes(file, project))) return results;
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
-        const file = files.get(site.file);
-        const name = file === undefined ? undefined : annotationAt(file.root, site.line, site.column, site.spelled);
-        const resolved = name === undefined ? undefined : resolve(name, file!, project, enclosingType(name, file!, project), name);
-        if (resolved?.kind === "platform" && !subtyped.has(resolved.fqn)) results[index] = packageType(resolved.fqn);
+        results[index] = declaredTypeAt(site, files.get(site.file), project);
       }
       return results;
     });
   };
 }
 
+/** The platform type the annotation at a site names, by its package; unknown for a type every repository class is below (`IMPLICIT_SUPERTYPES`). */
+export function declaredTypeAt(site: UseSite, file: JavaFile | undefined, project: JavaProject): DeclaredType {
+  const name = file === undefined ? undefined : annotationAt(file.root, site.line, site.column, site.spelled);
+  const resolved = name === undefined ? undefined : resolve(name, file!, project, enclosingType(name, file!, project), name);
+  return resolved?.kind === "platform" && !IMPLICIT_SUPERTYPES.includes(resolved.fqn) ? packageType(resolved.fqn) : UNKNOWN;
+}
+
 /**
- * The platform types a repository type is declared below, implicit ones included; `undefined` when some declaration may
- * make a value of any platform type run repository code.
+ * Whether a declaration or a value of the file may make a value of any platform type run repository code: a function
+ * value, an aspect, a JDK API that implements an interface at run time, or a supertype that is not a repository type.
+ * Otherwise a repository type is below no platform type but the implicit ones.
  */
-function subtypedTypes(files: readonly JavaFile[], project: JavaProject): ReadonlySet<string> | undefined {
-  for (const file of files) {
-    const pending: Node[] = [file.root];
-    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-      if (FUNCTION_VALUES.has(node.type) || isAspect(node) || namesDynamicImplementation(node, file, project)) return undefined;
-      const scope = isTypeDeclaration(node) || isAnonymous(node) ? enclosingType(node.parent ?? node, file, project) : undefined;
-      for (const supertype of supertypesOf(node)) if (resolve(supertype, file, project, scope, supertype)?.kind !== "repository") return undefined;
-      for (const child of node.namedChildren) if (child !== null) pending.push(child);
-    }
+export function opensPlatformTypes(file: JavaFile, project: JavaProject): boolean {
+  const pending: Node[] = [file.root];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (FUNCTION_VALUES.has(node.type) || isAspect(node) || namesDynamicImplementation(node, file, project)) return true;
+    const scope = isTypeDeclaration(node) || isAnonymous(node) ? enclosingType(node.parent ?? node, file, project) : undefined;
+    for (const supertype of supertypesOf(node)) if (resolve(supertype, file, project, scope, supertype)?.kind !== "repository") return true;
+    for (const child of node.namedChildren) if (child !== null) pending.push(child);
   }
-  return new Set(IMPLICIT_SUPERTYPES);
+  return false;
 }
 
 /** The supertypes a declaration writes: a class's superclass and interfaces, an interface's, and an anonymous class's type. */

@@ -72,22 +72,27 @@ export interface SnapshotData {
   output?: unknown;
 }
 
-/** What the cache decided for one derived fact: whether it holds it, its charge, and how many entries it evicted. */
+/** What the cache decided for one derived fact: whether it holds it, its charge, how many entries it evicted, and the frozen value it answers. */
 export interface FactAdmission {
   admitted: boolean;
   entryBytes: number;
   evicted: number;
+  value: unknown;
 }
 
-/** Serialized immutable data only: no scratch paths, compiler trees, readers or in-flight work. */
+/**
+ * Plain data after one serialization round trip, deep-frozen, so every hit answers the admitted object with no decode
+ * (ADR-0126): no scratch paths, compiler trees, readers or in-flight work.
+ */
 export interface SnapshotDataCache {
   /** Starts one snapshot read: the entries it and the reads before it use are what a floor budget keeps (ADR-0112). */
   beginRead(): void;
   /** Groups the reads made until the returned function is called into one read, so a query over many snapshots holds what all of them used (ADR-0121). */
   beginQuery(): () => void;
   get(key: string): SnapshotData | undefined;
-  put(key: string, data: SnapshotData): void;
-  /** A derived fact (ADR-0035), parsed afresh; facts share the budget and the eviction order and write no `cache` line. */
+  /** Keeps `data` after its round trip and answers the frozen value it keeps; `undefined` when it keeps nothing. */
+  put(key: string, data: SnapshotData): SnapshotData | undefined;
+  /** A derived fact (ADR-0035), frozen; facts share the budget and the eviction order and write no `cache` line. */
   getFact(key: string): unknown;
   putFact(key: string, json: string): FactAdmission;
   /** The bytes the cache holds now, and how many of them are derived facts. */
@@ -221,8 +226,16 @@ export async function readSources(
   signal?: AbortSignal,
 ): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> {
   if (signal?.aborted) return ABORTED;
-  const sources = await deps.reader.read(root, exported.files.filter((file) => file.written).map((file) => file.path));
-  return signal?.aborted ? ABORTED : { ok: true, value: { export: exported, sources } };
+  const written = exported.files.filter((file) => file.written);
+  const blobs = new Map(written.map(({ path, blob }) => [path, blob]));
+  const read = await deps.reader.read(root, written.map((file) => file.path));
+  if (signal?.aborted) return ABORTED;
+  return { ok: true, value: { export: exported, sources: read.map((source) => withBlob(source, blobs.get(source.path))) } };
+}
+
+/** `source` named by the blob id its listing gives it (ADR-0126). */
+function withBlob(source: SourceFile, blob: string | undefined): SourceFile {
+  return blob === undefined ? source : { path: source.path, content: source.content, blob };
 }
 
 export async function extractSources(

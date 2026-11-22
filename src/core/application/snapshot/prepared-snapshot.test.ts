@@ -9,7 +9,7 @@ import { withSnapshotPreparation } from "./prepared-snapshot.ts";
 import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
-import type { EntrypointReading } from "../../ports/entrypoint-extractor.port.ts";
+import type { EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SnapshotReaderDeps, SnapshotData, SnapshotDataCache } from "./read-snapshot.ts";
 
 const SHA = "a".repeat(40);
@@ -186,7 +186,7 @@ test("a failed export is not retained for the next consumer", async () => {
 
 function dataCache(): SnapshotDataCache {
   const entries = new Map<string, SnapshotData>();
-  return { beginRead: () => {}, beginQuery: () => () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: () => ({ admitted: false, entryBytes: 0, evicted: 0 }), usage: () => ({ factBytes: 0, retainedBytes: 0 }) };
+  return { beginRead: () => {}, beginQuery: () => () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: (_key, json) => ({ admitted: false, entryBytes: 0, evicted: 0, value: JSON.parse(json) }), usage: () => ({ factBytes: 0, retainedBytes: 0 }) };
 }
 
 test("the extractor reads over the hold of the read that owns the sources and the facts the snapshot cache keeps for them", async () => {
@@ -204,6 +204,18 @@ test("the extractor reads over the hold of the read that owns the sources and th
   seen.length = 0;
   assert.ok((await query().map({ ...request, revision: "other" })).ok);
   assert.deepEqual(seen, [{}]);
+});
+
+test("a source read from a listing carries the blob id the listing gives its path, and a file the listing does not name carries none", async () => {
+  const { deps, query, request } = setup();
+  deps.reader.read = async () => [{ path: "src/app.ts", content: "export const value = 1;" }, { path: "src/unlisted.ts", content: "" }];
+  const seen: SourceFile[] = [];
+  deps.extractor.extract = async (files) => {
+    seen.push(...files);
+    return { findings: [], readingCuts: [] };
+  };
+  assert.ok((await query({ snapshotCache: createSnapshotDataCache(1 << 20) }).map(request)).ok);
+  assert.deepEqual(seen, [{ path: "src/app.ts", content: "export const value = 1;", blob: "blob" }, { path: "src/unlisted.ts", content: "" }]);
 });
 
 test("independent requests reuse sources and findings but each exports into its own temporary directory", async () => {
