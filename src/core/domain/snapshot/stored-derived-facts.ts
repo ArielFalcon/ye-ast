@@ -26,6 +26,9 @@ export const STORED_DERIVED_FACT_VERSIONS: Readonly<Record<string, number>> = {
   "java-import-statements": 1,
   "java-import-targets": 1,
   "java-root-origins": 1,
+  "java-root-bindings": 1,
+  "java-declared-types": 1,
+  "java-opens-platform-types": 1,
   tokens: 1,
   "ts-module-resolutions": 1,
 };
