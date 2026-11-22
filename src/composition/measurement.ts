@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { SnapshotCacheEvent } from "../core/application/snapshot/snapshot-data-cache.ts";
 import type { Result } from "../core/domain/shared/result.ts";
-import { INDEX_STORE_DIRECTORY, type CodeGraph } from "../core/ports/code-graph.port.ts";
+import { INDEX_STORE_DIRECTORY, type CodeGraph, type CodeGraphReader } from "../core/ports/code-graph.port.ts";
 import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
@@ -73,13 +73,23 @@ export function measuredDecisions(queries: DecisionQueries, deps: MeasurementDep
   return { decisions: (request) => measured("decisions.decisions", () => queries.decisions(request), deps) };
 }
 
+/** Every read of an opened store is tallied: a request asks the reader once per symbol or file, thousands of times. */
+const GRAPH_READER_STAGES = {
+  symbolsInFiles: "graph-symbols-in-files",
+  symbolsByIds: "graph-symbols-by-ids",
+  declarationsNamed: "graph-declarations-named",
+  incomingEdges: "graph-incoming-edges",
+  outgoingEdges: "graph-outgoing-edges",
+  unresolvedReferences: "unresolved-references",
+} as const satisfies { readonly [K in Exclude<keyof CodeGraphReader, "versions" | "close">]: string };
+
 /** The index side of the graph, measured: a build is the one expensive event a session can hide. */
 export function measuredGraph(graph: CodeGraph, deps: MeasurementDeps): CodeGraph {
   return {
     index: (snapshot, store, signal) => measuredBuild("built", () => graph.index(snapshot, store, signal), store, deps),
     open: (store) => {
       const opened = measuredStage("store-open", () => graph.open(store), deps);
-      return opened.ok ? { ok: true, value: measuredStages(opened.value, { unresolvedReferences: "unresolved-references" }, deps) } : opened;
+      return opened.ok ? { ok: true, value: measuredTalliedStages(opened.value, GRAPH_READER_STAGES, deps) } : opened;
     },
     buildMirror: (mirror, signal) => measuredBuild("built", () => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
     syncMirror: (mirror, paths, signal) => measuredBuild("synced", () => graph.syncMirror(mirror, paths, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),

@@ -218,9 +218,12 @@ of one agent it precedes its query line in order; under concurrent requests line
 by time only.
 
 A reader a request calls once per file writes one **tallied stage line** per query instead, just before the query line:
-the calls it made and their summed time, with no `start_ms`. Its outcome is the first one that was not `ok`. Today that
-is `member-names`, the syntax of each source a family reads. The batch readers `root-bindings`, `declared-types` and
-`receiver-methods` write ordinary stage lines.
+the calls it made and their summed time, with no `start_ms`. Its outcome is the first one that was not `ok`. Today
+these are `member-names`, the syntax of each source a family reads, and one line per method of an opened store's
+reader: `graph-symbols-in-files`, `graph-symbols-by-ids`, `graph-declarations-named`, `graph-incoming-edges`,
+`graph-outgoing-edges` and `unresolved-references`. A request asks the reader once per symbol or file, so its calls
+count the store reads behind the answer. The batch readers `root-bindings`, `declared-types` and `receiver-methods`
+write ordinary stage lines.
 
 ```json
 {"ye_ast":{"event":"stage","stage":"member-names","outcome":"ok","calls":1187,"duration_ms":79}}
@@ -232,9 +235,8 @@ The stages also cover the live lifecycle, each port call `openLive` makes: `live
 `live-release` (the lock release), `live-staleness-compare`, and the retention sweep as `live-usage`,
 `live-discard-idle` and `live-discard-debris`. `export` is the listing of the commit, decided afresh on every SHA request; `materialize` is the writing of the listed
 files ([ADR-0028](../adr/0028-lazy-export-materialization.md)), which a request writes only when a reader needs them,
-so its absence is the sign that retained data and a kept index served the request. `unresolved-references` is one read of the opened store's unresolved
-references. The edge readers (`incomingEdges`, `outgoingEdges`, `symbolsInFiles`) are per-symbol calls, many per request,
-and stay unmeasured.
+so its absence is the sign that retained data and a kept index served the request. `resolve-commit` is one resolution
+of a revision to its commit, `HEAD` included: a live request resolves `HEAD` before its capture and again inside it.
 
 A **cache line**, one per decision of the snapshot data cache ([ADR-0020](../adr/0020-host-budgeted-snapshot-memory-cache.md)), when
 measurement is configured:
@@ -432,6 +434,20 @@ manifest beside the baselines.
    normalized comparison above.
    - Two runs produce identical bytes.
    - The normalized diff against the previous baseline is empty for an unchanged commit.
+
+   The latency bench and the warm differential of [RFC-0040](0040-resident-generations-and-answer-latency.md) drive
+   the real stdio MCP on disposable clones of the corpus and read these lines: the bench reports the wall time, the
+   stages, the SQL statements, the cache counters and the RSS per repository, scenario and family; the differential
+   proves that a long-lived process answers the same bytes as a cold one after commits, edits and trust changes.
+
+   ```bash
+   node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>]
+   node --import tsx scripts/latency-bench.ts --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]
+   node --import tsx scripts/warm-differential.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--commits <n>] [--build-output <group>/<repo>=<flag>:<dir>]... [--fail-fast] [--engine <checkout>]
+   ```
+
+   `--quick` asks `callers` and `outline` of one repository, unchanged and after an edit, five times each, so an
+   integration batch is compared with the same cells of a full run in a few minutes.
 5. **The transport harness**, a script: the real environment is a host over stdio, so this is the only step that
    exercises `serve` and `mcp`, and the only one that provokes the failures nobody should discover in production:
    missing store, schema outside range (`src/core/adapters/codegraph/store-version.ts:4`), incomplete index, deadline,

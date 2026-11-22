@@ -607,12 +607,12 @@ test("workspace impact replays persisted moving members from their original cont
   assert.ok(!mismatch.ok && mismatch.fault.kind === "workspace-replay-mismatch");
 });
 
-test("a measured map writes its export, materialize and entrypoint stages before its query line", async () => {
+test("a measured map writes its commit resolution, export, materialize and entrypoint stages before its query line", async () => {
   const lines: string[] = [];
   await mapOf({ measure: (line) => lines.push(line) });
 
   const records = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string });
-  assert.deepEqual(records.filter((record) => record.event !== "cache").map((record) => record.stage ?? record.event), ["export", "materialize", "entrypoints", "query"]);
+  assert.deepEqual(records.filter((record) => record.event !== "cache").map((record) => record.stage ?? record.event), ["resolve-commit", "export", "materialize", "entrypoints", "query"]);
 });
 
 test("a repeated map lists the commit again but writes none of its files when the snapshot data is kept", async () => {
@@ -625,7 +625,7 @@ test("a repeated map lists the commit again but writes none of its files when th
 
   assert.deepEqual(second, first);
   const repeated = lines.slice(firstLines).map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string });
-  assert.deepEqual(repeated.filter((record) => record.event !== "cache").map((record) => record.stage ?? record.event), ["export", "query"]);
+  assert.deepEqual(repeated.filter((record) => record.event !== "cache").map((record) => record.stage ?? record.event), ["resolve-commit", "export", "query"]);
 });
 
 test("a measured composition writes cache lines for the snapshot data it keeps, and none when measurement is off", async () => {
@@ -643,7 +643,7 @@ test("a measured composition writes cache lines for the snapshot data it keeps, 
   assert.equal(outcomes.at(-1), "hit");
 });
 
-test("a measured live map attributes its lock, listing and reconcile as stages", async () => {
+test("a measured live map attributes its lock, listing, reconcile and HEAD resolution as stages", async () => {
   const trustDirectory = join(workspace, "trust-live-stages");
   const quiet = { out: () => undefined, err: () => undefined };
   assert.equal(await composeCli({ scratchRoot, trustDirectory })(["init", "--trust", "trusted", repo], quiet), EXIT_CODE.ok);
@@ -651,8 +651,8 @@ test("a measured live map attributes its lock, listing and reconcile as stages",
 
   await composeQueries({ scratchRoot, trustDirectory, measure: (line) => lines.push(line) }).entrypoints.map({ repo, repoId: "shop", live: true });
 
-  const stages = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string }).flatMap((record) => (record.event === "stage" && record.stage?.startsWith("live-") ? [record.stage] : []));
-  for (const stage of ["live-lock", "live-read-state", "live-list", "live-reconcile", "live-touch", "live-release", "live-usage"]) assert.ok(stages.includes(stage), stage);
+  const stages = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string }).flatMap((record) => (record.event === "stage" && record.stage !== undefined ? [record.stage] : []));
+  for (const stage of ["live-lock", "live-read-state", "live-list", "live-reconcile", "live-touch", "live-release", "live-usage", "resolve-commit"]) assert.ok(stages.includes(stage), stage);
 });
 
 test("a trace over a real index charges an anonymous callback to its encloser, defers a named one passed as a value, and never reaches an unused nested function", async () => {
