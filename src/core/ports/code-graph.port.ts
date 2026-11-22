@@ -126,6 +126,11 @@ export interface CodeGraph {
    */
   buildMirror(mirror: string, signal?: AbortSignal): Promise<Result<IndexSummary, CodeGraphFault>>;
   /**
+   * Replaces the store inside `mirror` by a copy of the store `index` wrote under `store`, and answers what `buildMirror`
+   * answers for the same files. The copy shares no file with `store`, so a later `syncMirror` never changes it.
+   */
+  adoptMirror(mirror: string, store: string, signal?: AbortSignal): Promise<Result<IndexSummary, CodeGraphFault>>;
+  /**
    * Brings the store `buildMirror` wrote up to date for `paths`, the mirror-relative paths ye-ast added, changed or
    * deleted since, with the engine's incremental update; never called with no path. `filesNotIndexed` is recomputed
    * over every file of `mirror`, and `filesFailed` lists the paths the update could not read. Runs in a child

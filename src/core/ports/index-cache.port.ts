@@ -5,6 +5,8 @@ export interface IndexedSnapshot {
   /** The caller closes it. */
   store: CodeGraphReader;
   summary: IndexSummary;
+  /** Where the kept index lives, the `store` of `CodeGraph.index`; retention leaves it alone until `store` is closed. */
+  directory: string;
 }
 
 export interface IndexRequest {

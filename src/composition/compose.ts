@@ -227,6 +227,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const bareGraph = createCodeGraph(defaultCodeGraphDeps, { liveImageBytes: LIVE_GRAPH_IMAGE_BYTES, shutdown: options.signal });
   const graph = measurement === undefined ? bareGraph : measuredGraph(bareGraph, measurement);
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
+  const keptGraph = createCodeGraph(defaultCodeGraphDeps, { imageBytes: options.graphImageBytes ?? GRAPH_IMAGE_BYTES, shutdown: options.signal });
+  const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph: measurement === undefined ? keptGraph : measuredGraph(keptGraph, measurement), digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const bareLiveMirror = createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten });
   const liveMirror = measurement === undefined ? bareLiveMirror : measuredLiveMirror(bareLiveMirror, measurement);
   const live: LiveDeps = {
@@ -238,11 +240,10 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     retention: options.liveRetention ?? LIVE_RETENTION,
     now: () => Date.now(),
     newStoreGeneration: () => randomUUID(),
+    indexes,
   };
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, holds, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, snapshotCache: snapshotCache.snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
-  const keptGraph = createCodeGraph(defaultCodeGraphDeps, { imageBytes: options.graphImageBytes ?? GRAPH_IMAGE_BYTES, shutdown: options.signal });
-  const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph: measurement === undefined ? keptGraph : measuredGraph(keptGraph, measurement), digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= javaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });

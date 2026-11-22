@@ -3,8 +3,8 @@ import { createRequire } from "node:module";
 import { devNull } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { statSync } from "node:fs";
-import { realpath, rm } from "node:fs/promises";
+import { constants, statSync } from "node:fs";
+import { cp, realpath, rm } from "node:fs/promises";
 import type { CodeGraph as SdkGraph, Edge, Node } from "@colbymchenry/codegraph";
 import type { Result } from "../../domain/shared/result.ts";
 import {
@@ -224,6 +224,25 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, opti
     return { ok: true, value: { filesIndexed, filesSkipped, filesErrored, filesNotIndexed, versions } };
   }
 
+  async function adoptMirror(mirror: string, store: string, signal?: AbortSignal): Promise<Result<IndexSummary, CodeGraphFault>> {
+    if (signal?.aborted) return ABORTED;
+    const root = resolve(mirror);
+    const listed = await listMirror(root);
+    if (!listed.ok) return listed;
+    if ((await workers.release(root, signal)) === "aborted") return ABORTED;
+    const target = join(root, INDEX_STORE_DIRECTORY);
+    try {
+      await rm(target, { recursive: true, force: true });
+      await cp(join(resolve(store), INDEX_STORE_DIRECTORY), target, { recursive: true, mode: constants.COPYFILE_FICLONE });
+    } catch (error) {
+      return fault("index-failed", `the kept store could not be copied: ${errorDetail(error)}`);
+    }
+    const summarized = summarize(root, listed.value, []);
+    if (!summarized.ok) return summarized;
+    const { filesNotIndexed, filesStored, versions } = summarized.value;
+    return { ok: true, value: { filesIndexed: filesStored, filesSkipped: 0, filesErrored: 0, filesNotIndexed, versions } };
+  }
+
   async function syncMirror(mirror: string, paths: readonly string[], signal?: AbortSignal, generations?: SyncGenerations): Promise<Result<MirrorSyncSummary, CodeGraphFault>> {
     if (paths.length === 0) return fault("index-failed", "a mirror sync needs at least one path");
     if (signal?.aborted) return ABORTED;
@@ -263,7 +282,7 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, opti
     }
   }
 
-  return { index, buildMirror, syncMirror, open };
+  return { index, buildMirror, adoptMirror, syncMirror, open };
 }
 
 function fromWorker(answer: SyncAnswer): Result<MirrorSyncSummary, CodeGraphFault> {
