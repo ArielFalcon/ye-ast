@@ -17,7 +17,7 @@ import { createEntrypointQueries } from "../core/application/entrypoints/entrypo
 import { trustOf } from "../core/application/snapshot/read-snapshot.ts";
 import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
 import { exportSelection } from "../core/domain/shared/scope.ts";
-import { WRITTEN_UNIVERSE_VERSION, isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
+import { WRITTEN_UNIVERSE_VERSION, canMoveLiveListing, isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
 import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
 import { isTypeCheckerInput } from "../core/domain/languages/typescript.ts";
 import { createRevisionSources } from "../core/application/snapshot/revision-sources.ts";
@@ -94,7 +94,8 @@ import { installedVersion, ownVersion } from "./installed-versions.ts";
 import { measuredAnswerMemo, measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWatch, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
 import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
 import { queriesFirst } from "./priming-turns.ts";
-import { canMoveLiveListing, watchLive } from "./live-watch.ts";
+import { watchLive } from "../core/application/live/live-watch.ts";
+import { isEngineEntry } from "../core/ports/staging-rules.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -399,7 +400,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     watchLive(repo, {
       treeWatch,
       turns: priority.turns,
-      relevant: (path) => canMoveLiveListing(path, selected),
+      relevant: (path) => canMoveLiveListing(path, selected, isEngineEntry),
       trusted: () => trusted(repo),
       refresh: (stopped) => prime(repo, repoId, "watch", stopped),
       report: measuredWatch(measurement),

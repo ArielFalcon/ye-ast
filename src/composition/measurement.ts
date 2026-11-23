@@ -17,7 +17,7 @@ import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { IndexDiscard } from "../core/ports/index-cache.port.ts";
 import type { LiveMirror } from "../core/ports/live-mirror.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
-import type { WatchReport } from "./live-watch.ts";
+import type { WatchReport } from "../core/application/live/live-watch.ts";
 
 /** Receives one measurement line, already redacted, one per call. */
 export type MeasurementSink = (line: string) => void;

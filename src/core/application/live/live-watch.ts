@@ -1,17 +1,5 @@
-import type { PrimingTurns } from "../core/application/live/live-priming.ts";
-import type { PathSelection } from "../core/domain/shared/scope.ts";
-import { isEngineEntry } from "../core/ports/staging-rules.ts";
-import type { TreeWatch, TreeWatcher } from "../core/ports/tree-watch.port.ts";
-
-const GIT_STATE = new Set([".git/HEAD", ".git/index"]);
-
-/**
- * Whether a change at `path`, relative to a working tree's root, can move the tree's live listing: git's HEAD and index,
- * and a path of the scope's selection that the listing can hold (no engine entry, which keeps the mirror itself out).
- */
-export function canMoveLiveListing(path: string, selected: PathSelection): boolean {
-  return GIT_STATE.has(path) || (!isEngineEntry(path) && selected(path));
-}
+import type { PrimingTurns } from "./live-priming.ts";
+import type { TreeWatch, TreeWatcher } from "../../ports/tree-watch.port.ts";
 
 export type WatchReport = { outcome: "settled" } | { outcome: "off"; reason: string };
 
