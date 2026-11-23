@@ -71,7 +71,8 @@ function createWorkingSetFloor() {
 /** The heap charge of `serializedBytes` UTF-8 bytes once decoded and frozen. */
 const charge = (serializedBytes: number): number => Math.ceil(serializedBytes * DECODED_HEAP_PER_SERIALIZED_BYTE);
 
-type Entry = { value: unknown; size: number; fact: boolean; read: number; content: string | undefined; keyedBy: KeyedBy };
+/** `evicted` is the release of a resident tree (ADR-0155), which holds no value. */
+type Entry = { value: unknown; size: number; fact: boolean; read: number; content: string | undefined; keyedBy: KeyedBy; evicted?: () => void };
 
 /**
  * `budget` is either a hard cap on the retained bytes, or `"working-set"`: a floor derived from use below which nothing is
@@ -118,6 +119,7 @@ export function createSnapshotDataCache(budget: number | "working-set", observe?
     used -= entry.size;
     if (entry.fact) factBytes -= entry.size;
     workingSet.move(entry.size, entry.content, undefined);
+    entry.evicted?.();
     return entry.size;
   };
   const lookup = (key: string, content: string | undefined): { value: unknown; size: number } | undefined => {
@@ -136,7 +138,7 @@ export function createSnapshotDataCache(budget: number | "working-set", observe?
     return entry;
   };
   /** Evicts least recently used entries until `size` fits, then holds the entry; answers how many entries it evicted. */
-  const admit = (key: string, value: unknown, size: number, fact: boolean, keyedBy: KeyedBy, content: string | undefined): number => {
+  const admit = (key: string, value: unknown, size: number, fact: boolean, keyedBy: KeyedBy, content: string | undefined, onEvicted?: () => void): number => {
     let evicted = 0;
     const charged = keyedBy === "request" ? undefined : content;
     workingSet.move(size, undefined, charged);
@@ -147,7 +149,7 @@ export function createSnapshotDataCache(budget: number | "working-set", observe?
       evicted++;
       observe?.({ outcome: "evicted", entryBytes: evictedBytes, retainedBytes: used });
     }
-    (keyedBy === "request" ? requested : entries).set(key, { value, size, fact, read, content: charged, keyedBy });
+    (keyedBy === "request" ? requested : entries).set(key, { value, size, fact, read, content: charged, keyedBy, ...(onEvicted === undefined ? {} : { evicted: onEvicted }) });
     used += size;
     if (fact) factBytes += size;
     return evicted;
@@ -189,6 +191,12 @@ export function createSnapshotDataCache(budget: number | "working-set", observe?
       const size = charge(Buffer.byteLength(key) + Buffer.byteLength(json));
       if (!floor && size > cap) return { admitted: false, entryBytes: size, evicted: 0, value };
       return { admitted: true, entryBytes: size, evicted: admit(key, value, size, true, keyedBy, readContent()), value };
+    },
+    reside(key, bytes, evicted) {
+      if (holderOf(key) !== undefined) return lookup(key, readContent()) !== undefined;
+      if (!floor && bytes > cap) return false;
+      admit(key, undefined, bytes, false, "content", readContent(), evicted);
+      return true;
     },
   });
   return {

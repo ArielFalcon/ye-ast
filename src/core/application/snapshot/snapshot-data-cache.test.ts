@@ -393,3 +393,33 @@ test("an answer survives the reads right after it that admit more of the content
 
   assert.deepEqual([cache.get(answerKey(1)) !== undefined, cache.get("callers-facts") === undefined], [true, true]);
 });
+
+test("a resident tree is charged once, to the latest content that used it, and its release runs once, when the content that last used it left and an admission evicts it", () => {
+  const cache = createSnapshotDataCache("working-set");
+  const released: string[] = [];
+  const read = (content: string, keys: readonly string[]): boolean[] => {
+    cache.beginRead({ repository: "/repo", snapshot: "live", key: content });
+    return keys.map((key) => cache.reside(key, 100, () => void released.push(key)));
+  };
+  read("c1", ["unchanged", "edited"]);
+  read("c2", ["unchanged", "edited-again"]);
+  read("c3", ["unchanged", "edited-again"]);
+  read("c4", ["unchanged", "edited-again"]);
+
+  assert.equal(cache.usage().floorBytes, 300, "at c2: unchanged and edited-again for c2, edited for c1");
+  assert.deepEqual(released, []);
+  assert.deepEqual(read("c5", ["unchanged", "edited-again", "edited-once-more"]), [true, true, true]);
+  assert.deepEqual(released, ["edited"]);
+  read("c6", ["unchanged", "edited-once-more"]);
+  assert.deepEqual(released, ["edited"]);
+});
+
+test("an explicit cap counts resident trees, evicting the least recently used to admit one, and refuses one larger than itself; zero keeps none", () => {
+  const cache = createSnapshotDataCache(150);
+  const released: string[] = [];
+  const reside = (key: string, bytes: number) => cache.reside(key, bytes, () => void released.push(key));
+
+  assert.deepEqual([reside("a", 100), reside("b", 100), reside("c", 151)], [true, true, false]);
+  assert.deepEqual([released, cache.usage().retainedBytes], [["a"], 100]);
+  assert.equal(createSnapshotDataCache(0).reside("a", 1, () => assert.fail("never admitted")), false);
+});

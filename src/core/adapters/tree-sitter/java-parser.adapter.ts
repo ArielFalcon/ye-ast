@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { Language, Parser, type Node } from "web-tree-sitter";
 import type { Result } from "../../domain/shared/result.ts";
 import { sourceKey } from "../../domain/shared/source-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ParseHolds } from "../../ports/parse-holds.port.ts";
+import type { ParseHolds, TreeResidence } from "../../ports/parse-holds.port.ts";
 
 export interface JavaSyntaxTree {
   root: Node;
@@ -36,46 +37,93 @@ export interface JavaParser {
 /** One parse of a source: its tree and the bodies its syntax errors lie in, or the fault where they are not confined. */
 type Read = Result<{ root: Node; free(): void; unreadBodies: readonly Node[]; line: number }, SyntaxFault>;
 
-/** The trees of the sources open holds kept, one per file of each hold by its path and content, so a file two snapshots of one read share unchanged parses once. */
+/**
+ * The trees of the sources open holds kept, one per path and content whatever hold kept it, so a file two snapshots or
+ * two reads share unchanged parses once (ADR-0040, ADR-0155).
+ */
 export interface JavaTreeHolds extends ParseHolds {
-  /** What `read` answers for `source`, owned by the open hold that kept it: freed at its release; `undefined` without one. */
+  /** What `read` answers for `source`, owned by the open hold that kept it until its release: `undefined` without one. */
   held(source: SourceFile, read: () => Read): Read | undefined;
 }
 
+/**
+ * The heap a resident tree takes per UTF-8 byte of its source's content and key: the marginal RSS of a held tree
+ * (16.5-18.6) plus its JS heap (0.26-0.47), the largest of each, rounded up (ADR-0155). A charge, not a threshold.
+ */
+export const TREE_HEAP_PER_SOURCE_BYTE = 19.1;
+
+/** A tree and its owners: each open hold handed it, and the residence while it keeps it; freed when the last one lets it go. */
+interface OwnedTree {
+  read: Read;
+  owners: number;
+  /** The residence key and charge, set the first time a residence is asked to keep it. */
+  residence?: { key: string; bytes: number; kept: boolean };
+}
+
 interface Hold {
-  /** Absent once released. */
-  trees: Map<string, Read> | undefined;
+  /** The keys of the trees this hold owns; absent once released. */
+  trees: Set<string> | undefined;
 }
 
 export function createJavaTreeHolds(): JavaTreeHolds {
-  const keptBy = new WeakMap<SourceFile, Hold>();
+  const prefix = `java-tree\0${randomUUID()}\0`;
+  const trees = new Map<string, OwnedTree>();
+  const keptBy = new WeakMap<SourceFile, { hold: Hold; residence: TreeResidence | undefined }>();
+  const disown = (file: string, tree: OwnedTree): void => {
+    tree.owners--;
+    if (tree.owners > 0) return;
+    trees.delete(file);
+    if (tree.read.ok) tree.read.value.free();
+  };
+  const reside = (file: string, tree: OwnedTree, content: string, residence: TreeResidence): void => {
+    if (!tree.read.ok) return;
+    if (tree.residence === undefined) {
+      const key = prefix + file;
+      tree.residence = { key, bytes: Math.ceil(TREE_HEAP_PER_SOURCE_BYTE * (Buffer.byteLength(content) + Buffer.byteLength(key))), kept: false };
+    }
+    const resident = tree.residence;
+    const evicted = () => {
+      resident.kept = false;
+      disown(file, tree);
+    };
+    if (!residence.reside(resident.key, resident.bytes, evicted) || resident.kept) return;
+    resident.kept = true;
+    tree.owners++;
+  };
   return {
     open() {
-      const hold: Hold = { trees: new Map() };
+      const hold: Hold = { trees: new Set() };
       return {
-        keep: (sources) => sources.map((source) => {
+        keep: (sources, residence) => sources.map((source) => {
           const own = { ...source };
-          keptBy.set(own, hold);
+          const copied = keptBy.get(source);
+          keptBy.set(own, { hold, residence: residence ?? (copied?.hold === hold ? copied.residence : undefined) });
           return own;
         }),
         open: () => hold.trees !== undefined,
         release() {
-          const trees = hold.trees;
+          const owned = hold.trees;
           hold.trees = undefined;
-          for (const read of trees?.values() ?? []) if (read.ok) read.value.free();
+          for (const file of owned ?? []) disown(file, trees.get(file)!);
         },
       };
     },
     held(source, read) {
-      const trees = keptBy.get(source)?.trees;
-      if (trees === undefined) return undefined;
+      const kept = keptBy.get(source);
+      const owned = kept?.hold.trees;
+      if (kept === undefined || owned === undefined) return undefined;
       const file = sourceKey(source);
       let tree = trees.get(file);
       if (tree === undefined) {
-        tree = read();
+        tree = { read: read(), owners: 0 };
         trees.set(file, tree);
       }
-      return tree;
+      if (!owned.has(file)) {
+        owned.add(file);
+        tree.owners++;
+      }
+      if (kept.residence !== undefined) reside(file, tree, source.content, kept.residence);
+      return tree.read;
     },
   };
 }

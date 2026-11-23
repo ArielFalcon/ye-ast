@@ -186,7 +186,7 @@ test("a failed export is not retained for the next consumer", async () => {
 
 function dataCache(): SnapshotDataCache {
   const entries = new Map<string, SnapshotData>();
-  const cache: SnapshotDataCache = { beginRead: () => cache, beginQuery: () => () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: (_key, json) => ({ admitted: false, entryBytes: 0, evicted: 0, value: JSON.parse(json) }), usage: () => ({ factBytes: 0, retainedBytes: 0, floorBytes: 0 }) };
+  const cache: SnapshotDataCache = { beginRead: () => cache, beginQuery: () => () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: (_key, json) => ({ admitted: false, entryBytes: 0, evicted: 0, value: JSON.parse(json) }), reside: () => false, usage: () => ({ factBytes: 0, retainedBytes: 0, floorBytes: 0 }) };
   return cache;
 }
 

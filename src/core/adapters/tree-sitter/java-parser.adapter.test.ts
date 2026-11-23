@@ -2,7 +2,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import { Parser, type Tree } from "web-tree-sitter";
-import { createJavaParser, createJavaTreeHolds } from "./java-parser.adapter.ts";
+import { createJavaParser, createJavaTreeHolds, TREE_HEAP_PER_SOURCE_BYTE } from "./java-parser.adapter.ts";
 
 /** Native parses and the trees not freed yet. */
 const native = { parses: 0, alive: new Set<Tree>() };
@@ -60,7 +60,7 @@ test("a file an open hold kept parses once by its path and content, in every sna
   assert.equal(native.alive.size, 0);
 });
 
-test("a source no open hold kept, the original of a kept copy, one kept by a released hold, or by another hold, gets a tree of its own", async () => {
+test("a source no open hold kept, the original of a kept copy, or one kept by a released hold, gets a tree of its own", async () => {
   const holds = createJavaTreeHolds();
   const parser = await createJavaParser(holds);
   const original = { path: "src/A.java", content: "class A {}" };
@@ -68,24 +68,97 @@ test("a source no open hold kept, the original of a kept copy, one kept by a rel
   const [hers] = theirs.keep([original]);
   const mine = holds.open();
   const [kept] = mine.keep([original]);
-  const parsedHers = parser.parse(hers!);
-  assert.ok(parsedHers.ok);
+  assert.ok(parser.parse(hers!).ok);
 
   const own = parser.parse(original);
   assert.ok(own.ok);
   own.value.dispose();
   assert.deepEqual([native.parses, native.alive.size], [2, 1]);
-  const parsedMine = parser.parse(kept!);
-  assert.ok(parsedMine.ok);
-  assert.notEqual(parsedMine.value.root.tree, parsedHers.value.root.tree);
   mine.release();
-  assert.deepEqual([native.parses, native.alive.size], [3, 1]);
   const afterRelease = parser.parse(kept!);
   assert.ok(afterRelease.ok);
   afterRelease.value.dispose();
-  assert.deepEqual([native.parses, native.alive.size], [4, 1]);
+  assert.deepEqual([native.parses, native.alive.size], [3, 1]);
   theirs.release();
   assert.equal(native.alive.size, 0);
+});
+
+test("open holds that kept one path and content share its tree, parsed once, and it is freed exactly once, after the last of them released, however often each releases", async () => {
+  const holds = createJavaTreeHolds();
+  const parser = await createJavaParser(holds);
+  const source = { path: "src/A.java", content: "class A {}" };
+  const [older, newer] = [holds.open(), holds.open()];
+  const first = parser.parse(older.keep([source])[0]!);
+  const second = parser.parse(newer.keep([source])[0]!);
+  assert.ok(first.ok && second.ok);
+  assert.equal(second.value.root.tree, first.value.root.tree);
+
+  older.release();
+  older.release();
+  assert.deepEqual([native.parses, native.alive.size], [1, 1]);
+  newer.release();
+  newer.release();
+  assert.deepEqual([native.parses, native.alive.size], [1, 0]);
+});
+
+/** A residence that keeps every tree it is asked to until `evict` lets them go, as the snapshot cache does under its floor. */
+function fakeResidence() {
+  const kept = new Map<string, { bytes: number; evicted: () => void }>();
+  return {
+    kept,
+    reside(key: string, bytes: number, evicted: () => void) {
+      if (!kept.has(key)) kept.set(key, { bytes, evicted });
+      return true;
+    },
+    evict() {
+      for (const [key, { evicted }] of kept) {
+        kept.delete(key);
+        evicted();
+      }
+    },
+  };
+}
+
+test("a tree a residence keeps outlives every hold, is shared by the next hold that keeps its path and content, and is freed once, when the residence and every hold let it go", async () => {
+  const holds = createJavaTreeHolds();
+  const parser = await createJavaParser(holds);
+  const residence = fakeResidence();
+  const unchanged = { path: "src/A.java", content: "class A {}" };
+  const generation = holds.open();
+  const [first, edited] = generation.keep([unchanged, { path: "src/B.java", content: "class B {}" }], residence);
+  assert.ok(parser.parse(first!).ok && parser.parse(edited!).ok);
+  generation.release();
+  assert.deepEqual([native.parses, native.alive.size, residence.kept.size], [2, 2, 2]);
+  assert.ok([...residence.kept.values()].every(({ bytes }) => bytes >= TREE_HEAP_PER_SOURCE_BYTE * "class A {}".length));
+
+  const next = holds.open();
+  const [again, change] = next.keep([unchanged, { path: "src/B.java", content: "class B { int b; }" }], residence);
+  const reused = parser.parse(again!);
+  assert.ok(reused.ok && parser.parse(change!).ok);
+  assert.deepEqual([native.parses, native.alive.size, residence.kept.size], [3, 3, 3]);
+
+  residence.evict();
+  assert.equal(native.alive.size, 2);
+  assert.ok(reused.value.root.tree.rootNode.text.length > 0);
+  next.release();
+  assert.equal(native.alive.size, 0);
+});
+
+test("a hold's copy of a source it kept with a residence keeps its tree there too, and another hold's copy of it does not", async () => {
+  const holds = createJavaTreeHolds();
+  const parser = await createJavaParser(holds);
+  const residence = fakeResidence();
+  const [hold, other] = [holds.open(), holds.open()];
+  const [kept] = hold.keep([{ path: "src/A.java", content: "class A {}" }], residence);
+  const [copy] = hold.keep([kept!]);
+  const [foreign] = other.keep([hold.keep([{ path: "src/B.java", content: "class B {}" }], residence)[0]!]);
+
+  assert.ok(parser.parse(copy!).ok && parser.parse(foreign!).ok);
+
+  assert.equal(residence.kept.size, 1);
+  hold.release();
+  other.release();
+  assert.equal(native.alive.size, 1);
 });
 
 const SYNTAX_ERRORS = new URL("./fixtures/syntax-errors/", import.meta.url);

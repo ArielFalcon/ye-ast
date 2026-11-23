@@ -10,7 +10,7 @@ import type { Digest } from "../../ports/digest.port.ts";
 import type { EntrypointExtractor, EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { LiveFault } from "../../ports/live-queries.port.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
-import type { ParseHold, ParseHolds } from "../../ports/parse-holds.port.ts";
+import type { ParseHold, ParseHolds, TreeResidence } from "../../ports/parse-holds.port.ts";
 import type { SourceReader } from "../../ports/source-reader.port.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { CommitExport, ExportBudget, Vcs, VcsFault } from "../../ports/vcs.port.ts";
@@ -106,12 +106,14 @@ export interface SnapshotDataCache {
   /** A derived fact (ADR-0035), frozen; facts share the budget and the eviction order and write no `cache` line. */
   getFact(key: string): unknown;
   putFact(key: string, json: string, keyedBy?: KeyedBy): FactAdmission;
+  /** A resident syntax tree (ADR-0155): an entry with a charge and no value, held and evicted as any entry keyed by content, whose `evicted` runs once when the cache lets it go. */
+  reside: TreeResidence["reside"];
   /** The bytes the cache holds now, how many of them are derived facts, and the floor or cap it evicts above. */
   usage(): { factBytes: number; retainedBytes: number; floorBytes: number };
 }
 
 /** The lookups and admissions of one snapshot read, counted for the content it reads whatever read began after it (ADR-0147). */
-export type SnapshotReading = Pick<SnapshotDataCache, "get" | "put" | "getFact" | "putFact">;
+export type SnapshotReading = Pick<SnapshotDataCache, "get" | "put" | "getFact" | "putFact" | "reside">;
 
 export interface PreparedCommit {
   /** The hold that owns the prepared sources, for the lifetime of this preparation. */
@@ -143,13 +145,13 @@ export interface SnapshotPreparation {
 /** What one snapshot read holds until it ends: the temporary directories it makes and the trees parsed from the sources it keeps. */
 export interface ReadScope {
   directory(): Promise<string>;
-  /** The sources as the read's own, each parsed at most once until the read ends (ADR-0040). */
-  keep(sources: readonly SourceFile[]): SourceFile[];
+  /** The sources as the read's own, each parsed at most once until the read ends (ADR-0040), and kept resident in `residence` after it (ADR-0155). */
+  keep(sources: readonly SourceFile[], residence?: TreeResidence): SourceFile[];
   /** The read's open parse hold, which owns every tree the read kept until `release`; absent where nothing is held. */
   hold?: ParseHold;
 }
 
-/** Runs `use` in a read scope, then frees the trees it held and removes every directory it made, newest first, whether `use` answers or throws. */
+/** Runs `use` in a read scope, then gives up the trees it held (ADR-0155) and removes every directory it made, newest first, whether `use` answers or throws. */
 export async function withScratch<T>(deps: Pick<SnapshotReaderDeps, "scratch" | "holds">, use: (scope: ReadScope) => Promise<T>): Promise<T> {
   const directories: string[] = [];
   const hold = deps.holds?.open();
@@ -160,7 +162,7 @@ export async function withScratch<T>(deps: Pick<SnapshotReaderDeps, "scratch" | 
         directories.push(created);
         return created;
       },
-      keep: (sources) => hold?.keep(sources) ?? [...sources],
+      keep: (sources, residence) => hold?.keep(sources, residence) ?? [...sources],
       ...(hold === undefined ? {} : { hold }),
     });
   } finally {
