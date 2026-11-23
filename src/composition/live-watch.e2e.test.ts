@@ -229,14 +229,18 @@ test("the watcher closes when the server stops, through the warming's signal or 
   }
 });
 
-test("a query that arrives while the watcher's refresh holds the mirror lock cuts that refresh and refreshes the edit itself, instead of waiting for it", { timeout: 120_000 }, async () => {
+/**
+ * Runs the watcher's refresh of an edit and starts a `callers` query when that refresh writes the stage line `stage`
+ * under the mirror lock; answers the query's answer and the lines written from that moment on.
+ */
+async function queryDuringWatchRefresh(stage: string): Promise<{ answer: string; afterArrival: Line[]; refreshes: Line[] }> {
   const stop = new AbortController();
   const driven = drivenWatch();
   let watching = false;
   let asked: Promise<unknown> | undefined;
   let mark = -1;
   const { queries, lines, next } = measured({ treeWatch: driven.treeWatch }, (line) => {
-    if (!watching || asked !== undefined || line.event !== "stage" || line.stage !== "live-list") return;
+    if (!watching || asked !== undefined || line.event !== "stage" || line.stage !== stage) return;
     mark = lines.length;
     asked = callersOfFmt(queries);
   });
@@ -247,14 +251,30 @@ test("a query that arrives while the watcher's refresh holds the mirror lock cut
     watching = true;
     driven.opened[0]!.listener.changed(`${DIR}First.java`);
     await settled;
-    const answer = canonicalJson(await asked);
-    const afterArrival = lines.slice(mark);
-    const queryLock = afterArrival.findIndex(({ event, stage }) => event === "stage" && stage === "live-lock");
-    assert.ok(queryLock >= 0);
-    assert.ok(afterArrival.slice(queryLock).some(({ event, stage, outcome }) => event === "stage" && stage === "live-materialize" && outcome === "ok"));
-    assert.deepEqual(watchRefreshes(lines).map(({ outcome }) => outcome), ["primed"]);
-    assert.equal(answer, await freshCallers());
+    assert.ok(asked !== undefined);
+    return { answer: canonicalJson(await asked), afterArrival: lines.slice(mark), refreshes: watchRefreshes(lines) };
   } finally {
     stop.abort();
   }
+}
+
+/** Whether the query that arrived wrote the edit into the store itself: a materialize after its own mirror lock. */
+const queryMaterialized = (afterArrival: readonly Line[]): boolean => {
+  const queryLock = afterArrival.findIndex(({ event, stage }) => event === "stage" && stage === "live-lock");
+  assert.ok(queryLock >= 0);
+  return afterArrival.slice(queryLock).some(({ event, stage, outcome }) => event === "stage" && stage === "live-materialize" && outcome === "ok");
+};
+
+test("a query that arrives while the watcher's refresh lists the tree under the mirror lock finds the refresh given up before it writes, and refreshes the edit itself", { timeout: 120_000 }, async () => {
+  const { answer, afterArrival, refreshes } = await queryDuringWatchRefresh("live-list");
+  assert.equal(queryMaterialized(afterArrival), true);
+  assert.deepEqual(refreshes.map(({ outcome }) => outcome), ["primed"]);
+  assert.equal(answer, await freshCallers());
+});
+
+test("a query that arrives once the watcher's refresh began writing the store takes that write over: the refresh commits it and the query writes nothing again", { timeout: 120_000 }, async () => {
+  const { answer, afterArrival, refreshes } = await queryDuringWatchRefresh("live-materialize");
+  assert.equal(queryMaterialized(afterArrival), false);
+  assert.deepEqual(refreshes.map(({ outcome }) => outcome), ["primed"]);
+  assert.equal(answer, await freshCallers());
 });

@@ -20,8 +20,6 @@ export interface PrimingTurns {
    * is aborted. Answers whether it waited for queries.
    */
   passTurn(signal?: AbortSignal): Promise<boolean>;
-  /** Calls `arrived` each time a query of the process starts, until the returned function is called. */
-  onQuery(arrived: () => void): () => void;
 }
 
 export interface PrimingRequest {
@@ -61,10 +59,9 @@ type Step = (read: PrimingRead, between: Between) => Promise<boolean>;
  * capture (ADR-0144). Before each step it ends the capture when a query of its process is in flight, and pins a new one
  * once those queries are done, so it primes the state they left. Inside a long step it passes its turn between bounded
  * units of work and, when it waited for a query there, runs the step again on a new capture (ADR-0156), so a query
- * shares the process with at most one unit. It asks for the queries again right before it takes the lock and once it
- * holds it, and a query that starts while priming holds the lock cuts priming's refresh and pin, so a query never waits
- * for a refresh of priming ahead of its own. A value the signal cut is never kept: the derivations a step calls admit
- * nothing an abort cut.
+ * shares the process with at most one unit. Under the mirror lock it asks for the queries at each point where giving the
+ * capture up costs nothing (`OpenLive.declined`), so a query waits for at most a listing or a store write priming began.
+ * A value the signal cut is never kept: the derivations a step calls admit nothing an abort cut.
  */
 export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest, turns: PrimingTurns): Promise<PrimingOutcome> {
   const { signal } = request;
@@ -82,17 +79,13 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
     }
     if (signal?.aborted) return { kind: "aborted", yields };
     let declined = false;
-    const cut = new AbortController();
-    const withdrawCut = turns.onQuery(() => cut.abort());
-    const captureSignal = signal === undefined ? cut.signal : AbortSignal.any([signal, cut.signal]);
-    const captured = await withLiveCapture<"finished" | "yielded" | "unreadable", never>(deps, { repo: request.repo, repoId: request.repoId, live: true, signal: captureSignal }, {
+    const captured = await withLiveCapture<"finished" | "yielded" | "unreadable", never>(deps, { repo: request.repo, repoId: request.repoId, live: true, ...signalled }, {
       declined: () => {
         declined = turns.queryWaiting();
         return declined;
       },
       unavailable: async () => ({ ok: true, value: declined ? "yielded" : "unreadable" }),
       use: async (held) => {
-        withdrawCut();
         const prepared = preparedLive(held);
         const loaded = await prepared.sources(signal);
         if (!loaded.ok) return { ok: true, value: "unreadable" };
@@ -136,13 +129,7 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
         }
       },
     });
-    withdrawCut();
     if (signal?.aborted) return { kind: "aborted", yields };
-    if (cut.signal.aborted && !(captured.ok && captured.value === "finished")) {
-      yields += 1;
-      await turns.queriesDone(signal);
-      continue;
-    }
     if (!captured.ok || captured.value === "unreadable") return { kind: "unavailable", yields };
     if (captured.value === "finished") return { kind: "primed", yields };
   }

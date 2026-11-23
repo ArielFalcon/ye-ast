@@ -76,10 +76,11 @@ export interface OpenLive {
   synthesized?: boolean | undefined;
   signal?: AbortSignal | undefined;
   /**
-   * Asked right before the lock is taken and again once it is held, before the refresh: when it answers true the
-   * capture is given up as `unavailable`, with no lock taken in the first case and the lock released unused in the
-   * second, and nothing listed, reconciled or synced. Launch priming names the queries of its process here, so it never
-   * refreshes a state a query is about to refresh itself.
+   * Asked at each point where giving the capture up costs nothing (ADR-0156): right before the lock is taken, once it is
+   * held, once the listing is compared with the mirror, before the store is opened or written, and once a store write
+   * commits, before the pin. When it answers true the capture is given up as `unavailable` and the lock released: a
+   * store write that began always finishes first, so what it wrote is committed for the next refresh. Launch priming
+   * names the queries of its process here, so a query waits for at most a listing or a store write priming began.
    */
   declined?: (() => boolean) | undefined;
   onStale?: ((notice: LiveStaleNotice) => void) | undefined;
@@ -175,6 +176,7 @@ export async function openLive<A, P = undefined>(deps: LiveDeps, request: OpenLi
         const refreshed = await refresh(deps, request, location, pinnedStore);
         if (signal?.aborted) return aborted();
         if (!refreshed.ok) return refreshed;
+        if (request.declined?.() === true) return unavailable(DECLINED);
         const { reader, generation } = pinnedStore;
         const tree: LiveTree = reader === undefined ? refreshed.value.tree : { ...refreshed.value.tree, store: shared(reader), generation };
         await mirror.touch(location);
@@ -317,6 +319,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   // A committed state records what the engine last built; only opening the store proves it is still there. A store that
   // was removed, truncated or left unreadable behind such a state is rebuilt here, under the lock this refresh already
   // holds, instead of answering `unknown` with `index-unavailable` to every later query (RFC-0005 "First index").
+  if (request.declined?.() === true) return unavailable(DECLINED);
   const claimsBuild = current.fullBuildStateId !== "" && behind.length === 0;
   if (request.store && claimsBuild) pinServingStore(deps, mirror.indexRoot(location), current, pinned);
   if (request.store && claimsBuild && pinned.reader === undefined) {
@@ -391,6 +394,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   const committed: MirrorState = { ...current, notHeld: sorted(notHeld), indexed: sorted(written), fullBuildStateId: full ? stateId : current.fullBuildStateId, unparsedSinceBuild: full ? [] : unparsed, pending: [], storeGeneration: next };
   const writtenState = await mirror.writeState(location, committed);
   if (!writtenState.ok) return mirrorFailure(writtenState.fault);
+  if (request.declined?.() === true) return unavailable(DECLINED);
   pinServingStore(deps, indexRoot, committed, pinned);
   return { ok: true, value: { tree: tree(committed), state: committed, reshaped: created || full } };
 }
