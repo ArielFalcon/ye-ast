@@ -157,6 +157,17 @@ the repository and returns at once.
   mirror.
 - The core does not know the daemon: `src/daemon/` is a driving adapter and process host (sockets, lock, lifecycle,
   supervisor, workers), the dialect lives in `src/protocol/`, and composition wires both (ADR-0011 decision 7).
+- Measured (RFC-0040 L25, 2026-11-23, 5 rounds per cell): the first call of a new MCP session against a warm daemon
+  went, p50, shopizer callers 3,789 -> 145 ms and trace 4,684 -> 131 ms, jhipster trace 1,229 -> 84 ms, petclinic
+  callers 539 -> 84 ms. Daemon RSS at the end of a bench: 0.8-2.2 GB per repository (shopizer the largest).
+- Concurrent clients of one repository share its worker's event loop, where in process each client had its own process
+  and core: the CPU of one call waits behind the others'. D7's gate (three clients through the daemon against three
+  in-process servers, not slower at p75) held for every family and repository but one after RFC-0040 L34 stopped
+  `workspace` re-deriving its call sites on every call (before it, shopizer `workspace` p75 went 1,379 -> 2,836 ms):
+  petclinic `impact` p75 263 -> 311 ms (p95 371 -> 322 ms). It is accepted: the cost is bounded by one repository's
+  concurrent calls and stays far under the RFC-0040 targets, while removing it needs more workers per repository, which
+  multiplies the RSS above and loses the shared warm state. A stage that re-derives on an unchanged snapshot shows up
+  here first, as `workspace` did.
 
 ## Not decided here
 
