@@ -423,3 +423,16 @@ test("an explicit cap counts resident trees, evicting the least recently used to
   assert.deepEqual([released, cache.usage().retainedBytes], [["a"], 100]);
   assert.equal(createSnapshotDataCache(0).reside("a", 1, () => assert.fail("never admitted")), false);
 });
+
+test("under an explicit cap a resident tree takes only free room or another tree's, never a fact's or a sources entry's", () => {
+  const fact = JSON.stringify({ answer: "x".repeat(40) });
+  const factBytes = charged(Buffer.byteLength("fact") + Buffer.byteLength(fact));
+  const cache = createSnapshotDataCache(factBytes + 100);
+  const released: string[] = [];
+  const reside = (key: string, bytes: number) => cache.reside(key, bytes, () => void released.push(key));
+  cache.putFact("fact", fact);
+
+  assert.deepEqual([reside("a", 100), reside("b", 100), reside("c", 101)], [true, true, false]);
+  assert.deepEqual(released, ["a"]);
+  assert.notEqual(cache.getFact("fact"), undefined);
+});

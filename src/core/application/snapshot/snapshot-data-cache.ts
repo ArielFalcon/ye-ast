@@ -94,6 +94,7 @@ export function createSnapshotDataCache(budget: number | "working-set", observe?
   const limit = (): number => (floor ? workingSet.bytes() : cap);
   let used = 0;
   let factBytes = 0;
+  let treeBytes = 0;
   let read = 0;
   let content: string | undefined;
   const openQueries: number[] = [];
@@ -118,6 +119,7 @@ export function createSnapshotDataCache(budget: number | "working-set", observe?
     holder.delete(key);
     used -= entry.size;
     if (entry.fact) factBytes -= entry.size;
+    if (entry.evicted !== undefined) treeBytes -= entry.size;
     workingSet.move(entry.size, entry.content, undefined);
     entry.evicted?.();
     return entry.size;
@@ -152,7 +154,18 @@ export function createSnapshotDataCache(budget: number | "working-set", observe?
     (keyedBy === "request" ? requested : entries).set(key, { value, size, fact, read, content: charged, keyedBy, ...(onEvicted === undefined ? {} : { evicted: onEvicted }) });
     used += size;
     if (fact) factBytes += size;
+    if (onEvicted !== undefined) treeBytes += size;
     return evicted;
+  };
+  /** Under a cap a tree takes free room or another tree's, least recently used first; it never evicts a fact or a sources entry (ADR-0155). */
+  const roomForTree = (bytes: number): boolean => {
+    if (used - treeBytes + bytes > cap) return false;
+    while (used + bytes > cap) {
+      const [tree] = [...stale, ...entries].find(([, entry]) => entry.evicted !== undefined)!;
+      const evictedBytes = release(tree);
+      observe?.({ outcome: "evicted", entryBytes: evictedBytes, retainedBytes: used });
+    }
+    return true;
   };
   /** The lookups and admissions charged to the content `readContent` answers. */
   const readingOf = (readContent: () => string | undefined): SnapshotReading => ({
@@ -194,7 +207,7 @@ export function createSnapshotDataCache(budget: number | "working-set", observe?
     },
     reside(key, bytes, evicted) {
       if (holderOf(key) !== undefined) return lookup(key, readContent()) !== undefined;
-      if (!floor && bytes > cap) return false;
+      if (!floor && !roomForTree(bytes)) return false;
       admit(key, undefined, bytes, false, "content", readContent(), evicted);
       return true;
     },

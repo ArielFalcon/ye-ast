@@ -70,7 +70,9 @@ alive (the first copy also grows the WASM memory once, which is never returned a
    never reachable from a kept value (ADR-0040 decision 4 holds). Eviction follows ADR-0147 unchanged: nothing below
    the floor, a content that left its lane first, never what the current read, the two before it or an open query used.
    An explicit `snapshotCacheBytes` counts resident trees against its cap and zero keeps none, so each read frees its
-   own trees as before. A parse that fails keeps nothing resident. A parse is whole or absent, so a read cut by an
+   own trees as before. Under a cap a tree takes only free room or the room of less recently used trees, and is not kept
+   when even that is short: a tree never evicts a fact or a sources entry, so a cap sized for those keeps its hits
+   (amended 2026-11-23 after the phase-3 review). A parse that fails keeps nothing resident. A parse is whole or absent, so a read cut by an
    abort or a deadline keeps resident only the trees it finished, which equal a cold parse of their text.
 5. **Fresh parses only.** A changed file parses from its text; no tree is edited. The held project, the per-file
    descriptions and every derivation are built per read from the trees exactly as before, so no answer changes.
