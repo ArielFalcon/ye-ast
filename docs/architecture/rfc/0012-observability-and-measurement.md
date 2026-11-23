@@ -221,7 +221,8 @@ by time only.
 
 A reader a request calls once per file writes one **tallied stage line** per query instead, just before the query line:
 the calls it made and their summed time, with no `start_ms`. Its outcome is the first one that was not `ok`. Today
-these are `member-names`, the syntax of each source a family reads, and one line per method of an opened store's
+these are `member-names`, the syntax of each source a family reads, `java-parse`, each Java source a reader asked
+the parser for (a tree a hold already had answers fast; the time is the parses), and one line per method of an opened store's
 reader: `graph-symbols-in-files`, `graph-symbols-by-ids`, `graph-declarations-named`, `graph-incoming-edges`,
 `graph-outgoing-edges` and `unresolved-references`. A request asks the reader once per symbol or file, so its calls
 count the store reads behind the answer. The batch readers `root-bindings`, `declared-types` and `receiver-methods`

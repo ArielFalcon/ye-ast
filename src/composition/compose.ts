@@ -185,7 +185,10 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const redaction = createPatternRedaction();
   const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction, tallies: stageTallies() };
   const holds = createJavaTreeHolds();
-  const javaParser = () => createJavaParser(holds);
+  const javaParser = async () => {
+    const parser = await createJavaParser(holds);
+    return measurement === undefined ? parser : measuredTalliedStages(parser, { parse: "java-parse" }, measurement);
+  };
   const staged = <T extends object>(port: T, stages: { readonly [K in keyof T]?: string }): T => (measurement === undefined ? port : measuredStages(port, stages, measurement));
   const frameworks = composeFrameworkPlugins();
   const contracts = createContractRoutes();
