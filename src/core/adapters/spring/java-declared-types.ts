@@ -31,6 +31,14 @@ const CLOSED_VOCABULARIES: readonly ReadonlySet<string>[] = [SPRING_DATA_TYPES, 
  * no member accepts run a static method of another class.
  */
 export const CALL_REWRITING_ANNOTATIONS: ReadonlySet<string> = new Set(["Delegate", "ExtensionMethod"]);
+/** Aspect members that make a type implement more than its declarations state. */
+export const INTRODUCTIONS: ReadonlySet<string> = new Set(["DeclareParents", "DeclareMixin"]);
+
+/** Whether a node is an annotation that makes a type implement more than its declarations state (`INTRODUCTIONS`). */
+export function isIntroduction(node: Node): boolean {
+  return (node.type === "marker_annotation" || node.type === "annotation") && INTRODUCTIONS.has((node.childForFieldName("name") ?? node).text.replace(/\s+/g, "").split(".").at(-1) ?? "");
+}
+
 /** The JDK APIs that make a value implementing an interface at run time, by their simple names. */
 export const DYNAMIC_IMPLEMENTATIONS: ReadonlyMap<string, string> = new Map([
   ["Proxy", "java.lang.reflect.Proxy"],

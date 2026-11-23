@@ -5,7 +5,7 @@ export const NAMING_KINDS = ["supertype", "unplaced-supertype", "method-referenc
 export type NamingKind = (typeof NAMING_KINDS)[number];
 
 /** What a file holds that a derivation over another file may ask about without reading its syntax. */
-export const JAVA_MARKERS = ["call-rewriting", "dynamic-implementation", "aspect"] as const;
+export const JAVA_MARKERS = ["call-rewriting", "dynamic-implementation", "aspect", "introduction"] as const;
 export type JavaMarker = (typeof JAVA_MARKERS)[number];
 
 /** Whether a source declares a package that is the name or lies below it (`prefix`), or declares a type in the package of that name (`typed`). */
