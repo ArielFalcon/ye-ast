@@ -35,7 +35,8 @@ import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-e
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
+import { composeFrameworkPlugins } from "./framework-plugins.ts";
+import { frameworkEntrypoints } from "../core/application/entrypoints/framework-entrypoints.ts";
 
 export function realWorkspaceFixture(scratchRoot: string, roots: readonly string[], sleep?: typeof defaultLiveMirrorDeps.sleep) {
   const version = ownVersion();

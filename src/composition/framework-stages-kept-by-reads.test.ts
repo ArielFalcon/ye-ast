@@ -7,7 +7,8 @@ import { createSnapshotDataCache } from "../core/application/snapshot/snapshot-d
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
 import type { SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
-import { composeFrameworkPlugins, FRAMEWORK_ENTRYPOINTS, frameworkEntrypoints } from "./framework-plugins.ts";
+import { composeFrameworkPlugins } from "./framework-plugins.ts";
+import { FRAMEWORK_ENTRYPOINTS, frameworkEntrypoints } from "../core/application/entrypoints/framework-entrypoints.ts";
 
 const CORE = "import { Component, inject } from '@angular/core';\n";
 const TEMPLATE: SourceFile = { path: "src/app/shell/shell.html", content: "<app-card></app-card>\n" };

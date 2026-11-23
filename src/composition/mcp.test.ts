@@ -10,6 +10,7 @@ import { SCHEMA } from "../core/domain/shared/fact.ts";
 import type { AnswerFolder } from "../core/ports/answer-files.port.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
 import type { MapRequest } from "../core/ports/entrypoint-queries.port.ts";
+import type { WarmingFault } from "../core/application/live/live-warming.ts";
 import type { ComposedQueries } from "./compose.ts";
 import { runMcp } from "./mcp.ts";
 import type { ProcessHost } from "./process-host.ts";
@@ -27,9 +28,11 @@ interface Harness {
   start: (args: readonly string[]) => void;
 }
 
+const SECRET = "secret-in-a-build-fault";
+
 function harness(
   overrides: Partial<ProcessHost> = {},
-  warmLive: (repo: string) => Promise<string | null> = async () => null,
+  warmLive: (repo: string) => Promise<WarmingFault | null> = async () => null,
   repositoryName: ComposedQueries["repositoryName"] = async () => ({ ok: false, fault: { kind: "git-failed", detail: "stub" } }),
   canonicalRepositoryRoot: ComposedQueries["canonicalRepositoryRoot"] = async (path) => ({ ok: true, value: path }),
 ): Harness {
@@ -49,7 +52,7 @@ function harness(
       },
     },
     impact: {},
-    redaction: { redact: (text: string) => text, redactValue: (value: unknown) => value, detect: () => ({ redacted: false, patterns: [], count: 0 }), containsSecret: () => false, redactError: () => REDACTED },
+    redaction: { redact: (text: string) => text.replaceAll(SECRET, REDACTED), redactValue: (value: unknown) => value, detect: () => ({ redacted: false, patterns: [], count: 0 }), containsSecret: () => false, redactError: () => REDACTED },
     canonicalRepositoryRoot,
     repositoryName,
     warmLive: async (repo: string) => {
@@ -197,13 +200,13 @@ test("the server starts the live index of its repository once at launch and keep
   await h.finished();
 });
 
-test("a live index that cannot be built is reported once on stderr and never stops the server", async () => {
-  const h = harness({}, async () => "ye-ast: live index not built (stub)");
+test("a live index that cannot be built is reported once on stderr, redacted, and never stops the server", async () => {
+  const h = harness({}, async () => ({ kind: "unavailable", detail: `stub ${SECRET}` }));
   h.start([]);
   await open(h);
   await h.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
 
-  assert.deepEqual(h.errors, ["ye-ast: live index not built (stub)"]);
+  assert.deepEqual(h.errors, [`ye-ast: live index not built (unavailable): stub ${REDACTED}`]);
   assert.equal(h.maps.length, 1);
   h.stdin.end();
   assert.equal(await h.finished(), EXIT_CODE.ok);

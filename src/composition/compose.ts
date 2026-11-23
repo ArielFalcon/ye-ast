@@ -90,9 +90,10 @@ import type { TreeWatch } from "../core/ports/tree-watch.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
 import { measuredAnswerMemo, measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWatch, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
-import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
+import { composeFrameworkPlugins } from "./framework-plugins.ts";
+import { frameworkEntrypoints } from "../core/application/entrypoints/framework-entrypoints.ts";
 import { queriesFirst } from "./priming-turns.ts";
-import { warmLive, type LiveWarmingDeps } from "../core/application/live/live-warming.ts";
+import { warmLive, type LiveWarmingDeps, type WarmingFault } from "../core/application/live/live-warming.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -178,11 +179,11 @@ export interface ComposedQueries {
    * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, then primes the snapshot
    * facts no target narrows, letting any query run first between steps, so the first live query finds both ready.
    * `repoId` is the id the queries name the repository by; the repository's name when absent. Resolves once priming
-   * ended, to a redacted line describing why the mirror could not be built, or `null`; it never rejects. A trusted
+   * ended, to why the mirror could not be built, or `null`; it never rejects. A trusted
    * repository is also watched until `signal` or the composition's signal is aborted, and each change primes it again
    * ahead of the next query (ADR-0152).
    */
-  warmLive(repo: string, signal?: AbortSignal, repoId?: string): Promise<string | null>;
+  warmLive(repo: string, signal?: AbortSignal, repoId?: string): Promise<WarmingFault | null>;
 }
 
 export function composeQueries(options: CompositionOptions = {}): ComposedQueries {
