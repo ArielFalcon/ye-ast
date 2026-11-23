@@ -46,11 +46,12 @@ test("an edit of any source derives the answer again, so a type that appears bel
   assert.deepEqual(turn(facts), { hits: 0, misses: 2 });
 });
 
-test("another set of sites is another derivation, and a JVM source no extractor reads leaves every method unknown", async () => {
+test("another set of sites is another derivation, keyed by the request that asked it, and a JVM source no extractor reads leaves every method unknown", async () => {
   const facts = rememberingFacts();
   await readKept(facts, SOURCES);
   await readKept(facts, SOURCES, [SITES[0]!]);
   assert.deepEqual(turn(facts), { hits: 0, misses: 2 });
+  assert.equal(facts.keyedBy.get(SLOT), "request");
   const paths = [...SOURCES.map(({ path }) => path), "src/main/kotlin/Twin.kt"];
   const unknown = await readKept(facts, SOURCES, SITES, paths);
   assert.deepEqual(unknown, await cold(SOURCES, SITES, paths));

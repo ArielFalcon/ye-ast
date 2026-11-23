@@ -86,7 +86,7 @@ export async function keptByFile<S extends { file: string }, A>(
       const recorded = { get: (at: string) => (asked(questions.file(at)), files.get(at)) };
       const everyFile = () => (asked(questions.listing()), [...files.values()]);
       return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, everyFile, asked }, places.map(([, site]) => site)));
-    });
+    }, "request");
     const at = new Map(places.map(([place], position) => [place, position]));
     for (const [position, site] of entries) results[position] = answers[at.get(placeOf(site))!]!;
   }

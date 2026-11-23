@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { mock, test } from "node:test";
-import { createSnapshotDataCache, DECODED_HEAP_PER_SERIALIZED_BYTE, type SnapshotCacheEvent } from "./snapshot-data-cache.ts";
+import { createSnapshotDataCache, DECODED_HEAP_PER_SERIALIZED_BYTE, HELD_READS, type SnapshotCacheEvent } from "./snapshot-data-cache.ts";
 import type { SourceFile } from "../../ports/source-file.port.ts";
 import type { SnapshotData } from "./read-snapshot.ts";
 
@@ -292,4 +292,104 @@ test("a host that reads many repositories holds the largest repository's working
 
   assert.equal(cache.usage().floorBytes, bytes("l1", empty) * 3);
   assert.ok(cache.usage().retainedBytes < bytes("l1", empty) * 8);
+});
+
+/** One read of a repository's single revision content, as the query that reads it makes it. */
+function queryAt(cache: ReturnType<typeof createSnapshotDataCache>, ask: () => void): void {
+  const end = cache.beginQuery();
+  cache.beginRead({ repository: "/repo", snapshot: "revision", key: "sha" });
+  ask();
+  end();
+}
+
+const answer = { sources: [], output: "a".repeat(1000) };
+const answerKey = (request: number) => `answer-${String(request).padStart(3, "0")}`;
+
+test("distinct requests at one content keep at most the floor plus the answers of the reads it holds, and the floor does not grow with them", () => {
+  const cache = createSnapshotDataCache("working-set");
+  queryAt(cache, () => cache.put("sources", { sources: [{ path: "a", content: "s".repeat(4000) }] }));
+  const floor = cache.usage().floorBytes;
+
+  for (let request = 1; request <= 200; request++) {
+    queryAt(cache, () => {
+      cache.get("sources");
+      cache.put(answerKey(request), answer, "request");
+    });
+    assert.ok(cache.usage().retainedBytes <= floor + (1 + HELD_READS) * bytes(answerKey(request), answer), `after request ${request}`);
+  }
+
+  assert.equal(cache.usage().floorBytes, floor);
+  assert.equal(cache.get(answerKey(1)), undefined);
+  assert.notEqual(cache.get(answerKey(200)), undefined);
+  assert.notEqual(cache.get("sources"), undefined);
+});
+
+test("a repeated request hits after other distinct requests that fit beside the floor, and the least recently used answer is the one evicted", () => {
+  const cache = createSnapshotDataCache("working-set");
+  const room = 2 * bytes(answerKey(1), answer) + bytes(answerKey(1), answer) / 2;
+  queryAt(cache, () => {
+    cache.put("sources", { sources: [{ path: "a", content: "s".repeat(4000) }] });
+    cache.put("released", { sources: [{ path: "r", content: "r".repeat(Math.ceil(room / DECODED_HEAP_PER_SERIALIZED_BYTE)) }] });
+    cache.put("released", empty);
+  });
+  const ask = (request: number): boolean => {
+    let hit = false;
+    queryAt(cache, () => {
+      cache.get("sources");
+      hit = cache.get(answerKey(request)) !== undefined;
+      if (!hit) cache.put(answerKey(request), answer, "request");
+    });
+    return hit;
+  };
+
+  assert.deepEqual([1, 2, 1].map(ask), [false, false, true]);
+  assert.deepEqual([3, 1, 4].map(ask), [false, true, false]);
+  assert.deepEqual([1, 4, 2, 3].map(ask), [true, true, false, false]);
+});
+
+test("inside an open query a held stale entry does not stop the eviction of an older entry no read holds", () => {
+  const cache = createSnapshotDataCache("working-set");
+  const large = { sources: [{ path: "p", content: "x".repeat(400) }] };
+  cache.beginRead({ repository: "/other", snapshot: "live", key: "head" });
+  cache.put("big", large);
+  cache.put("big", empty);
+  cache.put("old", empty);
+  for (let read = 0; read < 3; read++) cache.beginRead({ repository: "/other", snapshot: "live", key: "head" });
+  const end = cache.beginQuery();
+  cache.beginRead({ repository: "/repo", snapshot: "revision", key: "c1" });
+  cache.put("held", empty);
+  for (const content of ["c2", "c3", "c4"]) cache.beginRead({ repository: "/repo", snapshot: "revision", key: content });
+  cache.put("new", large);
+  end();
+
+  assert.deepEqual([cache.get("old") === undefined, cache.get("held") !== undefined, cache.get("new") !== undefined], [true, true, true]);
+});
+
+test("above the floor the least recently used entry goes first, whether its key names the content or a request", () => {
+  const cache = createSnapshotDataCache("working-set");
+  queryAt(cache, () => cache.put("old", { sources: [], output: "a".repeat(3000) }));
+  queryAt(cache, () => cache.put(answerKey(1), answer, "request"));
+  queryAt(cache, () => undefined);
+  queryAt(cache, () => undefined);
+  queryAt(cache, () => cache.put(answerKey(2), answer, "request"));
+
+  assert.deepEqual([cache.get("old") === undefined, cache.get(answerKey(1)) !== undefined, cache.get(answerKey(2)) !== undefined], [true, true, true]);
+});
+
+test("an answer survives the reads right after it that admit more of the content, and the content no read used since goes before it", () => {
+  const cache = createSnapshotDataCache("working-set");
+  const facts = (read: number) => ({ sources: [], output: `${read}`.repeat(2000) });
+  queryAt(cache, () => {
+    cache.put("sources", { sources: [{ path: "a", content: "s".repeat(4000) }] });
+    cache.put("callers-facts", facts(1));
+    cache.put(answerKey(1), answer, "request");
+  });
+  for (const read of [2, 3, 4]) {
+    queryAt(cache, () => {
+      cache.get("sources");
+      cache.put(`facts-${read}`, facts(read));
+    });
+  }
+
+  assert.deepEqual([cache.get(answerKey(1)) !== undefined, cache.get("callers-facts") === undefined], [true, true]);
 });

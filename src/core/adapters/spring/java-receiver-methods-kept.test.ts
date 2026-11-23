@@ -38,12 +38,13 @@ const cold = async (sources: readonly SourceFile[], sites = SITES) => createJava
 const turn = (facts: ReturnType<typeof rememberingFacts>) => facts.readsOf(SLOT);
 const without = (...files: SourceFile[]) => SOURCES.filter((file) => !files.includes(file));
 
-test("the receiver methods kept per file of sites answer the bytes of a read without facts, and an edit of a file no site read derives none", async () => {
+test("the receiver methods kept per file of sites answer the bytes of a read without facts, keyed by the sites asked, and an edit of a file no site read derives none", async () => {
   const facts = rememberingFacts();
   const first = await readKept(facts, SOURCES);
   assert.deepEqual(first, await cold(SOURCES));
   assert.deepEqual(first.map(({ kind }) => kind), ["unproven", "unproven", "method"]);
   assert.deepEqual(turn(facts), { hits: 0, misses: SITE_FILES });
+  assert.deepEqual([facts.keyedBy.get(SLOT), facts.keyedBy.get("java-receiver-methods")], ["request", "request"]);
   const sources = SOURCES.map((file) => (file === UNRELATED ? edited(UNRELATED, ["return 1;", "return 2;"]) : file));
   assert.deepEqual(await readKept(facts, sources), first);
   assert.deepEqual(turn(facts), { hits: SITE_FILES, misses: SITE_FILES });

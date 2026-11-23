@@ -1,7 +1,7 @@
 import { frozenValue } from "../../domain/shared/frozen-value.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { DeclaredScope, TrustMode } from "../../domain/shared/fact.ts";
-import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import type { DerivedFacts, KeyedBy } from "../../ports/derived-facts.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
@@ -9,7 +9,7 @@ import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { EntrypointExtraction, EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import { createDerivedFacts } from "./derived-facts.ts";
-import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type ReadScope, type SnapshotData, type SnapshotReaderDeps, type SnapshotReadContent, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
+import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type ReadScope, type SnapshotData, type SnapshotReaderDeps, type SnapshotReadContent, type SnapshotReading, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
 type Sources = Pick<CommitExtraction, "export" | "sources">;
 
@@ -43,7 +43,7 @@ export interface SnapshotRetention {
   lookup(): SnapshotData | undefined;
   keepSources(sources: readonly SourceFile[]): void;
   keepExtraction(sources: readonly SourceFile[], extraction: EntrypointExtraction): void;
-  output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean): Promise<T>;
+  output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean, keyedBy?: KeyedBy): Promise<T>;
   /** The derived facts of the files read under this snapshot's trust, kept by their content (ADR-0035). */
   facts: DerivedFacts;
 }
@@ -57,29 +57,32 @@ export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache"
   const cache = deps.snapshotCache;
   if (cache === undefined) return undefined;
   let entry: string | undefined;
+  /** What this snapshot's read keeps is counted for its content, whatever read began since (ADR-0147). */
+  let reading: SnapshotReading | undefined;
+  const current = (): SnapshotReading => reading ?? cache;
   return {
-    facts: createDerivedFacts(cache, deps.digest, trust, deps.derivedFactDisk),
+    facts: createDerivedFacts({ getFact: (key) => current().getFact(key), putFact: (key, json, keyedBy) => current().putFact(key, json, keyedBy), usage: () => cache.usage() }, deps.digest, trust, deps.derivedFactDisk),
     lookup() {
       if (entry === undefined) {
         entry = deps.digest.of(canonicalJson({ key: identity, listing }));
-        cache.beginRead({ ...read, key: entry });
+        reading = cache.beginRead({ ...read, key: entry });
       }
-      return cache.get(entry);
+      return current().get(entry);
     },
     keepSources(sources) {
-      if (entry !== undefined && cache.get(entry)?.findings === undefined) cache.put(entry, { sources });
+      if (entry !== undefined && current().get(entry)?.findings === undefined) current().put(entry, { sources });
     },
     keepExtraction(sources, extraction) {
-      if (entry !== undefined && !extraction.findings.some((finding) => finding.status === "unknown" && finding.reason === "deadline")) cache.put(entry, { sources, findings: extraction.findings, readingCuts: extraction.readingCuts });
+      if (entry !== undefined && !extraction.findings.some((finding) => finding.status === "unknown" && finding.reason === "deadline")) current().put(entry, { sources, findings: extraction.findings, readingCuts: extraction.readingCuts });
     },
-    async output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean): Promise<T> {
+    async output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean, keyedBy?: KeyedBy): Promise<T> {
       if (entry === undefined) return produce();
       const outputKey = deps.digest.of(canonicalJson({ entry, output: slot }));
-      const kept = cache.get(outputKey);
+      const kept = current().get(outputKey);
       if (kept?.output !== undefined) return kept.output as T;
       const output = await produce();
       if (signal?.aborted || admit?.(output) === false) return output;
-      const admitted = cache.put(outputKey, { sources: [], output });
+      const admitted = current().put(outputKey, { sources: [], output }, keyedBy);
       return (admitted === undefined ? frozenValue(JSON.stringify(output)) : admitted.output) as T;
     },
   };
