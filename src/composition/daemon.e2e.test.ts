@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync, fork } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
@@ -170,7 +170,7 @@ test("a client's trust never reaches another client's request: each configuratio
   assert.deepEqual(await cli(argv, { daemon: false, trustDirectory: untrustedConfig }), { ...untrusted, served: ["process"] });
 });
 
-test("init asks the daemon to prime the MCP configuration, and the MCP's first query is then answered by that same worker", async () => {
+test("init asks the daemon to prime the MCP configuration, and the MCP's first query on the canonical root is then answered by that same worker", async () => {
   const spawned = workers.length;
   const installed = await composeCli({ indexCache, cacheDirectory: indexCache, trustDirectory, daemon: link })(["init", "--trust", "trusted", repo], { out: () => undefined, err: () => undefined });
   assert.equal(installed, EXIT_CODE.ok);
@@ -183,14 +183,15 @@ test("init asks the daemon to prime the MCP configuration, and the MCP's first q
     report: () => undefined,
     configuration: () => mcpConfiguration({ indexCache, trustDirectory }),
   });
-  const answer = await mcp.entrypoints.map({ repo, repoId: "shop", live: true });
+  const root = realpathSync(repo);
+  const answer = await mcp.entrypoints.map({ repo: root, repoId: "shop", live: true });
   assert.equal(answer.ok, true);
   assert.equal(workers.length, spawned + 1);
   assert.ok(lines.some((line) => line.includes('"served":"daemon"')));
 
   const primes = (): number => lines.filter((line) => line.includes('"event":"prime"')).length;
-  assert.equal(await mcp.warmLive(repo, undefined, "shop"), null);
+  assert.equal(await mcp.warmLive(root, undefined, "shop"), null);
   const once = primes();
-  assert.equal(await mcp.warmLive(repo, undefined, "shop"), null);
+  assert.equal(await mcp.warmLive(root, undefined, "shop"), null);
   assert.equal(primes(), once);
 });

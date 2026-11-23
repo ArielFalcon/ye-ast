@@ -438,9 +438,11 @@ function cliOver(options: CliOptions): (argv: readonly string[], io: CliIo) => P
   });
   const signal = options.signal ?? new AbortController().signal;
   const warmInBackground = daemon === undefined ? undefined : async ({ repo, buildOutputs }: { repo: string; buildOutputs: readonly DeclaredBuildOutput[] }): Promise<void> => {
-    const named = await local.repositoryName(repo, signal);
-    const configuration = mcpConfiguration({ indexCache: options.indexCache, trustDirectory: options.trustDirectory, launch: { repo, outputs: buildOutputs } });
-    await requestWarm(daemon, repo, named.ok ? named.value : basename(repo), configuration);
+    const canonical = await local.canonicalRepositoryRoot(repo, signal);
+    const root = canonical.ok ? canonical.value : repo;
+    const named = await local.repositoryName(root, signal);
+    const configuration = mcpConfiguration({ indexCache: options.indexCache, trustDirectory: options.trustDirectory, launch: { repo: root, outputs: buildOutputs } });
+    await requestWarm(daemon, root, named.ok ? named.value : basename(root), configuration);
   };
   return (argv, io) => run(argv, io, { ...queries, install, mcpCommand: mcpCommandFor(ownEntrypoint()), signal, ...(warmInBackground !== undefined && { warmInBackground }) });
 }
