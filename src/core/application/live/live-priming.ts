@@ -82,11 +82,8 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
     }
     if (signal?.aborted) return { kind: "aborted", yields };
     let declined = false;
-    // A query that arrives while priming holds the mirror lock cuts priming's refresh and pin (ADR-0156): the lock is
-    // released at the refresh's next abort check, the query refreshes itself, and priming pins again after it. Once the
-    // capture is pinned the cut is withdrawn, and the steps pass their turn instead.
     const cut = new AbortController();
-    const withdraw = turns.onQuery(() => cut.abort());
+    const withdrawCut = turns.onQuery(() => cut.abort());
     const captureSignal = signal === undefined ? cut.signal : AbortSignal.any([signal, cut.signal]);
     const captured = await withLiveCapture<"finished" | "yielded" | "unreadable", never>(deps, { repo: request.repo, repoId: request.repoId, live: true, signal: captureSignal }, {
       declined: () => {
@@ -95,7 +92,7 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
       },
       unavailable: async () => ({ ok: true, value: declined ? "yielded" : "unreadable" }),
       use: async (held) => {
-        withdraw();
+        withdrawCut();
         const prepared = preparedLive(held);
         const loaded = await prepared.sources(signal);
         if (!loaded.ok) return { ok: true, value: "unreadable" };
@@ -113,10 +110,10 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
         };
         const read: PrimingRead = { prepared, tree, reading: () => (opened ??= open()) };
         const steps = primingSteps(deps, read, request);
-        let waited = false;
+        let waitedForQueries = false;
         const between: Between = async () => {
-          if (await turns.passTurn(signal)) waited = true;
-          if (signal?.aborted) throw new Error("priming aborted");
+          if (await turns.passTurn(signal)) waitedForQueries = true;
+          signal?.throwIfAborted();
         };
         try {
           while (done < steps.length) {
@@ -127,9 +124,7 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
               throw error;
             });
             if (!derived) return { ok: true, value: "unreadable" };
-            // A step that waited for queries ran on a capture they may have moved past: it runs again on a new one, where
-            // what it kept for an unmoved state is found kept.
-            if (waited) {
+            if (waitedForQueries) {
               yields += 1;
               return { ok: true, value: "yielded" };
             }
@@ -141,7 +136,7 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
         }
       },
     });
-    withdraw();
+    withdrawCut();
     if (signal?.aborted) return { kind: "aborted", yields };
     if (cut.signal.aborted && !(captured.ok && captured.value === "finished")) {
       yields += 1;

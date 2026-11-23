@@ -17,10 +17,12 @@ export function allUnits<T>(units: Units<T>): T {
 }
 
 /**
- * The value, with `between` awaited after each unit. A `between` that rejects ends the computation there: the generator
- * is closed, so its `finally` blocks run, and the rejection is the result; nothing after the unit that ran is computed.
+ * The value of `units`: with every unit at once when `between` is absent, or with `between` awaited after each one. A
+ * `between` that rejects ends the computation there: the generator is closed, so its `finally` blocks run, and the
+ * rejection is the result.
  */
-export async function unitsBetween<T>(units: Units<T>, between: Between): Promise<T> {
+export async function unitsOf<T>(units: Units<T>, between: Between | undefined): Promise<T> {
+  if (between === undefined) return allUnits(units);
   try {
     for (;;) {
       const next = units.next();
@@ -30,9 +32,4 @@ export async function unitsBetween<T>(units: Units<T>, between: Between): Promis
   } finally {
     units.return(undefined as never);
   }
-}
-
-/** The value of `units`: with every unit at once when `between` is absent, or with `between` awaited after each one. */
-export async function unitsOf<T>(units: Units<T>, between: Between | undefined): Promise<T> {
-  return between === undefined ? allUnits(units) : unitsBetween(units, between);
 }
