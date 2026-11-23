@@ -113,8 +113,7 @@ the repository and returns at once.
    (at most 10 s for a starting daemon) and returns without waiting for the priming; the worker does not stop it when
    the connection closes.
 9. **Lifecycle.** A worker exits after 30 minutes with no attached connection, no call in flight and no `warm` running;
-   the supervisor exits when its last worker exited and no attach is pending, or after 30 minutes without ever having a
-   worker. SIGTERM and SIGINT stop the supervisor cleanly: workers abort their calls and exit, the socket and pid file
+   the supervisor exits after 30 minutes with no worker and no attach pending. SIGTERM and SIGINT stop the supervisor cleanly: workers abort their calls and exit, the socket and pid file
    are removed, and clients answer in process. Retirement (decision 5) stops listening and removes the socket at once,
    answers new calls on existing connections `retiring`, lets the calls in flight finish, then exits. A worker that
    crashes takes only its own connections down; the supervisor forgets it and the next `attach` of its key forks a new

@@ -1,0 +1,112 @@
+import type { Socket } from "node:net";
+import { join } from "node:path";
+import { ATTACH_ID, attachLine, DAEMON_PROTOCOL, firstLine, isRecord, parsed, type WorkerConfiguration } from "./handshake.ts";
+import { SOCKET_FILE } from "./runtime-directory.ts";
+
+/** How a client's attach ended: a socket bound to its worker, or why it answers in process. */
+export type Attachment =
+  | { kind: "attached"; socket: Socket }
+  | { kind: "absent" }
+  | { kind: "version-mismatch"; producer: string }
+  | { kind: "retiring" }
+  | { kind: "failed" };
+
+export interface DaemonLinkDeps {
+  directory: string;
+  version: string;
+  /** Opens a connection to the socket path: `net.createConnection`. */
+  connect(path: string): Socket;
+  /** Starts a daemon detached from this process. */
+  spawnDaemon(): void;
+  now(): number;
+}
+
+export interface DaemonLink {
+  /** Binds a connection to the worker of `repo` and `configuration`; the socket comes back paused. */
+  attach(repo: string, configuration: WorkerConfiguration): Promise<Attachment>;
+  /** Starts the daemon, at most once a minute from this process. */
+  start(): void;
+  /**
+   * Attaches, and while no daemon of this version answers (none, or one of another version that retires) starts one and
+   * tries again until `timeoutMs` passed.
+   */
+  attachStarting(repo: string, configuration: WorkerConfiguration, timeoutMs: number): Promise<Attachment>;
+}
+
+const HANDSHAKE_MS = 10_000;
+const START_INTERVAL_MS = 60_000;
+const RETRY_MS = 100;
+/** A daemon started while the previous one still exits loses the lock and leaves; another is started after this long. */
+const RESPAWN_MS = 1_000;
+
+/** Any refused connection means no daemon listens there: none started, one exited, or a leftover path. */
+function connected(socket: Socket): Promise<"connected" | "absent"> {
+  return new Promise((resolve) => {
+    socket.once("connect", () => {
+      socket.off("error", onError);
+      resolve("connected");
+    });
+    const onError = (): void => resolve("absent");
+    socket.once("error", onError);
+  });
+}
+
+function refusal(message: unknown): string | undefined {
+  if (!isRecord(message) || message.id !== ATTACH_ID || !isRecord(message.error) || !isRecord(message.error.data)) return undefined;
+  return typeof message.error.data.kind === "string" ? message.error.data.kind : undefined;
+}
+
+export function daemonLink(deps: DaemonLinkDeps): DaemonLink {
+  let startedAt: number | undefined;
+
+  const attach = async (repo: string, configuration: WorkerConfiguration): Promise<Attachment> => {
+    const socket = deps.connect(join(deps.directory, SOCKET_FILE));
+    const reached = await connected(socket);
+    if (reached !== "connected") return { kind: reached };
+    socket.on("error", () => undefined);
+    const fail = (): Attachment => {
+      socket.destroy();
+      return { kind: "failed" };
+    };
+    const hello = await firstLine(socket, HANDSHAKE_MS);
+    const greeting = hello === null ? undefined : parsed(hello.line);
+    if (!isRecord(greeting) || greeting.method !== "hello" || !isRecord(greeting.params)) return fail();
+    const producer = String(greeting.params.producer);
+    socket.resume();
+    socket.write(attachLine({ protocol: DAEMON_PROTOCOL.name, version: DAEMON_PROTOCOL.version, producer: deps.version, repo, configuration }));
+    const answer = await firstLine(socket, HANDSHAKE_MS);
+    const reply = answer === null ? undefined : parsed(answer.line);
+    const refused = refusal(reply);
+    if (refused === "version-mismatch") {
+      socket.destroy();
+      return { kind: "version-mismatch", producer };
+    }
+    if (refused === "retiring") {
+      socket.destroy();
+      return { kind: "retiring" };
+    }
+    if (!isRecord(reply) || reply.id !== ATTACH_ID || !isRecord(reply.result)) return fail();
+    return { kind: "attached", socket };
+  };
+
+  const spawnAfter = (intervalMs: number): void => {
+    const now = deps.now();
+    if (startedAt !== undefined && now - startedAt < intervalMs) return;
+    startedAt = now;
+    deps.spawnDaemon();
+  };
+
+  return {
+    attach,
+    start: () => spawnAfter(START_INTERVAL_MS),
+    attachStarting: async (repo, configuration, timeoutMs) => {
+      const deadline = deps.now() + timeoutMs;
+      for (;;) {
+        const attachment = await attach(repo, configuration);
+        if (attachment.kind === "attached" || attachment.kind === "failed" || deps.now() >= deadline) return attachment;
+        if (attachment.kind === "absent") spawnAfter(RESPAWN_MS);
+        await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+      }
+    },
+  };
+}
