@@ -87,6 +87,21 @@ much is held; which entries go needs the same signal. Hence the two lanes and th
    everything they read, so they are kept on the live tree too. A query cut by an abort or a deadline admits nothing.
    The per-file grain keeps the module reader's calls of a cold query unchanged.
 5. Nothing else changes: keys, the admission of completed work only, the freeze, the eviction order and every answer.
+6. **An entry keyed by a request is not counted in the floor** (amended 2026-11-23, phase-2 review). An entry's key
+   grows either with the content (the sources, a file's facts, a stage over the index) or with what one request asked
+   of that content: an answer (ADR-0151), and a Java derivation kept per file by the places a request asked in it or by
+   the sites of a request (`keptByFile`, the receiver methods; ADR-0119, ADR-0120, ADR-0146). The caller names which
+   when it admits (`KeyedBy`). A request-keyed entry is charged to no content, so the floor stays the content's working
+   set. Otherwise it is held and evicted as any entry: never while the current read, the two before it or an open query
+   used it; above the floor, after the stale entries, least recently used first, and of a content entry and a request
+   one last used by the same read, the content entry first (the answer stands for the whole derivation that read it).
+   Distinct requests at one content then keep at most the floor plus what the held reads asked, whatever their number.
+   When the oldest stale entry is held, eviction goes on with the others instead of stopping.
+7. **A read charges its own content** (amended 2026-11-23, phase-2 review). `beginRead` answers a handle whose lookups
+   and admissions count for the content that read reads, whatever read began after it, and each charge is measured
+   against the repository of the content it reaches. Two overlapping queries on different repositories then measure
+   each repository's own working set, and the floor stays the largest of them, not a mix. A lookup or admission made
+   on the cache itself still counts for the latest read.
 
 ## Consequences
 
@@ -115,6 +130,27 @@ much is held; which entries go needs the same signal. Hence the two lanes and th
 - The charge over-counts derived facts (1.45-1.76) and non-ASCII sources (about 1.0) to stay a ceiling for all-ASCII
   sources. A pinned test asserts that the charge bounds the heap of decoded facts and an all-ASCII sources entry.
 - Reads that do not name a content (none in production) count toward no repository, as before.
+
+- Amendment 6 and 7 (phase-2 review): before them, every answer of a distinct request was charged to the content it
+  answered over, so the floor (the maximum ever measured) rose with each one and nothing was evicted while that content
+  was among the repository's latest: a cache-level probe kept 401 MiB after 2,000 distinct 100 KB outputs at one
+  content, with 0 evicted. Measured in process on shopizer/backend, 200 distinct `callers` requests at one revision
+  (`main` `83a1ffd7d` against the amendment; Apple M1 Max):
+
+| After request | Before: retained / floor | After: retained / floor |
+|---|---|---|
+| 1 | 278.3 / 278.3 MiB | 278.3 / 267.0 MiB |
+| 10 | 331.0 / 331.0 MiB | 273.5 / 273.5 MiB |
+| 200 | 561.1 / 561.1 MiB | 273.5 / 273.5 MiB (at most 295.9 between requests) |
+
+  The floor stops growing once the content's working set is read; the per-request wall time moved within noise
+  (p50 996 → 980 ms) and a repeat of the last two requests still hits (25 ms). The latency bench `unchanged` cells of
+  shopizer/backend and jhipster-monolith/application (seven families, five repetitions) moved within noise
+  (shopizer `callers` p50/p95 174/198 → 175/185 ms, jhipster `callers` 93/94 → 93/95 ms). A first build held a
+  request-keyed entry only by the read that used it: the answer of the first `callers` was then the only entry the
+  next two reads could evict while they admitted more of the content, and the bench's first repeated `callers` derived
+  it again (p95 198 → 1,673 ms on shopizer/backend, 94 → 181 ms on jhipster). Hence the hold of decision 6. No answer
+  changed: the warm differential on petclinic/backend-rest and realworld-nx/frontend passed 55 steps with 0 differing.
 
 ## Not decided here
 

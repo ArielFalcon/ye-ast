@@ -415,3 +415,19 @@ test("a file read from a listing is named by its blob id, never by its content, 
   assert.equal(derived(), 3);
   assert.equal(named.mock.calls.filter(({ arguments: [text] }) => text.includes("another reading")).length, 0);
 });
+
+test("a fact keyed by a request is not counted in the working-set floor, whether it was derived or read from disk", async () => {
+  const disk = { store: memoryStore(), versions: { inputs: "1", reads: "1" } };
+  const floorAfter = async (derive: boolean): Promise<number> => {
+    const cache = createSnapshotDataCache("working-set");
+    cache.beginRead({ repository: "/repo", snapshot: "revision", key: "sha" });
+    const facts = createDerivedFacts(cache, digest, "untrusted", disk);
+    const value = derive ? "v".repeat(500) : "unused";
+    await facts.ofInputs("inputs", { sites: [1] }, async () => value, "request");
+    await facts.ofReads("reads", { places: [1] }, asking(() => "a"), async (record) => (record("q", "a"), value), "request");
+    return cache.usage().floorBytes;
+  };
+
+  assert.deepEqual([await floorAfter(true), await floorAfter(false)], [0, 0]);
+  assert.equal(disk.store.entries.size, 2);
+});

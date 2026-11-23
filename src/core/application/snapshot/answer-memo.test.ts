@@ -89,3 +89,13 @@ test("a kept answer is answered frozen without running, and what is not kept run
   await aborted.ask({ ok: true, value: COMPLETE });
   assert.equal(aborted.runs(), 2);
 });
+
+test("an answer is not counted in the working-set floor, so distinct requests leave the floor where the snapshot's content set it", async () => {
+  const cache = createSnapshotDataCache("working-set");
+  const retention = snapshotRetention({ snapshotCache: cache, digest: { of: (value) => value } }, { repository: "shop", snapshot: "revision" }, "identity", [], "untrusted")!;
+  retention.lookup();
+  retention.keepSources([{ path: "src/a.ts", content: "x".repeat(2000) }]);
+  const floor = cache.usage().floorBytes;
+  for (const slot of ["a", "b", "c"]) await rememberedAnswer(retention.output, slot, undefined, async () => ({ ok: true, value: COMPLETE }));
+  assert.equal(cache.usage().floorBytes, floor);
+});

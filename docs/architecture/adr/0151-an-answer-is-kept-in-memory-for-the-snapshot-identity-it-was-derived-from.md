@@ -71,7 +71,9 @@ the live store by the generation committed under the lock and pin HEAD with the 
    exposes it such an answer is derived on every call (R12). A failed result is never kept.
 5. **Value and charge.** The kept value is the fact before redaction and rendering, after its one serialization round
    trip, deep-frozen (ADR-0126), so the first answer and every hit are the same frozen value. It is charged as every
-   snapshot cache entry is, as decoded heap counted toward the repository's working-set floor (ADR-0147); there is no
+   snapshot cache entry is, as decoded heap. Its key grows with distinct requests, so it is admitted as keyed by a
+   request: not counted in the working-set floor and evicted least recently used above it (ADR-0147 decision 6,
+   amended 2026-11-23; it was first counted in the floor, which then grew with every distinct request). There is no
    size constant and an explicit `snapshotCacheBytes` of zero keeps nothing.
 6. **Memory only.** Nothing of it reaches the derived-fact disk tier (ADR-0077) or any file; the store generation never
    reaches a disk key (RFC-0040 open question 2).

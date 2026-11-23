@@ -526,6 +526,27 @@ test("a lock whose holder is dead is stale and replaced", async () => {
   await held.release();
 });
 
+test("a lock naming the process's pid written before the process started is stale; one written since is polled", async () => {
+  const { repo, location } = await fresh();
+  const lock = join(repo, ".ye-ast-graph", "live", "default.lock");
+  const earlier = createLiveMirror({ ...pids([32], () => 32), startedAt: () => Date.now() + 60_000, sleep: async () => { throw new Error("must not wait"); } });
+  ok(await earlier.reconcile(location, [], []));
+  await writeFile(lock, "32");
+
+  const held = ok(await earlier.lock(location));
+  assert.equal(await readFile(lock, "utf8"), "32");
+  await held.release();
+  await assert.rejects(readFile(lock, "utf8"), { code: "ENOENT" });
+
+  await writeFile(lock, "32");
+  const controller = new AbortController();
+  const since = createLiveMirror({ ...pids([32], () => 32), startedAt: () => 0, sleep: async () => controller.abort() });
+  const waited = await since.lock(location, controller.signal);
+
+  assert.equal(!waited.ok && waited.fault.kind, "aborted");
+  assert.equal(await readFile(lock, "utf8"), "32");
+});
+
 test("a lock file with unreadable content is stale", async () => {
   const { repo, location } = await fresh();
   const mirror = createLiveMirror(pids([], () => 31));

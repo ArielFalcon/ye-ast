@@ -2,7 +2,7 @@ import { frozenValue } from "../../domain/shared/frozen-value.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { SCHEMA, type TrustMode } from "../../domain/shared/fact.ts";
 import type { DerivedFactDisk } from "../../ports/derived-fact-store.port.ts";
-import type { DerivedFacts, DerivedFactsTally, RecordedAnswers } from "../../ports/derived-facts.port.ts";
+import type { DerivedFacts, DerivedFactsTally, KeyedBy, RecordedAnswers } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SnapshotDataCache } from "./read-snapshot.ts";
@@ -48,7 +48,7 @@ interface Address {
  * or by the digest of its content when no listing named it; on disk always by the digest of its content (ADR-0126).
  * Every value answered is frozen.
  */
-export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, trust: TrustMode, disk?: DerivedFactDisk): DerivedFacts {
+export function createDerivedFacts(cache: Pick<SnapshotDataCache, "getFact" | "putFact" | "usage">, digest: Digest, trust: TrustMode, disk?: DerivedFactDisk): DerivedFacts {
   const contentDigests = new WeakMap<SourceFile, string>();
   const contentOf = (file: SourceFile): string => {
     let content = contentDigests.get(file);
@@ -67,8 +67,8 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
       diskKey: () => (named ??= { key: version === undefined ? undefined : digest.of(canonicalJson({ schema: SCHEMA, fact: slot, version, inputs: diskInputs() })) }).key,
     };
   };
-  const admit = (key: string, json: string): unknown => {
-    const admission = cache.putFact(key, json);
+  const admit = (key: string, json: string, keyedBy: KeyedBy): unknown => {
+    const admission = cache.putFact(key, json, keyedBy);
     tally.admitted += admission.admitted ? 1 : 0;
     tally.admittedBytes += admission.admitted ? admission.entryBytes : 0;
     tally.skipped += admission.admitted ? 0 : 1;
@@ -80,7 +80,7 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     const diskKey = diskKeyOf();
     return diskKey === undefined ? undefined : disk?.store.read(diskKey);
   };
-  const kept = (address: Address): unknown => {
+  const kept = (address: Address, keyedBy: KeyedBy): unknown => {
     const value = cache.getFact(address.key);
     if (value !== undefined) {
       tally.hits++;
@@ -93,28 +93,28 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     }
     tally.hits++;
     tally.diskHits++;
-    return admit(address.key, json);
+    return admit(address.key, json, keyedBy);
   };
-  const keep = <T>({ key, diskKey: diskKeyOf }: Address, value: T): T => {
+  const keep = <T>({ key, diskKey: diskKeyOf }: Address, value: T, keyedBy: KeyedBy): T => {
     const json = JSON.stringify(value);
     if (json === undefined) return value;
     const diskKey = diskKeyOf();
     if (diskKey !== undefined) disk?.store.write(diskKey, json);
-    return admit(key, json) as T;
+    return admit(key, json, keyedBy) as T;
   };
   return {
     ofFile(slot, file, derive) {
       const byContent = (): object => ({ path: file.path, content: contentOf(file) });
       const address = file.blob === undefined ? addressOf(slot, byContent()) : addressOf(slot, { path: file.path, blob: file.blob }, byContent);
-      const value = kept(address);
-      return value === undefined ? keep(address, derive()) : (value as ReturnType<typeof derive>);
+      const value = kept(address, "content");
+      return value === undefined ? keep(address, derive(), "content") : (value as ReturnType<typeof derive>);
     },
-    async ofInputs(slot, inputs, derive) {
+    async ofInputs(slot, inputs, derive, keyedBy = "content") {
       const address = addressOf(slot, inputs);
-      const value = kept(address);
-      return value === undefined ? keep(address, await derive()) : (value as Awaited<ReturnType<typeof derive>>);
+      const value = kept(address, keyedBy);
+      return value === undefined ? keep(address, await derive(), keyedBy) : (value as Awaited<ReturnType<typeof derive>>);
     },
-    async ofReads(slot, subject, answers, derive) {
+    async ofReads(slot, subject, answers, derive, keyedBy = "content") {
       const address = addressOf(slot, subject);
       const { fingerprint, version } = answers;
       const verified = (entry: ReadsEntry): ReadsEntry => (verifiedAt.set(entry, { fingerprint, version }), entry);
@@ -135,12 +135,12 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
         tally.hits++;
         if (stored === undefined) return verified(entry).value as Awaited<ReturnType<typeof derive>>;
         tally.diskHits++;
-        return verified(admit(address.key, stored) as ReadsEntry).value as Awaited<ReturnType<typeof derive>>;
+        return verified(admit(address.key, stored, keyedBy) as ReadsEntry).value as Awaited<ReturnType<typeof derive>>;
       }
       tally.misses++;
       const reads = new Map<string, string>();
       const value = await derive((question, answer) => void reads.set(question, named(answer)));
-      return verified(keep(address, { value, reads: [...reads] }) as ReadsEntry).value as typeof value;
+      return verified(keep(address, { value, reads: [...reads] }, keyedBy) as ReadsEntry).value as typeof value;
     },
     fingerprint: (inputs) => digest.of(canonicalJson(inputs)),
     drain() {

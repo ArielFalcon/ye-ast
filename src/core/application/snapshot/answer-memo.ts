@@ -138,7 +138,7 @@ export async function rememberedAnswer<V, E>(
   const fact = await retained<Fact<V> | undefined>(slot, async () => {
     const ran = (call.ran = await run());
     return ran.ok ? ran.value : undefined;
-  }, signal, (answer) => (call.kept = answer !== undefined && isKeptAnswer(answer)));
+  }, signal, (answer) => (call.kept = answer !== undefined && isKeptAnswer(answer)), "request");
   observe?.(call.ran === undefined ? "hit" : call.kept ? "admitted" : "not-kept");
   if (call.ran !== undefined && !call.ran.ok) return call.ran;
   return { ok: true, value: fact! };

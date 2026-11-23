@@ -25,6 +25,13 @@ export interface RecordedAnswers {
 }
 
 /**
+ * What a kept entry's key grows with: `content`, the snapshot read (its files, its index, a stage over them); `request`,
+ * what one request asked of that content (a whole request, or the places of a file it asked about), so distinct requests
+ * at one content add entries without bound. A `request` entry is not counted in the working-set floor (ADR-0147).
+ */
+export type KeyedBy = "content" | "request";
+
+/**
  * Plain data a reader derives from its inputs alone, kept between requests by the content of those inputs (ADR-0035).
  * A value is kept only once its derivation completed; a hit and a miss answer the same JSON value. Never a syntax tree,
  * a node or any object that holds one.
@@ -33,7 +40,7 @@ export interface DerivedFacts {
   /** What `derive` answers from the path and the content of `file` alone. */
   ofFile<T>(slot: string, file: SourceFile, derive: () => T): T;
   /** What `derive` answers from `inputs` alone; `inputs` names every input the value depends on. */
-  ofInputs<T>(slot: string, inputs: object, derive: () => Promise<T>): Promise<T>;
+  ofInputs<T>(slot: string, inputs: object, derive: () => Promise<T>, keyedBy?: KeyedBy): Promise<T>;
   /**
    * What `derive` answers from `subject` and from the answers to the questions it records through `record`, in order; kept
    * until one of those answers differs. `answers` answers a question of the current snapshot, so a kept value is
@@ -42,7 +49,7 @@ export interface DerivedFacts {
    * other answers, it asks only the questions `changedSince` tells changed (ADR-0145).
    * A derivation that throws is kept for nobody.
    */
-  ofReads<T>(slot: string, subject: object, answers: RecordedAnswers, derive: (record: (question: string, answer: string) => void) => Promise<T>): Promise<T>;
+  ofReads<T>(slot: string, subject: object, answers: RecordedAnswers, derive: (record: (question: string, answer: string) => void) => Promise<T>, keyedBy?: KeyedBy): Promise<T>;
   /** A short name of `inputs`, equal for equal inputs, to name a large input in many `ofInputs` calls. */
   fingerprint(inputs: object): string;
   drain(): DerivedFactsTally;
