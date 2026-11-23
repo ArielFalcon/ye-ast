@@ -142,7 +142,8 @@ export interface CodeGraph {
   /**
    * Opens a store this adapter built, read-only, after checking it against the supported versions. `generation` is the
    * committed store generation of a mirror (`MirrorState.storeGeneration`), given only while no build or sync is under
-   * way: the store may then be answered from memory kept for that generation.
+   * way: the store is then read whole before `open` returns, possibly from memory kept for that generation, and the
+   * reader never reads the store again, so a later build or sync cannot change what it answers.
    */
   open(store: string, generation?: string): Result<CodeGraphReader, CodeGraphFault>;
 }

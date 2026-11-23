@@ -439,6 +439,37 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       return { ok: true, value: deviation };
     },
 
+    async materializePinned(location, files, destination, signal) {
+      const copied = files.filter(({ path }) => !unsafe(path) && !isEngineEntry(path));
+      const prepared = await prepare(location, "root", false);
+      if (!prepared.ok) return prepared;
+      if (!prepared.value) return { ok: true, value: copied.map(({ path }) => path).sort(compareText) };
+      const root = rootOf(location);
+      const moved: string[] = [];
+      for (const { path, blob } of copied) {
+        if (signal?.aborted) return aborted();
+        const source = join(root, path);
+        const target = join(destination, path);
+        try {
+          const status = await lstat(source);
+          if (!status.isFile()) {
+            moved.push(path);
+            continue;
+          }
+          await mkdir(dirname(target), { recursive: true, mode: DIRECTORY_MODE });
+          await deps.copyFile(source, target);
+          if ((await hashFile(target)).blob !== blob) {
+            await rm(target, { force: true });
+            moved.push(path);
+          }
+        } catch (error) {
+          if (errorCode(error) !== "ENOENT") return fault("write-failed", error, path);
+          moved.push(path);
+        }
+      }
+      return { ok: true, value: moved.sort(compareText) };
+    },
+
     async prune(location, paths, signal) {
       const prepared = await prepare(location, "root", false);
       if (!prepared.ok) return prepared;

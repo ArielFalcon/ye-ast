@@ -7,6 +7,8 @@
   come before M5.
 - Amends: [ADR-0119](0119-the-receiver-methods-of-a-java-file-are-kept-by-the-questions-they-asked-over-the-names-the-sources-write.md)
   decision 6 (`argumentCounts` and the readers that keep the held project are "not moved here")
+- Amended by: [ADR-0146](0146-the-outside-supertypes-of-a-java-method-are-kept-by-the-questions-its-closure-asks.md) (decision
+  6: `outsideSupertypes` is kept per file of sites by the questions each closure asks, not by the listing)
 - Related: [RFC-0039](../rfc/0039-recorded-reads-for-the-java-project.md),
   [ADR-0116](0116-a-java-derivation-is-kept-by-the-questions-it-asked-of-a-per-file-index-of-declared-names.md),
   [ADR-0077](0077-derived-facts-persist-by-content-in-ye-asts-own-store.md)

@@ -86,7 +86,7 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "ts-module-statements": [1, "91ab9359a95e086f838319423bdedbe521677be9a9aeeeaa9559d89865c9aaa7"],
   "ts-default-declaration": [1, "bb5c1e3feab5ef3908224d5f2c0eabde6442b0d5202265d2d7b2f4aee3b13de8"],
   "java-receiver-bindings": [1, "90990e5ddeb91598c35caee6778aaeb4bcfbeca882230eda67aed1a064c6760d"],
-  "java-declarations": [2, "59a853a37051542aa9e4d64ea5e394852d0052252bfd57bff9ea9ac6ccdd9b5e"],
+  "java-declarations": [3, "59a853a37051542aa9e4d64ea5e394852d0052252bfd57bff9ea9ac6ccdd9b5e"],
   "java-relations": [1, "44a95dcd724d82e01cf726296313a3daebdeb01f5dda377fb39806c7dd0b85c7"],
   "java-entrypoints": [1, "3a63c07df1763ffeacea0e437ac9a1ada4f10d0de462ec6f50ca063ea72c1cb0"],
   "java-callbacks": [1, "31e796b313e5ab7c1a14d463c85c1e147f377e0585c86f8d0742b4d0fbc8eaf9"],

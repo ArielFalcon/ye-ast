@@ -402,7 +402,8 @@ A `live` snapshot exists under `trusted` only and is designed in
 [RFC-0010 "Live head"](0010-impact-queries.md#live-head-slice-3). Every live query, through the CLI or the MCP server,
 refreshes ye-ast's mirror of the working tree before it answers:
 
-1. Under ye-ast's lock, held until the answer is built, it copies or deletes the added, modified and deleted paths in
+1. Under ye-ast's lock, held for the refresh and the pin of what the answer reads, not for the answer
+   ([ADR-0144](../adr/0144-the-mirror-lock-covers-the-refresh-and-the-pin-and-a-live-query-derives-from-the-pinned-capture.md)), it copies or deletes the added, modified and deleted paths in
    the mirror and runs codegraph's incremental `sync` on them, or nothing when no path changed (codegraph 1.6.2 `dist/index.d.ts:184`), in a child process
    started with `--liftoff-only`, within the call's deadline. The flag works only on a Node command line, not in `NODE_OPTIONS` or a worker's `execArgv` (codegraph
    1.6.2 platform bundle `lib/dist/extraction/wasm-runtime-flags.js:19-38`). The fact records the index's origin

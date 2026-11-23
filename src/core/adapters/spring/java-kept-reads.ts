@@ -25,6 +25,8 @@ interface FileReading {
   project: JavaProject;
   /** A file read by path records the question of its content, whether the sources hold it or not. */
   files: { get(path: string): JavaFile | undefined };
+  /** Every file of the sources, in their order: a read of all of them records the listing. */
+  everyFile(): readonly JavaFile[];
   asked(question: string): string;
 }
 
@@ -82,7 +84,8 @@ export async function keptByFile<S extends { file: string }, A>(
         return answer;
       };
       const recorded = { get: (at: string) => (asked(questions.file(at)), files.get(at)) };
-      return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, asked }, places.map(([, site]) => site)));
+      const everyFile = () => (asked(questions.listing()), [...files.values()]);
+      return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, everyFile, asked }, places.map(([, site]) => site)));
     });
     const at = new Map(places.map(([place], position) => [place, position]));
     for (const [position, site] of entries) results[position] = answers[at.get(placeOf(site))!]!;
@@ -116,7 +119,8 @@ export async function keptFirstByFile<A>(
         return answer;
       };
       const recorded = { get: (at: string) => (asked(questions.file(at)), files.get(at)) };
-      return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, asked }, path));
+      const everyFile = () => (asked(questions.listing()), [...files.values()]);
+      return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, everyFile, asked }, path));
     });
     if (stops(answer)) return answer;
   }

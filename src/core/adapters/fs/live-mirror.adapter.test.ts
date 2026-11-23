@@ -253,6 +253,27 @@ test("materialize copies the mirror's version of the listed paths and leaves out
   assert.deepEqual((await readdir(destination)).sort(), ["sub"]);
 });
 
+test("materializePinned copies a file only while it holds the pinned blob, and answers the paths a later reconcile rewrote or removed", async () => {
+  const { repo, location } = await fresh();
+  await mkdir(join(repo, "sub"));
+  await writeFile(join(repo, "sub", "a.ts"), "a");
+  await writeFile(join(repo, "b.ts"), "b");
+  await writeFile(join(repo, "c.ts"), "c");
+  const mirror = createLiveMirror();
+  const pinned = ok(await mirror.reconcile(location, listed("sub/a.ts", "b.ts", "c.ts"), [])).manifest;
+  await writeFile(join(repo, "b.ts"), "b, rewritten after the pin");
+  ok(await mirror.reconcile(location, listed("sub/a.ts", "b.ts"), pinned));
+  const destination = join(repo, "..", "pinned-out");
+  await mkdir(destination);
+  const files = [...pinned.map(({ path, blob }) => ({ path, blob })), { path: "../escape", blob: "0" }, { path: ".git/config", blob: "0" }];
+
+  const moved = ok(await mirror.materializePinned(location, files, destination));
+
+  assert.deepEqual(moved, ["b.ts", "c.ts"]);
+  assert.equal(await readFile(join(destination, "sub", "a.ts"), "utf8"), "a");
+  assert.deepEqual((await readdir(destination)).sort(), ["sub"], "a file whose bytes moved is left out");
+});
+
 test("a path no longer present is deleted from the mirror with its empty parents", async () => {
   const { repo, location } = await fresh();
   await mkdir(join(repo, "d", "e"), { recursive: true });

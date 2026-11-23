@@ -79,7 +79,7 @@ function setup(options: Options = {}) {
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.typed && { typeBindings: { of: async () => options.typed }, checkerInputs: { filesAt: async () => ({ ok: true, value: { files: [], cuts: [] } }) }, declaredOutputs: () => [{ kind: "node-modules", at: "", path: "/host/node_modules" }] }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources: readonly { path: string }[]) => (log.scanned.push(sources.map(({ path }) => path)), sources).map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
-    ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
+    ...(options.live && { live: (options.live.storeReader = store, options.live.deps), trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as OutlineQueriesDeps;
   return { queries: createOutlineQueries(deps), log, store };
 }

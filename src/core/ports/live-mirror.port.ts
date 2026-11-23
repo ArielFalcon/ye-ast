@@ -142,6 +142,13 @@ export interface LiveMirror {
    */
   verifyIndexTree(location: MirrorLocation, files: readonly { path: string; blob: string }[], signal?: AbortSignal): Promise<Result<IndexTreeDeviation, MirrorFault>>;
   /**
+   * Copies into `destination`, an empty directory, the mirror's copy of each of `files`, keeping relative paths, when its
+   * bytes still have the given git blob id, and answers the paths whose copy is gone or holds other bytes, sorted: a sync
+   * since the caller pinned the mirror rewrote them (ADR-0144), so they are left out. An unsafe path or an engine entry is
+   * skipped, as by `materialize`.
+   */
+  materializePinned(location: MirrorLocation, files: readonly { path: string; blob: string }[], destination: string, signal?: AbortSignal): Promise<Result<readonly string[], MirrorFault>>;
+  /**
    * Removes `paths` from the directory `materialize` filled, with every parent directory that this empties, and nothing
    * else: a path it does not hold is left alone. It never reaches the engine's store, which lives in its own directory.
    */
