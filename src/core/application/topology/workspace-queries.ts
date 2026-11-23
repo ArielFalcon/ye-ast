@@ -30,6 +30,8 @@ import type { SnapshotPreparation } from "../snapshot/read-snapshot.ts";
 import { heldPaths } from "../navigation/snapshot-files.ts";
 import { scopeNotice } from "../snapshot/scope-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
+import { sourceIdentity } from "../../domain/shared/source-identity.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 
 export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
   graph?: HeadReaderDeps["graph"];
@@ -55,6 +57,8 @@ interface ReadRepository {
   completeSource: boolean;
   identity: RepositoryIdentity;
   cuts: readonly Cut[];
+  /** The derived facts the snapshot cache keeps for this snapshot's sources; absent when nothing is kept. */
+  facts?: DerivedFacts;
 }
 
 interface Resolved extends ReadRepository {
@@ -111,6 +115,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
             remotes: remotes.value.map((remote) => ({ remote: remote.name, repository: repositoryNameOf(remote.url) })),
             evidence: remotes.value.map((remote) => ({ path: ".git/config", line: 1, via: remote.name })),
           },
+          ...(prepared.value.facts === undefined ? {} : { facts: prepared.value.facts }),
         },
       };
     });
@@ -133,6 +138,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
       repository: { repo: at.repoId, snapshot, entrypoints: selectedFindings(findings, selected), callSites: [], declaredTrust: at.trust },
       source: declared, selectedPaths: heldPaths(snapshotExport)?.filter(selected), base, stated: deps.evidence.names(selectedSources), sources, completeSource: completeSourceRead(snapshotExport, sourcePaths, scope), cuts: exportCuts(snapshotExport),
       identity: { repo: at.repoId, id: at.repoId, artifacts: deps.evidence.artifacts(selectedSources), remotes: remotes.value.map((remote) => ({ remote: remote.name, repository: repositoryNameOf(remote.url) })), evidence: remotes.value.map((remote) => ({ path: ".git/config", line: 1, via: remote.name })) },
+      ...(at.facts === undefined ? {} : { facts: at.facts }),
     } };
   }
 
@@ -157,12 +163,22 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         };
       })];
       const librarySources = libraries.flatMap((library) => library.sources.toSorted((a, b) => compareText(a.path, b.path)).map((source) => ({ ...source, repo: library.identity.id })));
-      const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources, { completeSource: entry.completeSource && librarySources.length === 0 })).filter((site) => selected(site.file));
+      const callSites = (await callSitesOf(entry, librarySources)).filter((site) => selected(site.file));
       const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : selectedFindings((await deps.extractor.extract(entry.sources, librarySources)).findings, selected);
       resolved.push({ ...entry, librarySources, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)], library: false });
     }
     const depended = new Set([...closures.values()].flatMap(({ repositories }) => repositories));
     return resolved.map((entry) => ({ ...entry, library: !narrowed && depended.has(entry.identity.id) && entry.repository.entrypoints.length === 0 }));
+  }
+
+  /** A repository's call sites, kept by everything they are read from (ADR-0045 E14). */
+  function callSitesOf(entry: ReadRepository, librarySources: readonly LibrarySource[]): Promise<readonly CallSite[]> {
+    const completeSource = entry.completeSource && librarySources.length === 0;
+    const read = () => deps.callSites.of(entry.sources, entry.repository.repo, librarySources, { completeSource });
+    return entry.facts === undefined ? read() : entry.facts.ofInputs("workspace-call-sites", {
+      sources: entry.sources.map(sourceIdentity), repo: entry.repository.repo,
+      libraries: librarySources.map((source) => ({ repo: source.repo, ...sourceIdentity(source) })), completeSource,
+    }, read);
   }
 
   return {
