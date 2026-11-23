@@ -72,7 +72,8 @@ the repository and returns at once.
    directory>`, so two environments with different temporary directories still meet different daemons. The directory is
    created with mode 0700 and refused, never repaired, when it is a symbolic link, belongs to another account or is
    open to the group or others (the `--cache` rule, `privateToOwner`); a refused directory means no daemon, and the
-   client answers in process. It holds `daemon.sock` and `daemon.pid`. Windows and any platform without account ids or
+   client answers in process. A client checks the directory again before every attach, so it never connects through
+   one that stopped being private. It holds `daemon.sock` and `daemon.pid`. Windows and any platform without account ids or
    Unix sockets answer in process.
 4. **One instance per user.** The supervisor takes `daemon.pid` by creating a temporary file and hard-linking it into
    place (atomic, the mirror lock's mechanism) with `{pid, version}`. A holder whose pid is dead, or whose file is
@@ -81,7 +82,9 @@ the repository and returns at once.
    left behind (it can only be stale) and listens. On exit it closes the socket and removes the pid file if it still
    names its own pid.
 5. **Handshake.** The supervisor writes one hello line on every connection,
-   `{"jsonrpc":"2.0","method":"hello","params":{"protocol":"ye-ast-daemon","version":1,"producer":"<ye-ast version>"}}`.
+   `{"jsonrpc":"2.0","method":"hello","params":{"protocol":"ye-ast-daemon","version":1,"producer":"<producer>"}}`, where
+   the producer is the ye-ast version and the directory it is installed in, so two checkouts or installs of one version
+   never answer for each other.
    The client then sends one `attach` request with its own protocol, version and producer, the repository and the
    configuration, and writes nothing more until it is answered. A protocol or producer that differs from the
    daemon's is answered `version-mismatch` and starts the daemon's retirement (decision 9); the client answers in
@@ -127,8 +130,9 @@ the repository and returns at once.
 11. **Opting out and isolation.** `YE_AST_DAEMON=off`, read by the composition root only, makes every client answer in
     process and start nothing: a harness compares the two paths with it, and a host that must leave no process behind
     (ADR-0006's reasoning) sets it. Tests inject the runtime directory, the spawn and the clock and never reach the
-    user's runtime directory; harnesses give each run its own `TMPDIR` (and so its own runtime directory) and stop the
-    daemon whose pid their directory's `daemon.pid` names.
+    user's runtime directory; harnesses give each run its own `TMPDIR` (and so its own runtime directory), run in process
+    unless asked (`--daemon` on the latency bench and the warm differential, whose oracles stay in process), and stop
+    the daemon whose pid their directory's `daemon.pid` names.
 
 ## Consequences
 

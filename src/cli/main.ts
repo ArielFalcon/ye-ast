@@ -86,6 +86,7 @@ const USAGE = [
   "       ye-ast init [--cache <dir>] --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
   "       ye-ast serve [--cache <dir>]   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<launch-root>] [--repo <id> <root>]... [outputs] [--jdk [<at>=]<path>]... [--cache <dir>]   (read-only stdio MCP server; the outputs are the launch repository's)",
+  "       ye-ast daemon   (the per-user daemon the MCP server and the query commands answer through when it runs; YE_AST_DAEMON=off keeps them in process)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers, how many of the file's declarations were left out, and what its own body uses outside itself (a declaration, a package or a global, with the lines of each use; an unproved use is a cut), without imports",
