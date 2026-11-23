@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
@@ -25,6 +25,7 @@ const FILES = {
   [`${DIR}OrderService.java`]: 'package shop;\n\nclass OrderService {\n  String find() {\n    return Util.fmt("x");\n  }\n}\n',
 };
 const AUDIT = { [`${DIR}Audit.java`]: 'package shop;\n\nclass Audit {\n  String note() {\n    return Util.fmt("audit");\n  }\n}\n' };
+const PLANTED = 'package shop;\n\nclass Planted {\n  String planted() {\n    return Util.fmt("planted");\n  }\n}\n';
 
 let workspace: string;
 let repo: string;
@@ -133,4 +134,32 @@ test("a first live build over an edited tree is kept by the edited content, so a
   assert.equal(built(), 2);
   assert.ok(canonicalJson(live.value).includes("Audit.java"));
   assert.ok(!canonicalJson(sha.value).includes("Audit.java"));
+});
+
+test("an index tree holding a file the working tree does not is never published, so an untrusted sha query of that content builds its own and never reads the file", async () => {
+  const { callers, built } = session();
+  await callers({ live: true });
+  const published = kept();
+  const live = join(repo, ".ye-ast-graph", "live");
+  const scope = readdirSync(live, { withFileTypes: true }).find((entry) => entry.isDirectory())!.name;
+  const indexTree = join(live, scope, ".ye-ast-graph", "index-tree");
+  assert.ok(existsSync(join(indexTree, UTIL)));
+  writeFileSync(join(indexTree, DIR, "Planted.java"), PLANTED);
+  rmSync(join(indexTree, ".ye-ast-graph"), { recursive: true, force: true });
+  write(AUDIT);
+
+  await callers({ live: true });
+  const afterTamper = kept();
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "audit");
+  const clone = join(workspace, "clone");
+  git(workspace, "clone", "-q", repo, clone);
+  const builtBefore = built();
+  const untrusted = await callers({ revision: "HEAD" }, clone);
+
+  assert.deepEqual(afterTamper, published, "the tampered tree reaches no kept index");
+  assert.equal(built(), builtBefore + 1, "the untrusted query builds its own index");
+  assert.equal(untrusted.status, "complete");
+  assert.ok(canonicalJson(untrusted.value).includes("Audit.java"));
+  assert.ok(!canonicalJson(untrusted.value).includes("Planted.java"));
 });

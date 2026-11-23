@@ -18,6 +18,10 @@ export interface RecordedAnswers {
   /** Equal for two sets of answers only when every question gets the same answer from both. */
   readonly fingerprint: string;
   answerIfKnown(question: string): string | undefined;
+  /** What a kept derivation remembers of these answers, to ask `changedSince` of later ones (ADR-0145). */
+  readonly version?: object;
+  /** Whether a question may answer here otherwise than in the answers `earlier` is the version of; `undefined` when it cannot tell. */
+  changedSince?(earlier: object): ((question: string) => boolean) | undefined;
 }
 
 /**
@@ -34,7 +38,8 @@ export interface DerivedFacts {
    * What `derive` answers from `subject` and from the answers to the questions it records through `record`, in order; kept
    * until one of those answers differs. `answers` answers a question of the current snapshot, so a kept value is
    * reused when the same questions give the same answers; a question it cannot answer (`undefined`) is a difference.
-   * A kept value last verified against answers with the same `fingerprint` is reused without asking (ADR-0128).
+   * A kept value last verified against answers with the same `fingerprint` is reused without asking (ADR-0128); against
+   * other answers, it asks only the questions `changedSince` tells changed (ADR-0145).
    * A derivation that throws is kept for nobody.
    */
   ofReads<T>(slot: string, subject: object, answers: RecordedAnswers, derive: (record: (question: string, answer: string) => void) => Promise<T>): Promise<T>;

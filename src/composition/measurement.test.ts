@@ -131,6 +131,7 @@ test("an index build emits its own line, with its duration and the bytes it left
       syncMirror: async () => {
         throw new Error("not under test");
       },
+      retireMirror: () => undefined,
     };
     await measuredGraph(graph, { sink, redaction }).index("snapshot", directory);
 
@@ -160,6 +161,7 @@ test("an index that throws is reported as a throw and still answers the throw", 
     syncMirror: async () => {
       throw new Error("not under test");
     },
+    retireMirror: () => undefined,
   };
   await assert.rejects(measuredGraph(graph, { sink, redaction }).index("snapshot", "/nonexistent"));
   assert.equal(recordOf(lines[0]).outcome, "threw");
@@ -181,6 +183,7 @@ test("an index build that answers a fault reports that fault, never built", asyn
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     adoptMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    retireMirror: () => undefined,
   };
 
   const answer = await measuredGraph(graph, { sink, redaction }).index("snapshot", "/nonexistent-store");
@@ -198,6 +201,7 @@ test("a mirror build emits the index line a live session would otherwise hide", 
     buildMirror: async () => ({ ok: true, value: summary }),
     adoptMirror: async () => ({ ok: true, value: summary }),
     syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [], filesUnparsed: [] } }),
+    retireMirror: () => undefined,
   };
 
   await measuredGraph(graph, { sink, redaction }).buildMirror("/mirror");
@@ -224,6 +228,7 @@ test("a mirror sync reports synced and a copied kept store adopted, so a host ne
     buildMirror: async () => ({ ok: true, value: summary }),
     adoptMirror: async () => ({ ok: true, value: summary }),
     syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [], filesUnparsed: [] } }),
+    retireMirror: () => undefined,
   };
 
   await measuredGraph(graph, { sink, redaction }).syncMirror("/mirror", ["src/a.ts"]);
@@ -241,6 +246,7 @@ test("opening a store writes a stage line with the fault it answered", () => {
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     adoptMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    retireMirror: () => undefined,
   };
 
   measuredGraph(graph, { sink, redaction }).open("/store");

@@ -2,7 +2,7 @@ import { frozenValue } from "../../domain/shared/frozen-value.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { SCHEMA, type TrustMode } from "../../domain/shared/fact.ts";
 import type { DerivedFactDisk } from "../../ports/derived-fact-store.port.ts";
-import type { DerivedFacts, DerivedFactsTally } from "../../ports/derived-facts.port.ts";
+import type { DerivedFacts, DerivedFactsTally, RecordedAnswers } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SnapshotDataCache } from "./read-snapshot.ts";
@@ -19,11 +19,21 @@ interface ReadsEntry {
   reads: readonly (readonly [question: string, answer: string])[];
 }
 
-/**
- * The fingerprint of the answers each kept `ofReads` entry was last derived or verified against (ADR-0128), by the
- * frozen entry the snapshot data cache holds: memory only, dropped with the entry.
- */
-const verifiedAt = new WeakMap<ReadsEntry, string>();
+/** The answers a kept entry was last derived or verified against: their fingerprint (ADR-0128) and their version (ADR-0145). */
+interface Verified {
+  fingerprint: string;
+  version: object | undefined;
+}
+
+/** What each kept `ofReads` entry was last verified against, by the frozen entry the snapshot data cache holds: memory only, dropped with the entry. */
+const verifiedAt = new WeakMap<ReadsEntry, Verified>();
+
+const everyQuestion = (): boolean => true;
+
+/** The questions of `answers` that may answer otherwise than in the ones an entry was verified against: every question when either cannot tell (ADR-0145). */
+function changedSince(answers: RecordedAnswers, earlier: Verified | undefined): (question: string) => boolean {
+  return (earlier?.version === undefined ? undefined : answers.changedSince?.(earlier.version)) ?? everyQuestion;
+}
 
 interface Address {
   /** In the snapshot data cache: the slot, the trust and the inputs. */
@@ -106,20 +116,22 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     },
     async ofReads(slot, subject, answers, derive) {
       const address = addressOf(slot, subject);
-      const { fingerprint } = answers;
-      const verified = (entry: ReadsEntry): ReadsEntry => (verifiedAt.set(entry, fingerprint), entry);
-      const stillHolds = (entry: ReadsEntry): boolean => entry.reads.every(([question, answer]) => {
+      const { fingerprint, version } = answers;
+      const verified = (entry: ReadsEntry): ReadsEntry => (verifiedAt.set(entry, { fingerprint, version }), entry);
+      const stillHolds = (entry: ReadsEntry, changed: (question: string) => boolean): boolean => entry.reads.every(([question, answer]) => {
+        if (!changed(question)) return true;
         const now = answers.answerIfKnown(question);
         return now !== undefined && named(now) === answer;
       });
       const inMemory = cache.getFact(address.key) as ReadsEntry | undefined;
-      if (inMemory !== undefined && verifiedAt.get(inMemory) === fingerprint) {
+      const earlier = inMemory === undefined ? undefined : verifiedAt.get(inMemory);
+      if (inMemory !== undefined && earlier?.fingerprint === fingerprint) {
         tally.hits++;
         return inMemory.value as Awaited<ReturnType<typeof derive>>;
       }
       const stored = inMemory === undefined ? storedJson(address) : undefined;
       const entry = inMemory ?? (stored === undefined ? undefined : (frozenValue(stored) as ReadsEntry));
-      if (entry !== undefined && stillHolds(entry)) {
+      if (entry !== undefined && stillHolds(entry, changedSince(answers, earlier))) {
         tally.hits++;
         if (stored === undefined) return verified(entry).value as Awaited<ReturnType<typeof derive>>;
         tally.diskHits++;

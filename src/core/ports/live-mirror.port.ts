@@ -84,6 +84,14 @@ export interface MirrorUsage {
   debris: readonly string[];
 }
 
+/** How the index tree departs from the files it must hold; both empty when it holds exactly them. */
+export interface IndexTreeDeviation {
+  /** Paths it must hold that it does not hold as a regular file, sorted. */
+  missing: readonly string[];
+  /** Paths it holds that it must not, holds with other bytes, or holds as anything but a regular file or a directory, sorted. */
+  foreign: readonly string[];
+}
+
 /** Where one repository's mirror for one declared scope lives. */
 export interface MirrorLocation {
   repo: string;
@@ -127,6 +135,12 @@ export interface LiveMirror {
   changedSince(location: MirrorLocation, paths: readonly WorkingTreePath[], state: Pick<MirrorState, "manifest" | "skipped">, signal?: AbortSignal): Promise<Result<readonly string[], MirrorFault>>;
   /** Copies the mirror's version of each of `paths` that it holds into `destination`, an empty directory, keeping relative paths; a path the mirror does not hold is left out. */
   materialize(location: MirrorLocation, paths: readonly string[], destination: string, signal?: AbortSignal): Promise<Result<void, MirrorFault>>;
+  /**
+   * Compares the index tree with `files`, the written paths and the blob ids of their bytes, from what the tree holds
+   * alone: it walks every entry an index of the tree would stage and rehashes each file, never trusting a recorded state.
+   * What staging leaves out (engine entries, engine configuration) is left out on both sides.
+   */
+  verifyIndexTree(location: MirrorLocation, files: readonly { path: string; blob: string }[], signal?: AbortSignal): Promise<Result<IndexTreeDeviation, MirrorFault>>;
   /**
    * Removes `paths` from the directory `materialize` filled, with every parent directory that this empties, and nothing
    * else: a path it does not hold is left alone. It never reaches the engine's store, which lives in its own directory.

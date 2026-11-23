@@ -258,6 +258,52 @@ test("a kept derivation asks nothing of answers with the fingerprint it was last
   assert.deepEqual([derivation.derived(), same.asked(), other.asked(), otherAgain.asked()], [1, 0, 1, 0]);
 });
 
+/** Answers with a version that tell the questions changed since one earlier version, and list the questions asked of them (ADR-0145). */
+function versioned(fingerprint: string, world: Readonly<Record<string, string>>, since?: { version: object; changed: readonly string[] }): RecordedAnswers & { asked: string[] } {
+  const asked: string[] = [];
+  return {
+    fingerprint,
+    version: { fingerprint },
+    changedSince: (earlier) => (earlier === since?.version ? (question) => since.changed.includes(question) : undefined),
+    answerIfKnown: (question) => (asked.push(question), world[question]),
+    asked,
+  };
+}
+
+test("a kept derivation asks only the questions changed since the answers it was verified against: an equal answer keeps it, a different one derives exactly its askers again", async () => {
+  const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
+  const derived: string[] = [];
+  const read = (path: string, recorded: readonly string[], answers: RecordedAnswers) => facts.ofReads("slot", { path }, answers, async (record) => {
+    derived.push(path);
+    for (const question of recorded) record(question, answers.answerIfKnown(question)!);
+    return path;
+  });
+  const both = { "declaring|A": '["a/A.java"]', "file|a": "h1" };
+  const first = versioned("F", both);
+  await read("a", ["declaring|A", "file|a"], first);
+  await read("b", ["declaring|A"], first);
+
+  const equal = versioned("G", both, { version: first.version!, changed: ["file|a"] });
+  await read("a", ["declaring|A", "file|a"], equal);
+  await read("b", ["declaring|A"], equal);
+  const moved = versioned("H", { ...both, "file|a": "h2" }, { version: equal.version!, changed: ["file|a"] });
+  await read("a", ["declaring|A", "file|a"], moved);
+  await read("b", ["declaring|A"], moved);
+
+  assert.deepEqual({ derived, equal: equal.asked, moved: moved.asked }, { derived: ["a", "b", "a"], equal: ["file|a"], moved: ["file|a", "declaring|A", "file|a"] });
+});
+
+test("answers that cannot tell what changed since the verified ones are asked every recorded question", async () => {
+  const facts = createDerivedFacts(createSnapshotDataCache(BUDGET), digest, "untrusted");
+  const world = { "declaring|A": "[]", "file|a": "h1" };
+  const read = (answers: RecordedAnswers) => facts.ofReads("slot", { path: "a" }, answers, async (record) => (record("declaring|A", "[]"), record("file|a", "h1"), "a"));
+  const first = versioned("F", world);
+  await read(first);
+  const unrelated = versioned("G", world, { version: {}, changed: [] });
+  await read(unrelated);
+  assert.deepEqual(unrelated.asked, ["declaring|A", "file|a"]);
+});
+
 test("a derivation read from disk asks its questions even of answers with the fingerprint it was derived against", async () => {
   const disk = { store: memoryStore(), versions: { slot: "1" } };
   const read = (answers: RecordedAnswers) => viewOver(disk).ofReads("slot", { path: "a" }, answers, async (record) => (record("declaring|A", "[]"), { derived: true }));
