@@ -138,7 +138,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         try {
           const snapshot = snapshotFiles(indexed, heldPaths(head.tree.export) ?? head.tree.export.files.map(({ path }) => path));
           const reading = await readings.open(
-            { tree: head.tree, prepared: head.prepared, hold: head.hold, store: indexed, digest: index.digest, snapshot: head.base(content).snapshot, request },
+            { tree: head.tree, prepared: head.prepared, hold: head.hold, store: indexed, digest: index.digest, generation: index.generation, snapshot: head.base(content).snapshot, request },
             { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), inScope: head.selected },
           );
           const { store } = reading;
@@ -220,8 +220,8 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         }
       };
       return entrypoints.length === 0
-        ? headReader.atSources(request, spec, (head) => read(head, []))
-        : headReader.atHead(request, spec, (head) => read(head, head.tree.findings));
+        ? headReader.atSources(request, spec, (head) => read(head, []), "trace")
+        : headReader.atHead(request, spec, (head) => read(head, head.tree.findings), "trace");
     },
   };
 }

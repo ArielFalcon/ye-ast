@@ -19,6 +19,8 @@ import { prepareCommit } from "./prepared-snapshot.ts";
 import { pinLiveSnapshot } from "./live-snapshot.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
+import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import { answerSlot, rememberedAnswer, type AnswerFamily, type AnswerMemoOutcome, type AnswerSnapshot } from "./answer-memo.ts";
 
 /** What reading the head of a query needs: the snapshot reader plus the index of what it exported. */
 export interface HeadReaderDeps extends SnapshotReaderDeps {
@@ -29,6 +31,10 @@ export interface HeadReaderDeps extends SnapshotReaderDeps {
   /** What a live query reads; without it a live query is refused as under `untrusted`. */
   live?: LiveDeps;
   heldLive?: ((request: { repo: string; repoId: string }) => HeldLive | undefined) | undefined;
+  /** The build outputs a host declared per repository (ADR-0037); an answer over any of them is never kept (ADR-0151). */
+  declaredOutputs?: ((repo: string) => readonly DeclaredBuildOutput[] | undefined) | undefined;
+  /** Learns what the answer memo did for each query that names its family (ADR-0151 decision 7). */
+  answerMemo?: ((outcome: AnswerMemoOutcome) => void) | undefined;
 }
 
 /** A capture belongs to the callback holding its live lease. */
@@ -79,6 +85,7 @@ export interface LiveCaptureSelection {
   scope: DeclaredScope;
   trust: "trusted";
   synthesized?: OpenLive["synthesized"];
+  declined?: OpenLive["declined"];
   onStale?: OpenLive["onStale"];
   onStalenessUnavailable?: OpenLive["onStalenessUnavailable"];
 }
@@ -107,7 +114,7 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
       if (index === ordered.length) return { ok: true, value: await use(captures) };
       const selection = ordered[index]!;
       const selected = exportSelection(selection.scope, deps.matcher.matches, isExtractorConfiguration);
-      const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, synthesized: selection.synthesized, signal,
+      const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, synthesized: selection.synthesized, declined: selection.declined, signal,
         ...(selection.onStale === undefined ? {} : { onStale: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStale!(notice) }); } }),
         ...(selection.onStalenessUnavailable === undefined ? {} : { onStalenessUnavailable: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStalenessUnavailable!(notice) }); } }),
       }, async (_tree, pinned: Result<HeldLive, LiveFailure>): Promise<Result<T, { repoId: string; cause: LiveFailure }>> => {
@@ -144,6 +151,8 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
   unavailable(context: { head: string; scope: DeclaredScope }): Promise<Result<T, E>>;
   beforeHead?(): Promise<Result<void, VcsFault>>;
   beforeOpen?(head: string): Promise<Result<void, VcsFault>>;
+  /** Gives the capture up as `unavailable` before it takes the mirror lock or refreshes (`OpenLive.declined`). */
+  declined?: OpenLive["declined"];
 }): Promise<Result<T, E | VcsFault | LiveFault | ScopeFault>> {
   const { repo, repoId, signal } = request;
   const scope = liveScope(request.scope);
@@ -176,7 +185,7 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
   const prepared = await options.beforeOpen?.(head.value);
   if (signal?.aborted) return ABORTED;
   if (prepared !== undefined && !prepared.ok) return prepared;
-  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, head: head.value, trust: "trusted", synthesized: request.synthesized, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
+  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, head: head.value, trust: "trusted", synthesized: request.synthesized, declined: options.declined, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
   if (opened.ok) return opened.value;
   if (opened.fault.cause.kind === "unavailable") {
     const answer = await options.unavailable({ head: head.value, scope });
@@ -189,9 +198,9 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
  * A live capture with nothing to do between HEAD and the open reads HEAD once, under the lock and after the refresh. A
  * failed open answers as it did when HEAD was read before the lock: an unreadable HEAD's fault comes first.
  */
-async function captureWithHeadInside<T, E>(deps: HeadReaderDeps, request: Extract<Revisioned, { live: true }>, scope: DeclaredScope, options: Pick<Parameters<typeof withLiveCapture<T, E>>[2], "use" | "unavailable">): Promise<Result<T, E | VcsFault | LiveFault | ScopeFault>> {
+async function captureWithHeadInside<T, E>(deps: HeadReaderDeps, request: Extract<Revisioned, { live: true }>, scope: DeclaredScope, options: Pick<Parameters<typeof withLiveCapture<T, E>>[2], "use" | "unavailable" | "declined">): Promise<Result<T, E | VcsFault | LiveFault | ScopeFault>> {
   const { repo, repoId, signal } = request;
-  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, trust: "trusted", synthesized: request.synthesized, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
+  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, trust: "trusted", synthesized: request.synthesized, declined: options.declined, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
   if (opened.ok) return opened.value;
   const { cause } = opened.fault;
   if (signal?.aborted) return cause.kind === "unavailable" ? ABORTED : { ok: false, fault: cause };
@@ -218,6 +227,8 @@ export interface HeadIndex {
    * and the store's versions. Derived facts that read the index are kept under it; without it they are kept by none.
    */
   digest?: string;
+  /** The committed store generation a live capture pinned the store at; the kept stage outputs are kept under it in memory (ADR-0150). */
+  generation?: string;
 }
 
 /** What opening a head's index answers; `fault` is the export fault that kept the index from being built. */
@@ -257,10 +268,15 @@ function notHeldInExport(notHeld: readonly string[], exported: CommitExport): Pi
 
 export interface HeadReader {
   /** Reads a head export and its index without loading sources or extracting entrypoints; `root` holds the exported files. */
-  atExport<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>, root: string) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>>;
-  atSources<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>>;
-  /** The one place a revisioned operation reads its head, at a commit or on the live tree, so its body is written once. */
-  atHead<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>>;
+  atExport<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>, root: string, snapshot: AnswerSnapshot) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>>;
+  /** As `atHead` without extracting entrypoints. */
+  atSources<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>) => Promise<Result<Fact<V>, E>>, family?: AnswerFamily): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>>;
+  /**
+   * The one place a revisioned operation reads its head, at a commit or on the live tree, so its body is written once.
+   * With `family`, the fact `read` answers is kept for the pinned snapshot identity and a later equal request at the same
+   * identity answers it without reading (ADR-0151).
+   */
+  atHead<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>, family?: AnswerFamily): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>>;
   /** The fact base of a snapshot: a commit's carries the host's export budget, the live tree reads none. */
   factBase(trust: TrustMode, snapshot: SnapshotRef, content: string, spec: FactSpec, scope: DeclaredScope, origin: IndexOrigin | undefined): FactBase;
   /** The head's index; the caller closes its store. A kept index is reused without writing the snapshot; a build writes it first. */
@@ -314,7 +330,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
       ...(hold === undefined ? {} : { hold }),
       selected,
       base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? tree.origin : undefined),
-      open: async () => (tree.store === undefined ? "unavailable" : { store: tree.store, summary: notHeldInExport(tree.notHeld, extraction.export) }),
+      open: async () => (tree.store === undefined ? "unavailable" : { store: tree.store, summary: notHeldInExport(tree.notHeld, extraction.export), ...(tree.generation === undefined ? {} : { generation: tree.generation }) }),
     };
   };
 
@@ -323,7 +339,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
     return { ...factBase(trust, { repo: repoId, kind: "live", head, stateId: unread }, unread, spec, scope, undefined), status: "unknown", reason: "index-unavailable" };
   };
 
-  const atSnapshot = async <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>, root: string) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>> => {
+  const atSnapshot = async <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>, root: string, snapshot: AnswerSnapshot) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>> => {
     const { repo, repoId, signal } = request;
     if (request.live === true) {
       return withLiveCapture<Fact<V>, E | VcsFault | ScopeFault>(deps, request, { use: async (held) => {
@@ -334,7 +350,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
         const notice = scopeNotice(scope, deps.matcher.matches, request[WORKSPACE_SCOPE] ? undefined : heldPaths(tree.export)?.filter(selected));
         if (!notice.ok) return notice;
         const reading = liveReading(tree, prepared.tree, "trusted", scope, selected, head, repoId, spec, held.hold);
-        return read({ ...reading, base: (content, store) => ({ ...reading.base(content, store), ...(notice.value === undefined ? {} : { scopeSelection: notice.value }) }), prepared }, tree.root);
+        return read({ ...reading, base: (content, store) => ({ ...reading.base(content, store), ...(notice.value === undefined ? {} : { scopeSelection: notice.value }) }), prepared }, tree.root, { kind: "live", stateId: tree.stateId, generation: tree.generation, head });
       }, unavailable: async ({ head, scope }) => ({ ok: true, value: unavailableLive("trusted", scope, head, repoId, spec) }) });
     }
 
@@ -359,18 +375,29 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
         selected,
         base: (content, store = false) => ({ ...factBase(trust, snapshot, content, spec, scope, store ? { kind: "full" } : undefined), ...(notice.value === undefined ? {} : { scopeSelection: notice.value }) }),
         open: () => indexHead(prepared.value, readScope.directory, signal),
-      }, headDirectory);
+      }, headDirectory, { kind: "sha", sha: head.value, content: deps.digest.of(canonicalJson(headTree.export)) });
     });
   };
 
-  const atHead = <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>> => atSnapshot<V, E | VcsFault>(request, spec, async (head, root) => {
+  /**
+   * `read`, or the fact it answered for an equal request at the same snapshot identity. It runs once the snapshot's
+   * sources are loaded, since they fix the snapshot entry the answer is kept under.
+   */
+  const remembered = <V, E>(request: Revisioned, spec: FactSpec, family: AnswerFamily | undefined, head: Pick<HeadReading, "prepared">, snapshot: AnswerSnapshot, read: () => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E>> => {
+    if (family === undefined) return read();
+    const declared = deps.declaredOutputs?.(request.repo) ?? [];
+    const slot = declared.length > 0 ? undefined : answerSlot({ family, request, snapshot, engines: spec.engines, declaredConfig: spec.declaredConfig, producer: deps.producer });
+    return rememberedAnswer(head.prepared?.retained, slot, request.signal, read, deps.answerMemo);
+  };
+
+  const atHead = <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>, family?: AnswerFamily): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>> => atSnapshot<V, E | VcsFault>(request, spec, async (head, root, snapshot) => {
     const extracted = head.prepared === undefined ? await extractExport(deps, root, head.tree.export, request.signal) : await head.prepared.extract(request.signal);
-    return extracted.ok ? read({ ...head, tree: extracted.value }) : extracted;
+    return extracted.ok ? remembered(request, spec, family, head, snapshot, () => read({ ...head, tree: extracted.value })) : extracted;
   });
 
-  const atSources = <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>> => atSnapshot<V, E | VcsFault>(request, spec, async (head, root) => {
+  const atSources = <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>) => Promise<Result<Fact<V>, E>>, family?: AnswerFamily): Promise<Result<Fact<V>, E | VcsFault | LiveFault | ScopeFault>> => atSnapshot<V, E | VcsFault>(request, spec, async (head, root, snapshot) => {
     const loaded = head.prepared === undefined ? await readSources(deps, root, head.tree.export, request.signal) : await head.prepared.sources(request.signal);
-    return loaded.ok ? read({ ...head, tree: loaded.value }) : loaded;
+    return loaded.ok ? remembered(request, spec, family, head, snapshot, () => read({ ...head, tree: loaded.value })) : loaded;
   });
 
   return { atHead, atSources, atExport: atSnapshot, factBase, indexHead, liveReading, unavailableLive };

@@ -48,7 +48,9 @@ type Step = (read: PrimingRead) => Promise<boolean>;
  * Priming pins a capture of the mirror as a query does, under its lock, and runs its steps outside the lock on the pinned
  * capture (ADR-0144). Before each step it ends the capture when a query of its process is in flight, and pins a new one
  * once those queries are done, so it primes the state they left and a query shares the process with at most the step
- * that runs. A value the signal cut is never kept: the derivations a step calls admit nothing an abort cut.
+ * that runs. It asks for the queries again right before it takes the lock and once it holds it, so a query that arrived
+ * meanwhile finds neither the lock nor a refresh ahead of its own. A value the signal cut is never kept: the derivations
+ * a step calls admit nothing an abort cut.
  */
 export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest, turns: PrimingTurns): Promise<PrimingOutcome> {
   const { signal } = request;
@@ -65,8 +67,13 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
       await turns.queriesDone(signal);
     }
     if (signal?.aborted) return { kind: "aborted", yields };
+    let declined = false;
     const captured = await withLiveCapture<"finished" | "yielded" | "unreadable", never>(deps, { repo: request.repo, repoId: request.repoId, live: true, ...signalled }, {
-      unavailable: async () => ({ ok: true, value: "unreadable" }),
+      declined: () => {
+        declined = turns.queryWaiting();
+        return declined;
+      },
+      unavailable: async () => ({ ok: true, value: declined ? "yielded" : "unreadable" }),
       use: async (held) => {
         const prepared = preparedLive(held);
         const loaded = await prepared.sources(signal);
@@ -79,7 +86,7 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
           if (typeof index === "string" || "fault" in index) return undefined;
           store = index.store;
           return readings.open(
-            { tree, prepared, hold: held.hold, store: index.store, snapshot: { repo: request.repoId, kind: "live", head: held.head, stateId: held.tree.stateId }, request: { repo: request.repo, ...signalled } },
+            { tree, prepared, hold: held.hold, store: index.store, generation: index.generation, snapshot: { repo: request.repoId, kind: "live", head: held.head, stateId: held.tree.stateId }, request: { repo: request.repo, ...signalled } },
             { originPaths: tree.export.files.map(({ path }) => path).filter(selected), inScope: selected },
           );
         };

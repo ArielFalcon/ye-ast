@@ -173,3 +173,32 @@ test("priming aborted while it derives the relations keeps nothing the abort cut
   assert.ok(derivedStages(lines).includes("relations"));
   assert.equal(canonicalJson(answer), canonicalJson(await asks.trace(composeQueries({ scratchRoot, trustDirectory }))));
 });
+
+const countStage = (lines: readonly Line[], stage: string): number => lines.filter((line) => line.event === "stage" && line.stage === stage).length;
+
+test("a query that arrives as the previous one settles meets no capture of priming: it takes the mirror lock and lists once, and priming still finishes at the state the queries left", async () => {
+  let second: Promise<unknown> | undefined;
+  let secondQuery: Line[] = [];
+  let mark = -1;
+  const { queries, lines } = measured((line) => {
+    if (mark >= 0 || !isRelationsStage(line)) return;
+    mark = Infinity;
+    void asks.trace(queries).then(() => {
+      mark = lines.length;
+      second = asks.callers(queries).then((answer) => {
+        secondQuery = lines.slice(mark);
+        return answer;
+      });
+    });
+  });
+  await queries.warmLive(repo, undefined, REPO_ID);
+  const answer = await second;
+  assert.equal(countStage(secondQuery, "live-lock"), 1);
+  assert.equal(countStage(secondQuery, "live-list"), 1);
+  const prime = lines.find(({ event }) => event === "prime");
+  assert.equal(prime?.outcome, "primed");
+  assert.equal(canonicalJson(answer), canonicalJson(await asks.callers(composeQueries({ scratchRoot, trustDirectory }))));
+  lines.length = 0;
+  assert.ok((await asks.trace(queries)).ok);
+  assert.deepEqual(derivedStages(lines), []);
+});

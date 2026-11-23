@@ -69,6 +69,8 @@ to a poll. No other process and no worker thread held the lock in a single-serve
 
 ## Not decided here
 
-- Whether launch priming should give up a capture it waited for while a query of its process is in flight, before its
-  refresh rather than after its pin (ADR-0144 decision 7); measured as a separate cost.
+- ~~Whether launch priming should give up a capture it waited for while a query of its process is in flight, before its
+  refresh rather than after its pin (ADR-0144 decision 7); measured as a separate cost.~~ Decided in L32: it asks for
+  the queries before it takes the lock and once it holds it, and ADR-0144 decision 7 says so. A query that arrives
+  after priming started its refresh still waits for that refresh (a query cannot pass the lock holder).
 - The single flight of a refresh ahead of the query (RFC-0040 L19), which reuses the line.

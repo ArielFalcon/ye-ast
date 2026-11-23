@@ -170,7 +170,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const importerReader = createHeadReader({ ...deps, sourceSelection: importerSource });
   const readings = createBaseReadings({ ...deps, modules: bindingModules, checkerInputs: deps.typeBindings === undefined ? undefined : createRevisionSources({ ...deps, sourceSelection: isTypeCheckerInput }) });
   const readingOf = (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>, index: HeadIndex, snapshot: SnapshotRef, request: ReadingRequest): Promise<BaseReading> =>
-    readings.open({ tree: head.tree, prepared: head.prepared, hold: head.hold, store: index.store, digest: index.digest, snapshot, request });
+    readings.open({ tree: head.tree, prepared: head.prepared, hold: head.hold, store: index.store, digest: index.digest, generation: index.generation, snapshot, request });
 
   return {
     async ofChange(request) {
@@ -239,7 +239,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         } finally {
           store.close();
         }
-      });
+      }, "callers");
     },
 
     async importers(request) {
@@ -299,7 +299,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         } finally {
           store.close();
         }
-      });
+      }, "importers");
     },
   };
 

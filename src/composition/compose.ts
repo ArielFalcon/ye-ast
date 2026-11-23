@@ -89,7 +89,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
+import { measuredAnswerMemo, measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
 import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
 import { queriesFirst } from "./priming-turns.ts";
 
@@ -220,6 +220,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const snapshotCache = {
     snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? "working-set", measurement === undefined ? undefined : measuredSnapshotCache(measurement)),
     ...(derivedFactDisk && { derivedFactDisk }),
+    ...(measurement && { answerMemo: measuredAnswerMemo(measurement) }),
   };
   const budget = options.exportBudget && { budget: options.exportBudget };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };
