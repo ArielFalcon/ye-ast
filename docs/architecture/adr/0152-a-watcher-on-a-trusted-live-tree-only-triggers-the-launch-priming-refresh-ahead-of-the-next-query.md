@@ -60,7 +60,9 @@ yields to the queries of its process before it takes the lock and between steps.
 6. **Closing.** The watcher closes when the composition's signal or `warmLive`'s signal is aborted (server shutdown),
    and when a refresh it would start finds the repository no longer `trusted`: trust is read again before each refresh,
    so the first event after a trust change closes it before anything is read. It never keeps a process alive by
-   itself (the stdio server does).
+   itself (the stdio server does): it is opened non-persistent, which also covers the per-directory watchers a platform
+   without a native recursive watcher opens for directories created later (amended 2026-11-23 after the phase-3
+   review).
 7. **Failure turns it off.** A watcher that cannot open (an unsupported platform, `EMFILE`, `ENOSPC`) or that reports an
    error later is closed, and one `watch` line with outcome `off` and the redacted reason goes to the host's measurement.
    No query fails or waits for it; queries keep proving freshness themselves.

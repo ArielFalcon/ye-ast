@@ -13,19 +13,18 @@ function faultOf(error: unknown): TreeWatchFault {
   return { code, detail: error instanceof Error ? error.message : String(error) };
 }
 
-/** The platform's recursive watcher (`fs.watch`), unreferenced so that it never holds the process open. */
+/** The platform's recursive watcher (`fs.watch`), never persistent, so that no watcher it opens holds the process open. */
 export function createTreeWatch(deps: TreeWatchDeps = defaultTreeWatchDeps): TreeWatch {
   return {
     watch(root, listener) {
       try {
-        const watcher = deps.watch(root, { recursive: true, encoding: "utf8" }, (_event, filename) => {
+        const watcher = deps.watch(root, { recursive: true, persistent: false, encoding: "utf8" }, (_event, filename) => {
           listener.changed(filename === null ? undefined : filename.split(sep).join("/"));
         });
         watcher.on("error", (error) => {
           watcher.close();
           listener.failed(faultOf(error));
         });
-        watcher.unref();
         return { close: () => watcher.close() };
       } catch (error) {
         return { fault: faultOf(error) };

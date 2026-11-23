@@ -22,8 +22,11 @@ test("a change deep under the root is reported by its root-relative path with / 
       });
       if ("fault" in opened) fail(new Error(opened.fault.code));
     });
-    writeFileSync(join(root, "src", "app", "App.java"), "class App {}\n");
-    await seen;
+    let edits = 0;
+    const write = (): void => writeFileSync(join(root, "src", "app", "App.java"), `class App {} // ${++edits}\n`);
+    write();
+    const rewriting = setInterval(write, 200);
+    await seen.finally(() => clearInterval(rewriting));
     assert.equal(paths.at(-1), "src/app/App.java");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -34,4 +37,16 @@ test("a watcher the platform refuses to open is a fault naming the platform's co
   const refused = Object.assign(new Error("too many open files"), { code: "EMFILE" });
   const opened = createTreeWatch({ ...defaultTreeWatchDeps, watch: () => { throw refused; } }).watch("/nowhere", { changed: () => undefined, failed: () => undefined });
   assert.deepEqual("fault" in opened ? opened.fault.code : undefined, "EMFILE");
+});
+
+test("the watcher never holds the process open, including the per-directory watchers a platform without a native recursive watcher opens later", () => {
+  const options: unknown[] = [];
+  const watch = ((_root: string, opened: unknown) => {
+    options.push(opened);
+    return { on: () => undefined, unref: () => undefined, close: () => undefined };
+  }) as unknown as typeof defaultTreeWatchDeps.watch;
+
+  createTreeWatch({ ...defaultTreeWatchDeps, watch }).watch("/repo", { changed: () => undefined, failed: () => undefined });
+
+  assert.deepEqual(options.map((one) => (one as { persistent?: boolean }).persistent), [false]);
 });

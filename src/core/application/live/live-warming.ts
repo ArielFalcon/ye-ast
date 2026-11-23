@@ -23,14 +23,19 @@ export interface LiveWarmingDeps extends Pick<SnapshotReaderDeps, "trust"> {
   closing?: AbortSignal | undefined;
 }
 
+/** Why the live mirror could not be built: the kind and detail its build reported, or the thrown error, redacted, as `detail` alone. */
+export interface WarmingFault {
+  kind?: string;
+  detail: string;
+}
+
 /**
  * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, then primes it (ADR-0144
  * decision 7). A trusted repository is also watched from before the build until `signal` or `closing` is aborted, and
- * each change primes it again ahead of the next query (ADR-0152). Resolves once launch priming ended, to a redacted line
- * describing why the mirror could not be built, or `null`; it never rejects.
+ * each change primes it again ahead of the next query (ADR-0152). Resolves once launch priming ended, to why the mirror
+ * could not be built, or `null`; it never rejects.
  */
-export async function warmLive(deps: LiveWarmingDeps, repo: string, signal?: AbortSignal, repoId?: string): Promise<string | null> {
-  const { redaction } = deps;
+export async function warmLive(deps: LiveWarmingDeps, repo: string, signal?: AbortSignal, repoId?: string): Promise<WarmingFault | null> {
   const trusted = async (): Promise<boolean> => (await trustOf(deps, repo).catch(() => "untrusted")) === "trusted";
   let watching: LiveWatch | undefined;
   try {
@@ -46,11 +51,11 @@ export async function warmLive(deps: LiveWarmingDeps, repo: string, signal?: Abo
       report: deps.reportWatch,
     }, [signal, deps.closing]);
     const warmed = await openLive(deps.live, { repo, scope, selected, store: true, signal }, async () => undefined);
-    if (!warmed.ok) return redaction.redact(`ye-ast: live index not built (${warmed.fault.kind}): ${warmed.fault.detail}`);
+    if (!warmed.ok) return warmed.fault;
     await deps.prime(repo, repoId, "launch", signal);
     return null;
   } catch (error) {
-    return redaction.redact(`ye-ast: live index not built: ${redaction.redactError(error)}`);
+    return { detail: deps.redaction.redactError(error) };
   } finally {
     watching?.launched();
   }

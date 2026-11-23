@@ -110,8 +110,8 @@ export async function runMcp(commandLine: readonly string[], host: ProcessHost):
     transport: wire,
     onerror: (error) => host.err(`ye-ast: ${queries.redaction.redactError(error)}`),
   });
-  void queries.warmLive(repo, host.signal, repoId).then((line) => {
-    if (line !== null) host.err(line);
+  void queries.warmLive(repo, host.signal, repoId).then((fault) => {
+    if (fault !== null) host.err(queries.redaction.redact(`ye-ast: live index not built${fault.kind === undefined ? "" : ` (${fault.kind})`}: ${fault.detail}`));
   });
   const stop = (): void => void handle.close();
   host.signal.addEventListener("abort", stop, { once: true });
