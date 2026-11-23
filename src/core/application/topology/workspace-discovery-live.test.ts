@@ -65,7 +65,7 @@ function multipleLive() {
       return method(...args);
     };
   } });
-  const live = { ...app.deps, mirror, workingTree: { list: (repo: string, signal?: AbortSignal) => fakes.get(repo)!.deps.workingTree.list(repo, signal) } };
+  const live = { ...app.deps, mirror, workingTree: { list: (repo: string, signal?: AbortSignal) => fakes.get(repo)!.deps.workingTree.list(repo, signal), ignoredDirectories: async () => ({ ok: true as const, value: [] }) } };
   const counts: Record<string, number> = {};
   const originEvents: { repo: string; held: number; signal: AbortSignal | undefined }[] = [];
   const trustEvents: { repo: string; held: number }[] = [];

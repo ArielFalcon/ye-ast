@@ -741,6 +741,67 @@ test("a second trace at one snapshot reads no call site, and answers what the fi
   assert.deepEqual(second, first);
 });
 
+test("a workspace over unchanged snapshots reads no call site again, an edit reads only its repository's, and each answer is a cold composition's", async () => {
+  const member = join(workspace, "web");
+  mkdirSync(member);
+  const memberGit = (...args: string[]): string => execFileSync("git", args, { cwd: member, env: GIT_ENV, encoding: "utf8" }).trim();
+  memberGit("init", "-q");
+  writeFileSync(join(member, "order-page.ts"), ORDER_PAGE);
+  memberGit("add", "-A");
+  memberGit("commit", "-q", "-m", "page");
+  const trustDirectory = join(workspace, "trust");
+  const cacheDirectory = join(workspace, "cache");
+  assert.equal(await composeCli({ scratchRoot, trustDirectory, cacheDirectory })(["init", "--trust", "trusted", repo], { out: () => undefined, err: () => undefined }), EXIT_CODE.ok);
+  const lines: string[] = [];
+  const { workspace: warm } = composeQueries({ scratchRoot, trustDirectory, cacheDirectory, measure: (line) => lines.push(line) });
+  const callSiteReads = (): number => lines.splice(0).filter((line) => { const record = JSON.parse(line).ye_ast as { event: string; stage?: string }; return record.event === "stage" && record.stage === "call-sites"; }).length;
+  const request = { repo: { path: repo, id: "shop-service", live: true as const }, repos: [{ path: member, id: "web", revision: memberGit("rev-parse", "HEAD") }] };
+  const cold = () => composeQueries({ scratchRoot, trustDirectory, cacheDirectory, snapshotCacheBytes: 0 }).workspace.outwardNames(request);
+
+  const first = await warm.outwardNames(request);
+  assert.equal(callSiteReads(), 2);
+  const second = await warm.outwardNames(request);
+  assert.equal(callSiteReads(), 0);
+  assert.deepEqual(second, first);
+  assert.deepEqual(second, await cold());
+
+  writeFileSync(join(repo, "src", "OrderController.java"), CONTROLLER.replace('/{id}', '/edited/{id}'));
+  const edited = await warm.outwardNames(request);
+  assert.equal(callSiteReads(), 1);
+  assert.deepEqual(edited, await cold());
+});
+
+test("a workspace reads a repository's call sites again when a repository it depends on changes, and answers what a cold composition answers", async () => {
+  writeFileSync(join(repo, "pom.xml"), "<project><groupId>shop</groupId><artifactId>app</artifactId><dependencies><dependency><groupId>transport</groupId><artifactId>gateway</artifactId></dependency></dependencies></project>");
+  writeFileSync(join(repo, "src", "Caller.java"), "package shop;\nimport transport.Gateway;\nclass Caller {\n  private Gateway gateway;\n  void load() { gateway.get(\"/inventory\"); }\n}\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "caller");
+  const library = join(workspace, "gateway");
+  mkdirSync(library);
+  const libraryGit = (...args: string[]): string => execFileSync("git", args, { cwd: library, env: GIT_ENV, encoding: "utf8" }).trim();
+  libraryGit("init", "-q");
+  writeFileSync(join(library, "pom.xml"), "<project><groupId>transport</groupId><artifactId>gateway</artifactId></project>");
+  const gateway = (body: string): string => `package transport;\nimport org.springframework.web.client.RestTemplate;\npublic class Gateway {\n  private RestTemplate http;\n  public String get(String path) { ${body} return "ok"; }\n}\n`;
+  writeFileSync(join(library, "Gateway.java"), gateway("http.getForObject(path, String.class);"));
+  libraryGit("add", "-A");
+  libraryGit("commit", "-q", "-m", "gateway");
+  const before = libraryGit("rev-parse", "HEAD");
+  writeFileSync(join(library, "Gateway.java"), gateway(""));
+  libraryGit("commit", "-q", "-am", "no call");
+  const after = libraryGit("rev-parse", "HEAD");
+  const lines: string[] = [];
+  const { workspace: warm } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+  const callSiteReads = (): number => lines.splice(0).filter((line) => { const record = JSON.parse(line).ye_ast as { event: string; stage?: string }; return record.event === "stage" && record.stage === "call-sites"; }).length;
+  const request = (revision: string) => ({ repo: { path: repo, id: "shop-service", revision: "HEAD" }, repos: [{ path: library, id: "gateway", revision }] });
+
+  await warm.outwardNames(request(before));
+  assert.equal(callSiteReads(), 2);
+  const changed = await warm.outwardNames(request(after));
+
+  assert.equal(callSiteReads(), 2);
+  assert.deepEqual(changed, await composeQueries({ scratchRoot, snapshotCacheBytes: 0 }).workspace.outwardNames(request(after)));
+});
+
 test("a measured callers names the origin reads of its reference proofs as stages", async () => {
   writeFileSync(join(repo, "src", "origin.ts"), ["export function origin(): number {", "  return 1;", "}", ""].join("\n"));
   writeFileSync(join(repo, "src", "user.ts"), ["import { origin } from './origin';", "export function user(): number {", "  return origin();", "}", ""].join("\n"));

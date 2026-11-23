@@ -50,3 +50,36 @@ test("the watcher never holds the process open, including the per-directory watc
 
   assert.deepEqual(options.map((one) => (one as { persistent?: boolean }).persistent), [false]);
 });
+
+test("nothing under a skipped directory is reported, while a change beside it is", { timeout: 30_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "ye-ast-tree-watch-"));
+  mkdirSync(join(root, "deps", "pkg"), { recursive: true });
+  mkdirSync(join(root, "src"));
+  try {
+    const paths: (string | undefined)[] = [];
+    const seen = new Promise<void>((settle, fail) => {
+      const opened = createTreeWatch().watch(root, {
+        changed: (path) => {
+          paths.push(path);
+          if (path !== "src/App.java" || "fault" in opened) return;
+          opened.close();
+          settle();
+        },
+        failed: (fault) => fail(new Error(fault.code)),
+      }, (path) => path === "deps" || path.startsWith("deps/"));
+      if ("fault" in opened) fail(new Error(opened.fault.code));
+    });
+    let edits = 0;
+    const write = (): void => {
+      edits++;
+      writeFileSync(join(root, "deps", "pkg", "index.js"), `// ${edits}\n`);
+      writeFileSync(join(root, "src", "App.java"), `class App {} // ${edits}\n`);
+    };
+    write();
+    const rewriting = setInterval(write, 200);
+    await seen.finally(() => clearInterval(rewriting));
+    assert.deepEqual(paths.filter((path) => path?.startsWith("deps")), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

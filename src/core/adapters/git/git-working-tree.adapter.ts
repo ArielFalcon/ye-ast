@@ -8,6 +8,8 @@ import { ABORTED, defaultGitDeps, ensureRepositoryRoot, gitFailed, type GitDeps 
 import { compareText } from "../../domain/shared/code-node.ts";
 
 const SUBMODULE_MODE = "160000";
+/** `git check-ignore` exits 1 when none of the paths it was given is ignored. */
+const CHECK_IGNORE_NONE = 1;
 
 /** The user's configuration stays, except what could change what git lists or start a program. */
 const LISTING_PREFIX: readonly string[] = [
@@ -97,7 +99,21 @@ export function createGitWorkingTree(deps: Pick<GitDeps, "runGit"> & Partial<Wor
     return { ok: true, value: { paths, objectFormat: format.value.trim() } };
   }
 
-  return { list };
+  async function ignoredDirectories(repo: string, signal?: AbortSignal): Promise<Result<readonly string[], VcsFault>> {
+    const untracked = await deps.runGit(repo, [...LISTING_PREFIX, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], signal);
+    if (signal?.aborted) return ABORTED;
+    if (untracked.code !== 0) return gitFailed(untracked);
+    const candidates = records(untracked.stdout).filter((record) => record.endsWith("/"));
+    if (candidates.length === 0) return { ok: true, value: [] };
+    const excluded = await deps.runGit(repo, [...LISTING_PREFIX, "-c", "core.quotePath=false", "check-ignore", "--", ...candidates], signal);
+    if (signal?.aborted) return ABORTED;
+    if (excluded.code === CHECK_IGNORE_NONE) return { ok: true, value: [] };
+    if (excluded.code !== 0) return gitFailed(excluded);
+    const lines = excluded.stdout.toString("utf8").split("\n").filter((line) => line.endsWith("/"));
+    return { ok: true, value: lines.map((line) => line.slice(0, -1)).sort(compareText) };
+  }
+
+  return { list, ignoredDirectories };
 }
 
 function records(output: Buffer): string[] {
