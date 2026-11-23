@@ -22,8 +22,11 @@ test("a change deep under the root is reported by its root-relative path with / 
       });
       if ("fault" in opened) fail(new Error(opened.fault.code));
     });
-    writeFileSync(join(root, "src", "app", "App.java"), "class App {}\n");
-    await seen;
+    let edits = 0;
+    const write = (): void => writeFileSync(join(root, "src", "app", "App.java"), `class App {} // ${++edits}\n`);
+    write();
+    const rewriting = setInterval(write, 200);
+    await seen.finally(() => clearInterval(rewriting));
     assert.equal(paths.at(-1), "src/app/App.java");
   } finally {
     rmSync(root, { recursive: true, force: true });
