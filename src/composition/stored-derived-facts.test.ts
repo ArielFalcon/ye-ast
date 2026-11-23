@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { javaDeclarationIndex } from "../core/adapters/spring/java-declaration-index.ts";
+import { createJavaDataEffects } from "../core/adapters/spring/data-effects.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
 import { createJavaReceiverMethods } from "../core/adapters/spring/java-receiver-methods.ts";
@@ -21,6 +22,7 @@ import type { SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 
 const TS_FILE: SourceFile = { path: "src/a.ts", content: ["const fn = () => 1;", "export function run(list: Repo[]): void {", "  fn.call(undefined);", "  list.save();", "}", ""].join("\n") };
 const JAVA_FILE: SourceFile = { path: "src/A.java", content: ["class A {", "  void run() { B b = new B(); b.go(); Runnable r = () -> run(); }", "}", ""].join("\n") };
+const JAVA_FIELDS: SourceFile = { path: "src/main/java/app/Fields.java", content: ["package app;", "class Fields {", "  private B owned;", "  B open;", "  void run() { owned.go(); open.go(); this.owned.go(); }", "}", ""].join("\n") };
 const JAVA_TARGET: SourceFile = { path: "src/B.java", content: "class B { void go() {} }\n" };
 const JAVA_CONTROLLER: SourceFile = { path: "src/main/java/app/Orders.java", content: ["package app;", "import org.springframework.web.bind.annotation.*;", "@RestController class Orders { @GetMapping(\"/orders\") void list() {} }", ""].join("\n") };
 const JAVA_WEB_CONFIG: SourceFile = {
@@ -86,6 +88,7 @@ const PINNED: Readonly<Record<string, readonly [version: number, digest: string]
   "ts-module-statements": [1, "91ab9359a95e086f838319423bdedbe521677be9a9aeeeaa9559d89865c9aaa7"],
   "ts-default-declaration": [1, "bb5c1e3feab5ef3908224d5f2c0eabde6442b0d5202265d2d7b2f4aee3b13de8"],
   "java-receiver-bindings": [1, "90990e5ddeb91598c35caee6778aaeb4bcfbeca882230eda67aed1a064c6760d"],
+  "java-unproven-receiver-bindings": [1, "13ad509415cf6b92554d5c697c59d7ef9fe9cab8686ab216d5676b911921d0cd"],
   "java-declarations": [3, "59a853a37051542aa9e4d64ea5e394852d0052252bfd57bff9ea9ac6ccdd9b5e"],
   "java-relations": [1, "44a95dcd724d82e01cf726296313a3daebdeb01f5dda377fb39806c7dd0b85c7"],
   "java-entrypoints": [1, "3a63c07df1763ffeacea0e437ac9a1ada4f10d0de462ec6f50ca063ea72c1cb0"],
@@ -143,6 +146,7 @@ async function derivedBySlot(): Promise<Record<string, [number, string]>> {
   await createModuleDependenciesReader().extract([IMPORTER, LATER], { facts });
   await createJavaReceiverMethods(createJavaParser, [JAVA_FILE], [JAVA_FILE.path], facts)([{ file: JAVA_FILE.path, line: 2, column: 36, member: "go" }]);
   javaDeclarationIndex(facts, await createJavaParser(), [JAVA_FILE, JAVA_SPACED], { generatesInterfaces: false, unreadJvm: false });
+  await createJavaDataEffects(await createJavaParser()).placed([JAVA_FIELDS], { facts });
   const holds = createJavaTreeHolds();
   const hold = holds.open();
   const javaSources = [JAVA_FILE, JAVA_TARGET, JAVA_CONTROLLER, JAVA_WEB_CONFIG, JAVA_CALLBACKS, JAVA_AMBIGUOUS];
