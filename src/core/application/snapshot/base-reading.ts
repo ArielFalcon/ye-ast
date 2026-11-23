@@ -117,6 +117,8 @@ export interface ReadingSource {
   store: CodeGraphReader;
   /** The digest of the index, when the index cache keeps it by content. */
   digest?: string | undefined;
+  /** The committed store generation of a live store pinned under the mirror lock (ADR-0144). */
+  generation?: string | undefined;
   snapshot: SnapshotRef;
   request: ReadingRequest;
 }
@@ -286,12 +288,14 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
     const { tree, prepared, request } = source;
     const kept = prepared?.retained;
     /**
-     * A stage that reads the index, kept under the index's digest and every other input of the origins it asks: whether
-     * the hierarchy was completed first, the narrowing's origin paths and the validated JDK identities (ADR-0143 decision 3).
+     * A stage that reads the index, kept under the index's digest, or on the live tree the pinned store generation
+     * (ADR-0150), and every other input of the origins it asks: whether the hierarchy was completed first, the
+     * narrowing's origin paths and the validated JDK identities (ADR-0143 decision 3).
      */
+    const index = source.digest !== undefined ? { index: source.digest } : source.generation !== undefined ? { generation: source.generation } : undefined;
     const keptOverIndex = <T, P>(output: string, produce: () => Promise<T>, plain: (value: T) => P, revive: (value: P) => T): Promise<T> => {
-      if (kept === undefined || source.digest === undefined) return produce();
-      const slot = canonicalJson({ output, index: source.digest, completed, originPaths: narrowing.originPaths ?? null, jdks: jdkIdentity(jdks()) });
+      if (kept === undefined || index === undefined) return produce();
+      const slot = canonicalJson({ output, ...index, completed, originPaths: narrowing.originPaths ?? null, jdks: jdkIdentity(jdks()) });
       return kept(slot, async () => plain(await produce()), request.signal).then(revive);
     };
     const store = hierarchy.reader;

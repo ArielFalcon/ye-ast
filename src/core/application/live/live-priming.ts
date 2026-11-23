@@ -79,7 +79,7 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
           if (typeof index === "string" || "fault" in index) return undefined;
           store = index.store;
           return readings.open(
-            { tree, prepared, hold: held.hold, store: index.store, snapshot: { repo: request.repoId, kind: "live", head: held.head, stateId: held.tree.stateId }, request: { repo: request.repo, ...signalled } },
+            { tree, prepared, hold: held.hold, store: index.store, generation: index.generation, snapshot: { repo: request.repoId, kind: "live", head: held.head, stateId: held.tree.stateId }, request: { repo: request.repo, ...signalled } },
             { originPaths: tree.export.files.map(({ path }) => path).filter(selected), inScope: selected },
           );
         };
