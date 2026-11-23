@@ -104,7 +104,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         } finally {
           store.close();
         }
-      });
+      }, "outline");
     },
   };
 }

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { PrimingOutcome } from "../core/application/live/live-priming.ts";
 import type { SnapshotCacheEvent } from "../core/application/snapshot/snapshot-data-cache.ts";
+import type { AnswerMemoOutcome } from "../core/application/snapshot/answer-memo.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY, type CodeGraph, type CodeGraphReader } from "../core/ports/code-graph.port.ts";
 import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
@@ -138,6 +139,13 @@ export async function measuredPriming(prime: () => Promise<PrimingOutcome>, deps
 export function measuredSnapshotCache(deps: MeasurementDeps): (event: SnapshotCacheEvent) => void {
   return ({ outcome, entryBytes, retainedBytes }) => {
     reportBestEffort({ event: "cache", outcome, ...(entryBytes === undefined ? {} : { entry_bytes: entryBytes }), retained_bytes: retainedBytes, start_ms: Math.round(performance.now()) }, deps);
+  };
+}
+
+/** What the answer memo did for one query that names its family (ADR-0151), one `answer-memo` line each. */
+export function measuredAnswerMemo(deps: MeasurementDeps): (outcome: AnswerMemoOutcome) => void {
+  return (outcome) => {
+    reportBestEffort({ event: "answer-memo", outcome, start_ms: Math.round(performance.now()) }, deps);
   };
 }
 

@@ -20,6 +20,8 @@
 - Superseded in part by: [ADR-0126](0126-the-snapshot-cache-keeps-decoded-frozen-values-and-names-a-file-by-its-blob-id.md)
   (decision 2: an entry holds the frozen value after its round trip; decision 5, last sentence: a hit answers that
   frozen object, not a fresh decode)
+- Amended by: [ADR-0151](0151-an-answer-is-kept-in-memory-for-the-snapshot-identity-it-was-derived-from.md) (decision 2:
+  the final fact of a `callers`, `importers`, `outline` or `trace` query is kept for its pinned snapshot identity)
 - Related: [ADR-0006](0006-qayaba-graph-state-per-run.md), [ADR-0010](0010-trust-modes.md),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0006](../rfc/0006-configuration.md)
 

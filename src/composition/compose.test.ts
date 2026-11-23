@@ -756,7 +756,7 @@ test("a measured callers names the origin reads of its reference proofs as stage
   assert.ok(stages.includes("root-origins"));
 });
 
-test("a repeated callers finds every derived fact it kept, and answers what a composition that keeps none answers", async () => {
+test("a callers over another walk bound finds every derived fact the first kept, and answers what a composition that keeps none answers", async () => {
   writeFileSync(join(repo, "src", "kept.ts"), ["export function kept(redact: () => void): void {", "  redact();", "}", ""].join("\n"));
   writeFileSync(join(repo, "src", "keeper.ts"), ["import { kept } from './kept';", "export function keeper(): void {", "  kept(() => undefined);", "}", ""].join("\n"));
   git("add", "-A");
@@ -766,16 +766,17 @@ test("a repeated callers finds every derived fact it kept, and answers what a co
   const request = { repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/kept.ts", symbol: "kept" }] };
   const factLines = () => lines.splice(0).map((line) => JSON.parse(line).ye_ast as { event: string; reader?: string; hits: number; misses: number }).filter((record) => record.event === "derived-facts");
 
-  const first = await impact.callers(request);
+  const bounded = { ...request, budget: { depth: 50 } };
+
+  await impact.callers(request);
   const firstFacts = factLines();
-  const second = await impact.callers(request);
+  const second = await impact.callers(bounded);
   const secondFacts = factLines();
 
   assert.ok(firstFacts.length > 0 && firstFacts.every((record) => record.reader === "import-origins"));
   assert.ok(firstFacts.some((record) => record.misses > 0));
   assert.ok(secondFacts.length > 0 && secondFacts.every((record) => record.misses === 0 && record.hits > 0), JSON.stringify(secondFacts));
-  assert.deepEqual(second, first);
-  assert.deepEqual(await composeQueries({ scratchRoot, snapshotCacheBytes: 0 }).impact.callers(request), first);
+  assert.deepEqual(await composeQueries({ scratchRoot, snapshotCacheBytes: 0 }).impact.callers(bounded), second);
 });
 
 test("a repeated callers over a kept index reads its graph once: the second opens no store and issues no SQL statement", async () => {
