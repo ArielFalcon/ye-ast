@@ -20,17 +20,20 @@ afterEach(async () => {
 });
 
 test("a worker stays while a client is attached or a call runs, and exits once idle", async () => {
-  const channel = new EventEmitter();
   let exited = false;
-  const host = runWorkerHost({ channel, pid: 1, idleMs: 30, start: (repo, configuration) => echoServe(repo, configuration, 1) }).then(() => (exited = true));
-  channel.emit("message", { kind: "start", repo: "/repo", configuration: {} });
+  let host: Promise<unknown> | undefined;
   const stop = new AbortController();
-  const served = runSupervisor({ directory: runtime.directory, installation: TEST_INSTALLATION, version: VERSION, idleMs: 60_000, pid: process.pid, isAlive, signal: stop.signal, spawnWorker: () => ({
-    send: (message, handle) => (channel.emit("message", message, handle), true),
-    once: (_event, listener) => void host.then(listener),
-    on: () => undefined,
-    kill: () => true,
-  }) });
+  const served = runSupervisor({ directory: runtime.directory, installation: TEST_INSTALLATION, version: VERSION, idleMs: 60_000, pid: process.pid, isAlive, signal: stop.signal, spawnWorker: () => {
+    const channel = new EventEmitter();
+    const running = runWorkerHost({ channel, pid: 1, idleMs: 30, start: (repo, configuration) => echoServe(repo, configuration, 1) }).then(() => (exited = true));
+    host = running;
+    return {
+      send: (message, handle) => (channel.emit("message", message, handle), true),
+      once: (_event, listener) => void running.then(listener),
+      on: () => undefined,
+      kill: () => true,
+    };
+  } });
   const link = testLink(runtime.directory, VERSION);
   const socket = await attached(link, "/repo");
   await new Promise((resolve) => setTimeout(resolve, 100));
