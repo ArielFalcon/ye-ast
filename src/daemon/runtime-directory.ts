@@ -3,8 +3,11 @@ import { lstat, mkdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { privateToOwner } from "../core/domain/shared/private-to-owner.ts";
 
-export const SOCKET_FILE = "daemon.sock";
-export const PID_FILE = "daemon.pid";
+/** The socket and pid file of one installation's daemon, named by a digest of its path so each installation runs its own. */
+export function daemonFiles(directory: string, installation: string): { socket: string; pid: string } {
+  const name = `daemon-${createHash("sha256").update(installation).digest("hex").slice(0, 16)}`;
+  return { socket: join(directory, `${name}.sock`), pid: join(directory, `${name}.pid`) };
+}
 
 /** The longest socket path the platform binds: `sun_path` holds 104 bytes on macOS and 108 on Linux, with its terminator. */
 const SOCKET_PATH_BYTES: Readonly<Partial<Record<NodeJS.Platform, number>>> = { darwin: 103, linux: 107 };
@@ -27,7 +30,7 @@ export function runtimeDirectory(environment: RuntimeEnvironment): string | null
   if (limit === undefined || environment.uid === undefined) return null;
   const runtime = environment.env.XDG_RUNTIME_DIR;
   const preferred = runtime !== undefined && isAbsolute(runtime) ? join(runtime, "ye-ast") : join(environment.tmpdir, `ye-ast-${environment.uid}`);
-  if (Buffer.byteLength(join(preferred, SOCKET_FILE)) <= limit) return preferred;
+  if (Buffer.byteLength(daemonFiles(preferred, "").socket) <= limit) return preferred;
   return join("/tmp", `ye-ast-${environment.uid}-${createHash("sha256").update(preferred).digest("hex").slice(0, 16)}`);
 }
 

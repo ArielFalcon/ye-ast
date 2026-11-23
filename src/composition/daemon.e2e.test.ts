@@ -6,9 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import { isAlive } from "../daemon/daemon-lock.ts";
+import { runtimeDirectory } from "../daemon/runtime-directory.ts";
 import { runSupervisor } from "../daemon/supervisor.ts";
 import { composeCli, composeQueries } from "./compose.ts";
-import { daemonProducer, processDaemonLink } from "./daemon.ts";
+import { DAEMON_INSTALLATION, daemonProducer, processDaemonLink } from "./daemon.ts";
 import { daemonBackedQueries, mcpConfiguration } from "./daemon-queries.ts";
 
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.com" };
@@ -46,6 +47,8 @@ const workers: number[] = [];
 let link: ReturnType<typeof processDaemonLink>;
 /** The temporary directory the real CLI process gets, so its runtime directory is this test's daemon's. */
 let processTmp: string;
+/** The runtime directory a CLI process with that temporary directory computes: under /tmp when its socket path would not bind. */
+let runtime: string;
 
 function git(...args: string[]): string {
   return execFileSync("git", args, { cwd: repo, env: GIT_ENV, encoding: "utf8" }).trim();
@@ -66,7 +69,7 @@ before(async () => {
   indexCache = join(workspace, "cache");
   trustDirectory = join(workspace, "config");
   processTmp = join(workspace, "tmp");
-  const runtime = join(processTmp, `ye-ast-${process.getuid!()}`);
+  runtime = runtimeDirectory({ env: {}, platform: process.platform, uid: process.getuid!(), tmpdir: processTmp })!;
   mkdirSync(repo);
   mkdirSync(runtime, { recursive: true, mode: 0o700 });
   git("init", "-q", "-b", "main");
@@ -74,6 +77,7 @@ before(async () => {
   commit({ "web/api.ts": FILES["web/api.ts"]!.replace("'all'", "'every'") }, "change");
   served = runSupervisor({
     directory: runtime,
+    installation: DAEMON_INSTALLATION,
     version: daemonProducer(),
     idleMs: 60_000,
     pid: process.pid,
@@ -95,6 +99,7 @@ after(async () => {
   await served;
   for (const pid of workers) for (let tries = 0; isAlive(pid) && tries < 100; tries++) await new Promise((resolve) => setTimeout(resolve, 50));
   rmSync(workspace, { recursive: true, force: true });
+  rmSync(runtime, { recursive: true, force: true });
 });
 
 interface Run {

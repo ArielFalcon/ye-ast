@@ -1,7 +1,6 @@
 import type { Socket } from "node:net";
-import { join } from "node:path";
-import { ATTACH_ID, attachLine, DAEMON_PROTOCOL, firstLine, isRecord, parsed, type WorkerConfiguration } from "./handshake.ts";
-import { SOCKET_FILE } from "./runtime-directory.ts";
+import { ATTACH_ID, attachLine, connected, DAEMON_PROTOCOL, firstLine, helloOf, isRecord, parsed, type WorkerConfiguration } from "./handshake.ts";
+import { daemonFiles } from "./runtime-directory.ts";
 
 /** How a client's attach ended: a socket bound to its worker, or why it answers in process. */
 export type Attachment =
@@ -14,6 +13,8 @@ export type Attachment =
 
 export interface DaemonLinkDeps {
   directory: string;
+  /** The directory ye-ast is installed in: its daemon is the one this link reaches. */
+  installation: string;
   version: string;
   /** Opens a connection to the socket path: `net.createConnection`. */
   connect(path: string): Socket;
@@ -42,18 +43,6 @@ const RETRY_MS = 100;
 /** A daemon started while the previous one still exits loses the lock and leaves; another is started after this long. */
 const RESPAWN_MS = 1_000;
 
-/** Any refused connection means no daemon listens there: none started, one exited, or a leftover path. */
-function connected(socket: Socket): Promise<"connected" | "absent"> {
-  return new Promise((resolve) => {
-    socket.once("connect", () => {
-      socket.off("error", onError);
-      resolve("connected");
-    });
-    const onError = (): void => resolve("absent");
-    socket.once("error", onError);
-  });
-}
-
 function refusal(message: unknown): string | undefined {
   if (!isRecord(message) || message.id !== ATTACH_ID || !isRecord(message.error) || !isRecord(message.error.data)) return undefined;
   return typeof message.error.data.kind === "string" ? message.error.data.kind : undefined;
@@ -64,7 +53,7 @@ export function daemonLink(deps: DaemonLinkDeps): DaemonLink {
 
   const attach = async (repo: string, configuration: WorkerConfiguration): Promise<Attachment> => {
     if (!(await deps.verify())) return { kind: "refused" };
-    const socket = deps.connect(join(deps.directory, SOCKET_FILE));
+    const socket = deps.connect(daemonFiles(deps.directory, deps.installation).socket);
     const reached = await connected(socket);
     if (reached !== "connected") return { kind: reached };
     socket.on("error", () => undefined);
@@ -73,9 +62,9 @@ export function daemonLink(deps: DaemonLinkDeps): DaemonLink {
       return { kind: "failed" };
     };
     const hello = await firstLine(socket, HANDSHAKE_MS);
-    const greeting = hello === null ? undefined : parsed(hello.line);
-    if (!isRecord(greeting) || greeting.method !== "hello" || !isRecord(greeting.params)) return fail();
-    const producer = String(greeting.params.producer);
+    const greeting = helloOf(hello?.line);
+    if (greeting === undefined) return fail();
+    const { producer } = greeting;
     socket.resume();
     socket.write(attachLine({ protocol: DAEMON_PROTOCOL.name, version: DAEMON_PROTOCOL.version, producer: deps.version, repo, configuration }));
     const answer = await firstLine(socket, HANDSHAKE_MS);

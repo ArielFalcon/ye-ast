@@ -1,10 +1,9 @@
 import { rm } from "node:fs/promises";
-import { createServer, type Server, type Socket } from "node:net";
-import { join } from "node:path";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { takeDaemonLock, type DaemonLockDeps } from "./daemon-lock.ts";
-import { DAEMON_PROTOCOL, firstLine, helloLine, isRecord, parsed, refusedLine, type AttachParams, type WorkerConfiguration } from "./handshake.ts";
-import { PID_FILE, SOCKET_FILE } from "./runtime-directory.ts";
+import { takeDaemonLock } from "./daemon-lock.ts";
+import { connected, DAEMON_PROTOCOL, firstLine, helloLine, helloOf, isRecord, parsed, refusedLine, type AttachParams, type WorkerConfiguration } from "./handshake.ts";
+import { daemonFiles } from "./runtime-directory.ts";
 
 /** What the supervisor tells a worker; an `attach` carries the client's socket as its handle. */
 export type WorkerMessage =
@@ -21,10 +20,14 @@ export interface WorkerProcess {
   kill(signal?: NodeJS.Signals): boolean;
 }
 
-export interface SupervisorDeps extends DaemonLockDeps {
+export interface SupervisorDeps {
   /** The prepared runtime directory (ADR-0157 decision 3). */
   directory: string;
+  /** The directory ye-ast is installed in: one daemon runs per installation (ADR-0157 decision 4). */
+  installation: string;
   version: string;
+  pid: number;
+  isAlive(pid: number): boolean;
   /** How long the supervisor stays without a worker and without a pending attach before it exits. */
   idleMs: number;
   /** Forks one worker; the supervisor sends it its `start` message. */
@@ -38,6 +41,25 @@ export interface SupervisorDeps extends DaemonLockDeps {
 /** How long a client may take to attach. */
 const HANDSHAKE_MS = 10_000;
 const STOP_GRACE_MS = 5_000;
+/** How long the daemon a live pid file names may take to answer its hello, so one that has the lock and is about to listen is waited for. */
+const HOLDER_ANSWER_MS = 2_000;
+const HOLDER_RETRY_MS = 50;
+
+/** Whether a daemon answers its hello on `path` before `deadline`. */
+async function answersHello(path: string, deadline: number): Promise<boolean> {
+  while (Date.now() < deadline) {
+    const socket = createConnection(path);
+    socket.on("error", () => undefined);
+    if ((await connected(socket)) === "connected") {
+      const hello = await firstLine(socket, Math.max(0, deadline - Date.now()));
+      socket.destroy();
+      return helloOf(hello?.line) !== undefined;
+    }
+    socket.destroy();
+    await new Promise((resolve) => setTimeout(resolve, HOLDER_RETRY_MS));
+  }
+  return false;
+}
 
 function attachParams(message: unknown): AttachParams | undefined {
   if (!isRecord(message) || message.jsonrpc !== "2.0" || message.id !== 1 || message.method !== "attach" || !isRecord(message.params)) return undefined;
@@ -48,13 +70,16 @@ function attachParams(message: unknown): AttachParams | undefined {
 
 /**
  * Serves the daemon's socket until it is stopped, retires, or stays idle: one worker per repository and configuration,
- * each attached client handed to its worker. Resolves `already-running` without listening when another daemon holds
- * the runtime directory.
+ * each attached client handed to its worker. Resolves `already-running` without listening when another daemon of this
+ * installation runs.
  */
 export async function runSupervisor(deps: SupervisorDeps): Promise<"served" | "already-running"> {
-  const lock = await takeDaemonLock(join(deps.directory, PID_FILE), { version: deps.version }, deps);
+  const { socket: socketPath, pid: pidFile } = daemonFiles(deps.directory, deps.installation);
+  const lock = await takeDaemonLock(pidFile, { version: deps.version }, {
+    pid: deps.pid,
+    running: async (holder) => deps.isAlive(holder) && (await answersHello(socketPath, Date.now() + HOLDER_ANSWER_MS)),
+  });
   if (lock === null) return "already-running";
-  const socketPath = join(deps.directory, SOCKET_FILE);
   await rm(socketPath, { force: true });
   const workers = new Map<string, WorkerProcess>();
   let pending = 0;
@@ -70,7 +95,7 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<"served" | "a
     clearTimeout(idle);
     deps.signal.removeEventListener("abort", stop);
     server.close();
-    await rm(socketPath, { force: true });
+    if (closing === undefined) await rm(socketPath, { force: true });
     await lock.release();
     resolveServed();
   };

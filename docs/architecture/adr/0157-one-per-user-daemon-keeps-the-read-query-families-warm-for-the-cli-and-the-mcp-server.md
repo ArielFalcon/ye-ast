@@ -6,6 +6,10 @@
   and quality"; 2026-11-23 (translated): "apply all of this when the time comes; resolve the open decisions as you best
   understand them", under which the lead decided RFC-0040 D7 (§8): a minimal per-user daemon for the CLI and the MCP
   server, started on first use and by `init`, version handshake, one worker per repository, file lock unchanged.
+  Amended 2026-11-23 by the lead after independent verification: "each installation gets its own daemon, keyed in the
+  runtime directory by a short hash of the installation path; a different version at the SAME installation path still
+  retires the old daemon after its in-flight requests (in-place upgrade)", and a pid file whose daemon does not answer
+  is stale (decision 4).
 - Related: [RFC-0040](../rfc/0040-resident-generations-and-answer-latency.md) §6 phase 4, §8 D7;
   [RFC-0005](../rfc/0005-transports.md) "Daemon"; [RFC-0006](../rfc/0006-configuration.md);
   [ADR-0005](0005-runtime-topology-and-delivery-order.md) (decision 5), [ADR-0006](0006-qayaba-graph-state-per-run.md),
@@ -13,8 +17,8 @@
   [ADR-0016](0016-remote-refresh-under-trusted.md),
   [ADR-0152](0152-a-watcher-on-a-trusted-live-tree-only-triggers-the-launch-priming-refresh-ahead-of-the-next-query.md)
 
-**In short:** `ye-ast daemon` is a supervisor that listens on a Unix socket in an owner-only runtime directory and runs
-one worker process per repository and composition configuration. A worker holds one in-process composition of the read
+**In short:** `ye-ast daemon` is a supervisor, one per installation of ye-ast, that listens on a Unix socket in an
+owner-only runtime directory and runs one worker process per repository and composition configuration. A worker holds one in-process composition of the read
 query families, exactly the one the client would have built, so its snapshot cache, graph images, resident trees and
 watcher outlive the client. The MCP server and the CLI query commands send each query to the worker of its repository
 and get the port's result back unchanged; whenever the daemon is absent, of another version, retiring or gone
@@ -67,24 +71,31 @@ the repository and returns at once.
    directory on every request, never widened. Build outputs a request declares travel in the request itself. The worker
    inherits the supervisor's environment, which is that of the client that started it.
 3. **Runtime directory.** `$XDG_RUNTIME_DIR/ye-ast` when `XDG_RUNTIME_DIR` is absolute, otherwise
-   `<os.tmpdir()>/ye-ast-<uid>`. When `<directory>/daemon.sock` is longer than the platform's socket path limit (103
+   `<os.tmpdir()>/ye-ast-<uid>`. When a daemon's socket path (decision 4) is longer than the platform's socket path limit (103
    bytes on macOS, 107 on Linux), the directory is `/tmp/ye-ast-<uid>-<first 16 hex of the SHA-256 of the preferred
    directory>`, so two environments with different temporary directories still meet different daemons. The directory is
    created with mode 0700 and refused, never repaired, when it is a symbolic link, belongs to another account or is
    open to the group or others (the `--cache` rule, `privateToOwner`); a refused directory means no daemon, and the
    client answers in process. A client checks the directory again before every attach, so it never connects through
-   one that stopped being private. It holds `daemon.sock` and `daemon.pid`. Windows and any platform without account ids or
+   one that stopped being private. It holds each installation's socket and pid file (decision 4). Windows and any platform without account ids or
    Unix sockets answer in process.
-4. **One instance per user.** The supervisor takes `daemon.pid` by creating a temporary file and hard-linking it into
-   place (atomic, the mirror lock's mechanism) with `{pid, version}`. A holder whose pid is dead, or whose file is
-   unreadable, is stale: the file is re-read and removed only if unchanged, then taken again. A live holder means
-   another daemon runs or starts: the new process exits 0. Holding the lock, the supervisor removes any `daemon.sock`
-   left behind (it can only be stale) and listens. On exit it closes the socket and removes the pid file if it still
-   names its own pid.
+4. **One instance per user and installation.** Each directory ye-ast is installed in runs its own daemon, whose files
+   are `daemon-<h>.sock` and `daemon-<h>.pid`, `<h>` the first 16 hex of the SHA-256 of the installation path: two
+   checkouts or installs used by one account never retire each other's daemon and warm workers. The names have one
+   length whatever the installation, so decision 3's socket path rule holds for all of them. The supervisor takes its
+   pid file by creating a temporary file and hard-linking it into place (atomic, the mirror lock's mechanism) with
+   `{pid, version}`. A holder is stale when its file is unreadable, its pid is dead, or its socket does not answer the
+   hello within 2 s (a reused pid after a reboot, or a process the account cannot signal); a holder that has the lock
+   and is about to listen answers within that bound. A stale file is re-read and removed only if unchanged, then taken
+   again. A running holder means another daemon of this installation runs: the new process exits 0. Holding the lock,
+   the supervisor removes any socket left behind (it can only be stale) and listens. On exit it removes the pid file if
+   it still names its own pid, and the socket only when it did not already remove it at retirement or stop, so it never
+   removes the socket of a successor that took over meanwhile.
 5. **Handshake.** The supervisor writes one hello line on every connection,
    `{"jsonrpc":"2.0","method":"hello","params":{"protocol":"ye-ast-daemon","version":1,"producer":"<producer>"}}`, where
    the producer is the ye-ast version and the directory it is installed in, so two checkouts or installs of one version
-   never answer for each other.
+   never answer for each other. A client reaches only its own installation's socket, so a producer that differs is the
+   same installation at another version: an in-place upgrade.
    The client then sends one `attach` request with its own protocol, version and producer, the repository and the
    configuration, and writes nothing more until it is answered. A protocol or producer that differs from the
    daemon's is answered `version-mismatch` and starts the daemon's retirement (decision 9); the client answers in
@@ -118,7 +129,9 @@ the repository and returns at once.
 9. **Lifecycle.** A worker exits after 30 minutes with no attached connection, no call in flight and no `warm` running;
    the supervisor exits after 30 minutes with no worker and no attach pending. SIGTERM and SIGINT stop the supervisor cleanly: workers abort their calls and exit, the socket and pid file
    are removed, and clients answer in process. Retirement (decision 5) stops listening and removes the socket at once,
-   answers new calls on existing connections `retiring`, lets the calls in flight finish, then exits. A worker that
+   answers new calls on existing connections `retiring`, lets the calls in flight finish, then exits; the new version's
+   client starts its own daemon, which takes the lock once the retiring one no longer answers and serves while the old
+   one finishes. A worker that
    crashes takes only its own connections down; the supervisor forgets it and the next `attach` of its key forks a new
    one.
 10. **Idle period.** 30 minutes, a constant, not a size rule. codegraph lingers 300 s so back-to-back runs do not
@@ -132,7 +145,7 @@ the repository and returns at once.
     (ADR-0006's reasoning) sets it. Tests inject the runtime directory, the spawn and the clock and never reach the
     user's runtime directory; harnesses give each run its own `TMPDIR` (and so its own runtime directory), run in process
     unless asked (`--daemon` on the latency bench and the warm differential, whose oracles stay in process), and stop
-    the daemon whose pid their directory's `daemon.pid` names.
+    the daemon whose pid their directory's pid file of the engine's installation names.
 
 ## Consequences
 

@@ -92,8 +92,19 @@ export function inProcessWorkers(idleMs: number): { spawnWorker(): WorkerProcess
   };
 }
 
-export function testLink(directory: string, version: string, spawnDaemon: () => void = () => undefined, verify: () => Promise<boolean> = async () => true): DaemonLink {
-  return daemonLink({ directory, version, connect: (path) => createConnection(path), spawnDaemon, now: () => Date.now(), verify });
+/** The installation tests run their daemons as. */
+export const TEST_INSTALLATION = "/install";
+
+export function testLink(directory: string, version: string, options: { installation?: string; spawnDaemon?: () => void; verify?: () => Promise<boolean> } = {}): DaemonLink {
+  return daemonLink({
+    directory,
+    installation: options.installation ?? TEST_INSTALLATION,
+    version,
+    connect: (path) => createConnection(path),
+    spawnDaemon: options.spawnDaemon ?? (() => undefined),
+    now: () => Date.now(),
+    verify: options.verify ?? (async () => true),
+  });
 }
 
 /** Writes a request line on an attached socket and resolves its answer's `result`. */

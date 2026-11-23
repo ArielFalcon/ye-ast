@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, symlink } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { scratchRuntime } from "./daemon.testing.ts";
-import { runtimeDirectory, runtimeDirectoryRefusal, SOCKET_FILE } from "./runtime-directory.ts";
+import { daemonFiles, runtimeDirectory, runtimeDirectoryRefusal } from "./runtime-directory.ts";
 
 const uid = 501;
 const base = { platform: "darwin" as const, uid, tmpdir: "/var/folders/xy/T" };
@@ -16,7 +16,7 @@ test("the runtime directory is XDG_RUNTIME_DIR's when absolute, the temporary di
 });
 
 test("a socket path longer than the platform binds moves to a directory under /tmp named by the preferred one, one per preferred directory", () => {
-  const fits = "/t/" + "a".repeat(103 - "/t//ye-ast-501/".length - SOCKET_FILE.length);
+  const fits = "/t/" + "a".repeat(103 - "/t//ye-ast-501/".length - basename(daemonFiles("", "/any/installation").socket).length);
   assert.equal(runtimeDirectory({ ...base, env: {}, tmpdir: fits }), join(fits, "ye-ast-501"));
   const long = (suffix: string) => runtimeDirectory({ ...base, env: {}, tmpdir: `${fits}${suffix}` })!;
   assert.match(long("b"), /^\/tmp\/ye-ast-501-[0-9a-f]{16}$/);

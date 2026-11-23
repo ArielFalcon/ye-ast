@@ -4,11 +4,11 @@
  * to stderr while it ran (RFC-0012), plus the SQL counters of `latency-sql-counters.ts`, which is preloaded into it.
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
-import { PID_FILE, runtimeDirectory } from "../src/daemon/runtime-directory.ts";
+import { daemonFiles, runtimeDirectory } from "../src/daemon/runtime-directory.ts";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const SQL_COUNTERS = join(import.meta.dirname, "latency-sql-counters.ts");
@@ -72,14 +72,15 @@ export function isolatedEnvironment(home: string, daemon = false): NodeJS.Proces
 }
 
 /**
- * Stops the daemon a run's processes started in the run's own runtime directory, once every session closed, and answers
- * the resident set of its supervisor and workers just before; `null` when none runs there.
+ * Stops the daemon of the engine installed at `engine` that a run's processes started in the run's own runtime directory,
+ * once every session closed, and answers the resident set of its supervisor and workers just before; `null` when none
+ * runs there.
  */
-export async function stopDaemon(env: NodeJS.ProcessEnv): Promise<number | null> {
+export async function stopDaemon(engine: string, env: NodeJS.ProcessEnv): Promise<number | null> {
   const directory = runtimeDirectory({ env, platform: process.platform, uid: process.getuid?.(), tmpdir: env.TMPDIR ?? "" });
   let pid: number;
   try {
-    pid = (JSON.parse(readFileSync(join(directory!, PID_FILE), "utf8")) as { pid: number }).pid;
+    pid = (JSON.parse(readFileSync(daemonFiles(directory!, realpathSync(engine)).pid, "utf8")) as { pid: number }).pid;
   } catch {
     return null;
   }

@@ -51,6 +51,25 @@ export function parsed(line: string): unknown {
   }
 }
 
+/** Any refused connection means no daemon listens there: none started, one exited, or a leftover path. */
+export function connected(socket: Socket): Promise<"connected" | "absent"> {
+  return new Promise((resolve) => {
+    socket.once("connect", () => {
+      socket.off("error", onError);
+      resolve("connected");
+    });
+    const onError = (): void => resolve("absent");
+    socket.once("error", onError);
+  });
+}
+
+/** Whether a first line is a daemon's hello, and the producer it names. */
+export function helloOf(line: string | undefined): { producer: string } | undefined {
+  const greeting = line === undefined ? undefined : parsed(line);
+  if (!isRecord(greeting) || greeting.method !== "hello" || !isRecord(greeting.params)) return undefined;
+  return { producer: String(greeting.params.producer) };
+}
+
 /**
  * The first line the peer writes, or `null` when it closes, writes more than a handshake holds, or says nothing within
  * `timeoutMs`. The socket is left paused with whatever followed the line put back, so the next reader loses nothing;

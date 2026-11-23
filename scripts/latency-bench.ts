@@ -268,7 +268,7 @@ async function benchRepository(options: Options, repo: CorpusRepository, recorde
       await session.close();
     }
   } finally {
-    if (options.daemon) recorder.extras.push({ repo: repo.name, scenario: "daemon", rssBytes: await stopDaemon(env) });
+    if (options.daemon) recorder.extras.push({ repo: repo.name, scenario: "daemon", rssBytes: await stopDaemon(options.engine, env) });
   }
   log(`done; remove ${scratch} when the report is read`);
 }

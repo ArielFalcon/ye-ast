@@ -18,13 +18,15 @@ export const DAEMON_SWITCH = "YE_AST_DAEMON";
 
 const OWN_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const EXTENSION = extname(fileURLToPath(import.meta.url));
+/** The directory this ye-ast is installed in: each installation runs its own daemon (ADR-0157 decision 4). */
+export const DAEMON_INSTALLATION = join(OWN_DIRECTORY, "..", "..");
 
 /**
  * What a client and a daemon must share to talk: the ye-ast version and the installation it runs from, so two
  * checkouts of one version never answer for each other (ADR-0157 decision 5).
  */
 export function daemonProducer(): string {
-  return `${ownVersion()}@${join(OWN_DIRECTORY, "..", "..")}`;
+  return `${ownVersion()}@${DAEMON_INSTALLATION}`;
 }
 
 export interface DaemonEnvironment {
@@ -50,6 +52,7 @@ function spawnDaemon(): void {
 export function processDaemonLink(directory: string, ownerUid: number): DaemonLink {
   return daemonLink({
     directory,
+    installation: DAEMON_INSTALLATION,
     version: daemonProducer(),
     connect: (path) => createConnection(path),
     spawnDaemon,
@@ -72,6 +75,7 @@ export async function runDaemon(environment: DaemonEnvironment, signal: AbortSig
   }
   await runSupervisor({
     directory,
+    installation: DAEMON_INSTALLATION,
     version: daemonProducer(),
     idleMs: DAEMON_IDLE_MS,
     pid: process.pid,

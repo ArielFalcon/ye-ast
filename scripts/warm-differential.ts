@@ -367,7 +367,7 @@ async function differential(options: Options, repo: CorpusRepository, results: S
     await shaReplay(run, shas);
     await liveReplay(run, shas);
   } finally {
-    if (options.daemon) log(run, `daemon stopped, RSS before stop ${Math.round(((await stopDaemon(env)) ?? 0) / 1048576)} MB`);
+    if (options.daemon) log(run, `daemon stopped, RSS before stop ${Math.round(((await stopDaemon(options.engine, env)) ?? 0) / 1048576)} MB`);
     log(run, `done; remove ${scratch} when the report is read`);
   }
 }

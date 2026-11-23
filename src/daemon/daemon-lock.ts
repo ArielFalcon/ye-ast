@@ -3,7 +3,8 @@ import { link, readFile, rm, writeFile } from "node:fs/promises";
 
 export interface DaemonLockDeps {
   pid: number;
-  isAlive(pid: number): boolean;
+  /** True when the daemon of the holder's pid runs: the pid is alive and the daemon answers. */
+  running(holder: number): Promise<boolean>;
 }
 
 export interface DaemonLock {
@@ -44,9 +45,9 @@ function holderPid(text: string): number | null {
 }
 
 /**
- * Takes the pid file that makes one daemon per runtime directory: created whole and linked into place, so no reader sees
- * it half written. A holder that is unreadable or whose pid is dead is stale and removed only while it reads the same;
- * a live holder is another daemon, and the answer is `null`.
+ * Takes the pid file that makes one daemon per installation: created whole and linked into place, so no reader sees
+ * it half written. A holder that is unreadable or whose daemon does not run is stale and removed only while it reads the
+ * same; a running holder is another daemon, and the answer is `null`.
  */
 export async function takeDaemonLock(file: string, record: { version: string }, deps: DaemonLockDeps): Promise<DaemonLock | null> {
   const text = JSON.stringify({ pid: deps.pid, version: record.version });
@@ -61,7 +62,7 @@ export async function takeDaemonLock(file: string, record: { version: string }, 
     const holder = await readFile(file, "utf8").catch(() => null);
     if (holder === null) continue;
     const pid = holderPid(holder);
-    if (pid !== null && deps.isAlive(pid)) return null;
+    if (pid !== null && (await deps.running(pid))) return null;
     if ((await readFile(file, "utf8").catch(() => null)) === holder) await rm(file, { force: true });
   }
 }
