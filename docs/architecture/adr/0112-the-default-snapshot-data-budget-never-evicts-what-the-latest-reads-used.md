@@ -8,6 +8,8 @@
   [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md) decision 3 (what an admission may evict)
 - Amended by: [ADR-0127](0127-the-default-snapshot-cache-floor-is-the-working-set-the-corpus-measures.md) (decision 1: the
   floor is 128 MiB)
+- Amended by: [ADR-0147](0147-the-snapshot-cache-floor-is-what-each-repositorys-recent-contents-used-charged-as-decoded-heap.md) (decisions 1 and 2: the floor is derived from what each
+  repository's recent contents used, not configured)
 - Related: [ADR-0030](0030-live-captures-use-the-snapshot-data-cache.md),
   [ADR-0035](0035-derived-facts-are-retained-by-content.md),
   [ADR-0077](0077-derived-facts-persist-by-content-in-ye-asts-own-store.md),

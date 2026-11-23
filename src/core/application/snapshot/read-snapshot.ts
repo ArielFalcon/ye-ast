@@ -80,13 +80,23 @@ export interface FactAdmission {
   value: unknown;
 }
 
+/** What one read is a read of: the repository it serves, whether it reads its live tree or a revision, and the content it reads there (the snapshot entry's key). */
+export interface SnapshotReadContent {
+  repository: string;
+  snapshot: "live" | "revision";
+  key: string;
+}
+
 /**
  * Plain data after one serialization round trip, deep-frozen, so every hit answers the admitted object with no decode
  * (ADR-0126): no scratch paths, compiler trees, readers or in-flight work.
  */
 export interface SnapshotDataCache {
-  /** Starts one snapshot read: the entries it and the reads before it use are what a floor budget keeps (ADR-0112). */
-  beginRead(): void;
+  /**
+   * Starts one snapshot read: the entries it and the reads before it use are what a floor budget keeps (ADR-0112), and
+   * what its repository's recent contents use is what the working-set floor measures (ADR-0147).
+   */
+  beginRead(of?: SnapshotReadContent): void;
   /** Groups the reads made until the returned function is called into one read, so a query over many snapshots holds what all of them used (ADR-0121). */
   beginQuery(): () => void;
   get(key: string): SnapshotData | undefined;
@@ -95,8 +105,8 @@ export interface SnapshotDataCache {
   /** A derived fact (ADR-0035), frozen; facts share the budget and the eviction order and write no `cache` line. */
   getFact(key: string): unknown;
   putFact(key: string, json: string): FactAdmission;
-  /** The bytes the cache holds now, and how many of them are derived facts. */
-  usage(): { factBytes: number; retainedBytes: number };
+  /** The bytes the cache holds now, how many of them are derived facts, and the floor or cap it evicts above. */
+  usage(): { factBytes: number; retainedBytes: number; floorBytes: number };
 }
 
 export interface PreparedCommit {

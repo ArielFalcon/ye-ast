@@ -6,6 +6,8 @@
   integration left open: a workspace read spans more than three snapshot reads, so it may still evict past the floor.
 - Amends: [ADR-0112](0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) decisions 1 and 2
   (the unit the floor counts)
+- Amended by: [ADR-0147](0147-the-snapshot-cache-floor-is-what-each-repositorys-recent-contents-used-charged-as-decoded-heap.md) (decision 1: the floor also measures each repository's
+  recent contents; the reads of a query are still one read)
 - Related: [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md),
   [ADR-0030](0030-live-captures-use-the-snapshot-data-cache.md),
   [ADR-0035](0035-derived-facts-are-retained-by-content.md)

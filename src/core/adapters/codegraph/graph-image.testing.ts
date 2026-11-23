@@ -14,11 +14,12 @@ const SHOWN_DIFFERENCES = 20;
 
 /**
  * Asks the SDK reader and the image of `store` every port method over every file, id and name the store holds, alone
- * and all together, with case variants of each name and every edge kind, and lists the calls whose answers differ.
+ * and all together, with case variants of each name and every edge kind, and lists the calls whose answers differ. A
+ * `generation` opens the image as a mirror's store at that committed generation; without it, as a kept store.
  */
-export function imageConformance(store: string): Conformance {
+export function imageConformance(store: string, generation?: string): Conformance {
   const sql = createCodeGraph().open(store);
-  const image = createCodeGraph(defaultCodeGraphDeps, { imageBytes: 0 }).open(store);
+  const image = generation === undefined ? createCodeGraph(defaultCodeGraphDeps, { imageBytes: 0 }).open(store) : createCodeGraph(defaultCodeGraphDeps, { liveImageBytes: 0 }).open(store, generation);
   if (!sql.ok || !image.ok) throw new Error(`${store} does not open: ${JSON.stringify(sql.ok ? image : sql)}`);
   const { files, ids, names, kinds } = storeKeys(store);
   const differences: string[] = [];

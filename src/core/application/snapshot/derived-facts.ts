@@ -144,7 +144,8 @@ export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, tru
     },
     fingerprint: (inputs) => digest.of(canonicalJson(inputs)),
     drain() {
-      const drained = { ...tally, ...cache.usage() };
+      const { factBytes, retainedBytes } = cache.usage();
+      const drained = { ...tally, factBytes, retainedBytes };
       tally = { ...NO_COUNTS };
       return drained;
     },

@@ -1,11 +1,12 @@
 import { strict as assert } from "node:assert";
 import { mock, test } from "node:test";
-import { createSnapshotDataCache, type SnapshotCacheEvent } from "./snapshot-data-cache.ts";
+import { createSnapshotDataCache, DECODED_HEAP_PER_SERIALIZED_BYTE, type SnapshotCacheEvent } from "./snapshot-data-cache.ts";
 import type { SourceFile } from "../../ports/source-file.port.ts";
 import type { SnapshotData } from "./read-snapshot.ts";
 
 const empty: SnapshotData = { sources: [] };
-const bytes = (key: string, data: SnapshotData) => Buffer.byteLength(key) + Buffer.byteLength(JSON.stringify(data));
+const charged = (serializedBytes: number) => Math.ceil(serializedBytes * DECODED_HEAP_PER_SERIALIZED_BYTE);
+const bytes = (key: string, data: SnapshotData) => charged(Buffer.byteLength(key) + Buffer.byteLength(JSON.stringify(data)));
 
 test("charges UTF-8 key and payload bytes at the exact budget boundary", () => {
   const data = { sources: [{ path: "é", content: "🌍" }] };
@@ -102,7 +103,7 @@ test("an observer sees each lookup and each admission, eviction and skip with th
     { outcome: "admitted", entryBytes: one, retainedBytes: one * 2 },
     { outcome: "evicted", entryBytes: one, retainedBytes: one },
     { outcome: "admitted", entryBytes: one, retainedBytes: one * 2 },
-    { outcome: "oversize-skipped", entryBytes: Buffer.byteLength("huge") + one * 3, retainedBytes: one * 2 },
+    { outcome: "oversize-skipped", entryBytes: charged(Buffer.byteLength("huge") + one * 3), retainedBytes: one * 2 },
   ]);
 });
 
@@ -110,7 +111,7 @@ test("an entry whose source bytes alone exceed the budget is skipped without bei
   const events: SnapshotCacheEvent[] = [];
   const content = "🌍".repeat(10);
   const huge = { sources: [{ path: "p", content }] };
-  const lowerBound = Buffer.byteLength("huge") + Buffer.byteLength(content);
+  const lowerBound = charged(Buffer.byteLength("huge") + Buffer.byteLength(content));
   const cache = createSnapshotDataCache(lowerBound - 1, (event) => events.push(event));
   const stringify = mock.method(JSON, "stringify");
   try {
@@ -129,22 +130,22 @@ test("an entry whose source bytes alone exceed the budget is skipped without bei
 
 test("a derived fact is charged on the shared budget, evicts the least recently used snapshot entry, and writes no line", () => {
   const events: SnapshotCacheEvent[] = [];
-  const cache = createSnapshotDataCache(2 * bytes("a", empty) + 3, (event) => events.push(event));
+  const fact = charged(Buffer.byteLength("f") + Buffer.byteLength("[1]"));
+  const cache = createSnapshotDataCache(2 * bytes("a", empty) + fact - 1, (event) => events.push(event));
   cache.put("a", empty);
   cache.put("b", empty);
   events.length = 0;
 
-  assert.deepEqual(cache.putFact("f", "[1]"), { admitted: true, entryBytes: 4, evicted: 1, value: [1] });
+  assert.deepEqual(cache.putFact("f", "[1]"), { admitted: true, entryBytes: fact, evicted: 1, value: [1] });
   assert.deepEqual(cache.getFact("f"), [1]);
   assert.equal(cache.getFact("g"), undefined);
-  assert.deepEqual(cache.usage(), { factBytes: 4, retainedBytes: 4 + bytes("b", empty) });
+  assert.deepEqual(cache.usage(), { factBytes: fact, retainedBytes: fact + bytes("b", empty), floorBytes: 2 * bytes("a", empty) + fact - 1 });
   assert.deepEqual(events.map(({ outcome }) => outcome), ["evicted"]);
   assert.equal(cache.get("a"), undefined);
 });
 
 test("a floor budget keeps what the current read and the two before it used past the floor, and evicts older entries first", () => {
-  const floor = bytes("a", empty) * 2;
-  const cache = createSnapshotDataCache(floor, undefined, { floor: true });
+  const cache = createSnapshotDataCache("working-set");
   const read = (keys: string[]): boolean[] => {
     cache.beginRead();
     return keys.map((key) => {
@@ -157,7 +158,7 @@ test("a floor budget keeps what the current read and the two before it used past
   const latest = ["l1", "l2", "l3"];
   assert.deepEqual(read(older), [false, false, false, false]);
   assert.deepEqual(read(older), [true, true, true, true]);
-  assert.ok(cache.usage().retainedBytes > floor);
+  assert.ok(cache.usage().retainedBytes > cache.usage().floorBytes);
   assert.deepEqual(read(latest), [false, false, false]);
   assert.deepEqual(read(latest), [true, true, true]);
   assert.deepEqual(read(["n1"]), [false]);
@@ -166,8 +167,7 @@ test("a floor budget keeps what the current read and the two before it used past
 });
 
 test("a floor budget holds what every read of an open query used, however many reads the query makes, and the first read after it counts again", () => {
-  const floor = bytes("a", empty) * 2;
-  const cache = createSnapshotDataCache(floor, undefined, { floor: true });
+  const cache = createSnapshotDataCache("working-set");
   const members = ["m1", "m2", "m3", "m4", "m5"];
   const end = cache.beginQuery();
   for (const key of members) {
@@ -185,8 +185,7 @@ test("a floor budget holds what every read of an open query used, however many r
 });
 
 test("reads stay one read each while no query is open, and an overlapping query keeps the reads of both until the last ends", () => {
-  const floor = bytes("a", empty) * 2;
-  const cache = createSnapshotDataCache(floor, undefined, { floor: true });
+  const cache = createSnapshotDataCache("working-set");
   const read = (key: string) => {
     cache.beginRead();
     cache.put(key, empty);
@@ -208,8 +207,7 @@ test("reads stay one read each while no query is open, and an overlapping query 
 });
 
 test("queries that keep overlapping hold only what the open queries used, never everything since the overlap began", () => {
-  const floor = bytes("k1", empty) * 2;
-  const cache = createSnapshotDataCache(floor, undefined, { floor: true });
+  const cache = createSnapshotDataCache("working-set");
   let open = cache.beginQuery();
   for (let at = 1; at <= 12; at++) {
     const next = cache.beginQuery();
@@ -231,4 +229,67 @@ test("a cap budget never holds more than its bytes, whatever the reads used", ()
     for (const key of ["a", "b", "c", "d"]) cache.put(key, empty);
   }
   assert.ok(cache.usage().retainedBytes <= cap);
+});
+
+test("the working-set floor keeps what every read of a repository's recent contents used, however many reads ask them", () => {
+  const cache = createSnapshotDataCache("working-set");
+  const family = (key: string): boolean => {
+    cache.beginRead({ repository: "/repo", snapshot: "live", key: "content-1" });
+    const hit = cache.get(key) !== undefined;
+    if (!hit) cache.put(key, empty);
+    return hit;
+  };
+  const families = ["callers", "trace", "impact", "outline", "importers", "entrypoints", "workspace"];
+
+  assert.deepEqual(families.map(family), families.map(() => false));
+  assert.deepEqual(families.map(family), families.map(() => true));
+  const used = families.reduce((sum, key) => sum + bytes(key, empty), 0);
+  assert.deepEqual(cache.usage(), { factBytes: 0, retainedBytes: used, floorBytes: used });
+});
+
+test("a content that left its repository's recent contents is evicted first, and the floor is the most those contents used", () => {
+  const cache = createSnapshotDataCache("working-set");
+  const read = (content: string, keys: readonly string[]): boolean[] => {
+    cache.beginRead({ repository: "/repo", snapshot: "live", key: content });
+    return keys.map((key) => {
+      const hit = cache.get(key) !== undefined;
+      if (!hit) cache.put(key, empty);
+      return hit;
+    });
+  };
+  const one = bytes("s1", empty);
+  read("c1", ["s1", "a1", "b1"]);
+  for (const at of [2, 3, 4, 5]) read(`c${at}`, ["s1", `o${at}`]);
+
+  assert.equal(cache.usage().floorBytes, one * 5, "at c3: s1, c1's a1 and b1, o2 and o3");
+  assert.deepEqual(read("c6", ["s1", "o5", "a1", "b1"]), [true, true, false, false]);
+  assert.ok(cache.usage().retainedBytes <= cache.usage().floorBytes + 2 * one);
+});
+
+test("edits that move the live tree keep the base revision a change query reads, and the floor counts both", () => {
+  const cache = createSnapshotDataCache("working-set");
+  const read = (snapshot: "live" | "revision", content: string, key: string): boolean => {
+    cache.beginRead({ repository: "/repo", snapshot, key: content });
+    const hit = cache.get(key) !== undefined;
+    if (!hit) cache.put(key, empty);
+    return hit;
+  };
+  read("revision", "base", "b0");
+  for (let edit = 1; edit <= 6; edit++) read("live", `l${edit}`, `e${edit}`);
+
+  assert.deepEqual([read("revision", "base", "b0"), read("live", "l6", "e6"), read("live", "l1", "e1")], [true, true, false]);
+  assert.equal(cache.usage().floorBytes, bytes("b0", empty) * 4);
+});
+
+test("a host that reads many repositories holds the largest repository's working set as its floor, not their sum", () => {
+  const cache = createSnapshotDataCache("working-set");
+  const read = (repository: string, keys: readonly string[]) => {
+    cache.beginRead({ repository, snapshot: "live", key: "head" });
+    for (const key of keys) if (cache.get(key) === undefined) cache.put(key, empty);
+  };
+  read("/large", ["l1", "l2", "l3"]);
+  for (const repository of ["/a", "/b", "/c", "/d", "/e"]) read(repository, [repository]);
+
+  assert.equal(cache.usage().floorBytes, bytes("l1", empty) * 3);
+  assert.ok(cache.usage().retainedBytes < bytes("l1", empty) * 8);
 });

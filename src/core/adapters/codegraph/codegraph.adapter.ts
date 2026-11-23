@@ -23,7 +23,7 @@ import {
 import { listMirror, storedFiles, unindexedFiles, type StoredFiles } from "./mirror-files.ts";
 import { removeStaged, stageSnapshot } from "./stage-snapshot.ts";
 import { readStoredVersions, SUPPORTED_STORE, unsupportedVersions } from "./store-version.ts";
-import { compareEdges, compareOutgoingEdges, compareReferences, compareSymbols, compareText, edgeFrom, keptGraphImages, readGraphImage, unique, type GraphImage, type GraphImages, type StoreRows } from "./graph-image.ts";
+import { compareEdges, compareOutgoingEdges, compareReferences, compareSymbols, compareText, edgeFrom, keptGraphImages, readGraphImage, unique, type GraphImage, type GraphImages } from "./graph-image.ts";
 import { createSyncWorkers, type SpawnWorker, type SyncAnswer } from "./sync-worker.ts";
 
 export { SUPPORTED_STORE };
@@ -161,12 +161,7 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, opti
         const opened = openGraph(store);
         if (!opened.ok) throw new UnopenedStoreError(opened.fault);
         opened.value.graph.close();
-        const connection = sdk.DatabaseConnection.open(database, { readOnly: true });
-        try {
-          return readGraphImage(connection.getDb() as StoreRows, opened.value.versions);
-        } finally {
-          connection.close();
-        }
+        return readGraphImage(database, opened.value.versions);
       };
       const file = statSync(database, { throwIfNoEntry: false });
       if (file === undefined) return { ok: true, value: load().reader() };

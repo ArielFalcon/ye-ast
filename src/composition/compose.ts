@@ -99,8 +99,6 @@ const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"]
 const TEMPLATE_ENGINE = "@angular/compiler";
 const CODEGRAPH_PACKAGE = "@colbymchenry/codegraph";
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** The floor of the snapshot data cache (ADR-0127): the 112 MiB the largest corpus repository's interleaved families retain in all, rounded up to 128 MiB, so the families no longer evict each other. */
-const SNAPSHOT_CACHE_BYTES = 128 * 1024 * 1024;
 /** The graph images of kept indexes a process holds (ADR-0124): eight of the largest corpus store's measured charge, about 32 MiB each. */
 const GRAPH_IMAGE_BYTES = 256 * 1024 * 1024;
 /** The graph images of live mirrors a process holds, one per mirror (ADR-0125): four of the largest corpus store's measured charge. */
@@ -130,7 +128,7 @@ export interface CompositionOptions {
   exportBudget?: ExportBudget;
   /** Directory that keeps full indexes between calls; every call builds and discards its own when absent. */
   indexCache?: string;
-  /** UTF-8 bytes retained as serialized snapshot entries, keys included; 128 MiB as a floor by default (ADR-0127), a hard cap when set, zero disables retention. */
+  /** Heap bytes retained as decoded snapshot entries, charged from their serialized bytes (ADR-0147); a hard cap when set, zero disables retention; by default a floor derived from the working set of the repositories read. */
   snapshotCacheBytes?: number;
   /** Bytes of graph images of kept indexes held in memory, charged by the text and numbers they hold; 256 MiB by default. */
   graphImageBytes?: number;
@@ -220,7 +218,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const entrypointEngines = Object.fromEntries(ENTRYPOINT_ENGINES.map((name) => [name, installedVersion(name)]));
   const derivedFactDisk = options.indexCache === undefined ? undefined : { store: createDerivedFactStore({ directory: options.indexCache, digest, retention: options.derivedFactRetention ?? DERIVED_FACT_RETENTION }), versions: storedReaderVersions(entrypointEngines) };
   const snapshotCache = {
-    snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES, measurement === undefined ? undefined : measuredSnapshotCache(measurement), { floor: options.snapshotCacheBytes === undefined }),
+    snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? "working-set", measurement === undefined ? undefined : measuredSnapshotCache(measurement)),
     ...(derivedFactDisk && { derivedFactDisk }),
   };
   const budget = options.exportBudget && { budget: options.exportBudget };
