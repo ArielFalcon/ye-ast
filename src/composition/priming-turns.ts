@@ -10,8 +10,12 @@ export function queriesFirst(): { counted<T extends object>(family: T): T; turns
   const queriesDone = (signal?: AbortSignal): Promise<void> => {
     if (active === 0 || signal?.aborted) return Promise.resolve();
     return new Promise<void>((resume) => {
-      waiting.push(resume);
-      signal?.addEventListener("abort", () => resume(), { once: true });
+      const settle = (): void => {
+        signal?.removeEventListener("abort", settle);
+        resume();
+      };
+      waiting.push(settle);
+      signal?.addEventListener("abort", settle, { once: true });
     });
   };
   const finished = (): void => {
