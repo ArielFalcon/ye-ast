@@ -1,7 +1,7 @@
 # RFC-0040: Resident snapshot generations, so an answer costs what depends on its question
 
 - Status: Draft, 2026-11-17; decisions D1 to D5 approved by the owner on 2026-11-17 (translated): "I approve the
-  decisions"; D6 to D8 open
+  decisions"; D6 to D8 decided by the lead on 2026-11-23 under the owner's delegation (§8), pending the Fable review
 - Related: ADR-0003, ADR-0005, ADR-0011, ADR-0015, ADR-0020, ADR-0021, ADR-0026, ADR-0028, ADR-0035, ADR-0040,
   ADR-0045, ADR-0077, ADR-0112, ADR-0121, RFC-0003, RFC-0005, RFC-0006, RFC-0010, RFC-0012, RFC-0037, RFC-0039
 
@@ -216,14 +216,78 @@ What remains in the steady state:
 | D3 | An answer is kept in memory for its generation | Approved 2026-11-17 | ADR-0020 d2; ADR-0077 "Not decided here" |
 | D4 | The mirror lock covers the refresh only; a query computes on a pinned generation | Approved 2026-11-17 | RFC-0010 "Live head", RFC-0005 "Live freshness" |
 | D5 | Demand-driven reads through inverted indexes, under the superset rule and its property test | Approved 2026-11-17 | ADR-0045 |
-| D6 | Trees and TypeScript source files owned by the generation | Open. It is decided at the close of phase 2 with RSS data, or earlier if a stage output of L16 cannot be made plain data without trees | ADR-0040 d1 |
-| D7 | The daemon slice starts, and `ye-ast init` starts the daemon that indexes in the background | Open: decided at the close of phase 2 | ADR-0011 d5, ADR-0005 d5 |
-| D8 | A packed derived store read in one piece | Open: with D7 | ADR-0077 d4, RFC-0037 |
+| D6 | Trees and TypeScript source files owned by the generation | Decided 2026-11-23 by the lead under the owner's delegation (§8): yes, scoped and gated by an RSS ceiling | ADR-0040 d1 |
+| D7 | The daemon slice starts, and `ye-ast init` starts the daemon that indexes in the background | Decided 2026-11-23 by the lead under the owner's delegation (§8): yes, a minimal per-user daemon behind the existing query protocol | ADR-0011 d5, ADR-0005 d5 |
+| D8 | A packed derived store read in one piece | Decided 2026-11-23 by the lead under the owner's delegation (§8): not now; reopened only by a measured signal | ADR-0077 d4, RFC-0037 |
 
 Launch priming is not part of D8. The launch already runs `warmLive` (`compose.ts:279-289`), which builds the index
 and primes nothing; priming the snapshot-only derivations there is phase 1 work.
 
 Each approved decision lands as an ADR written by the first unit that needs it, citing this RFC and the owner's words.
+
+## 8. Decisions D6-D8 and late units (2026-11-23)
+
+Owner, 2026-11-23 (translated): "apply all of this when the time comes; resolve the open decisions as you best
+understand them, and pass the decisions and the new plans for those units to the Fable reviewer". The lead decided
+D6-D8 below; they stay subject to that review and to the evidence each unit gathers.
+
+Measured since §2, on `main` after phases 0-1 (jhipster-monolith, shopizer/backend; machine under load, figures
+indicative): warm live `callers` 0.14-0.24 s on jhipster; shopizer/backend warm `trace` 0.17 s, `callers` 1.5 s; right
+after an edit on shopizer/backend `trace` ~4.4 s and `callers` ~3.4 s, of which call sites ~0.9 s, entrypoints ~0.7 s,
+lock 0.6-0.75 s, the retained Java project ~0.47 s (every source parsed again) and the live image re-read ~0.23 s;
+`live-lock` ~54 ms twice per query with a single server.
+
+### D6: generation-owned trees (decided: yes, scoped, gated)
+
+- **What.** The parsed Java project (tree-sitter trees and the `JavaProject` built over them) and the TypeScript source
+  files of the current generation stay resident, one per repository, scope and trust, and are replaced file by file:
+  an edit re-parses only the changed files (tree-sitter incremental parse; for TypeScript a `DocumentRegistry` with
+  `oldProgram` reuse inside `core/adapters/typescript/`). A retired generation frees its native trees exactly once.
+- **Why.** After an edit the retained Java project costs ~0.47 s on shopizer/backend because every source is parsed
+  again for the first derivation that misses; that cost is independent of the edit's size. L16 keeps only plain stage
+  outputs, so the parse is the next fixed cost on the post-edit path.
+- **Gate.** WASM memory never shrinks (§5). The unit lands only with: a byte charge measured per tree; an RSS ceiling
+  test and the 200-edit leak test of §4 on the Java backend; a cancellation test; trees never reachable from a kept
+  value (plain outputs only, §3.2). If the ceiling cannot hold on the corpus' largest repository, the unit keeps only
+  the Java project's declarations, not the trees, and says so.
+- **Order.** After L16 and L9b (unit L24, phase 3).
+
+### D7: a minimal daemon (decided: yes)
+
+- **What.** One per-user daemon process hosts the composed query families and serves the existing query protocol
+  (ADR-0011) on a Unix domain socket in the cache directory (owner-only permissions, the RFC-0006 rules for `--cache`).
+  The CLI, `serve` and the MCP server use it when it answers the version handshake and run in process otherwise, with
+  identical bytes. `ye-ast init` starts it and asks it to index the repository in the background; the daemon also runs
+  launch priming (L26a) and, under `trusted`, the watcher of L20. It exits after an idle period it is configured with
+  (RFC-0006), never by a size rule.
+- **Why.** The owner's S3 ("the heavy indexing work is done in the background at install") needs a process that outlives
+  one MCP session. One process per user is also the single writer of every live mirror, which removes the cross-process
+  lock contention measured in the warm differential (an MCP launch priming while another process queries) and lets
+  three MCP sessions share one generation and one memory budget instead of three.
+- **Invariants.** Read-only toward agents (the socket exposes only read families; `SnapshotAdmin` and
+  `FixedLayerAdmin` stay library and `serve` only); trust declared outside the repository and carried per request;
+  untrusted rules unchanged; no network beyond ADR-0016; no repository code runs. The daemon is a driving adapter under
+  `src/daemon/` per AGENTS.md; the core does not know it exists.
+- **Scope of the first slice.** Socket server, handshake, lifecycle (start, idle exit, stale socket recovery, one
+  instance per user via an exclusive lock), `init` starting it, clients falling back in process. Out of the first
+  slice: hooks, multi-user hosts, remote transport.
+- **Order.** Phase 4 (unit L25), after phase 3's single-flight refresh (L19), which the daemon reuses.
+
+### D8: packed derived store (decided: not now)
+
+- With D7 the process that answers stays up, so the derived store is read from disk once per daemon start, not once
+  per session; launch priming already reads it in the background. A packed store would only shorten a cold start
+  without the daemon.
+- Reopened only by a signal: the bench's cold-session run, after D7 lands, shows derived-store reads among the top
+  stages of the first call. Until then ADR-0077's per-entry layout stays.
+
+### Late units
+
+| Unit | Content | Proof |
+|---|---|---|
+| L29 | Lock acquisition without a poll for in-process waiters. A query waits ~54 ms twice on `live-lock` even with one server: `live-mirror.adapter.ts` polls every 50 ms (`LOCK_POLL_MS`). First identify the holder (a second acquisition by the same process, priming, the sync worker). Then: an in-process queue per lock file in front of the file lock, woken on release; another process's holder is still detected by the file and its pid, with the existing stale-holder rule. No sleep for an in-process waiter; a cross-process wait keeps a poll | RED: two sequential acquisitions in one process wait 0 polls; a cross-process holder still excludes; abort while waiting; bench `live-lock` p50 before/after |
+| L30 | Cheaper live image load after a sync. §3.2 forbids patching the image (a sync re-synthesizes edges anywhere), so the image stays a full re-read. Profile the 0.15-0.5 s read and cut its cost (statement shape, allocation, grouping done once in arrays rather than per-row objects); move the read off the event loop or chunk it with yields so cancellation stays prompt. If L20/L21 later move the refresh ahead of the query, this cost leaves the query path anyway | L4's conformance test against the SDK reader on every corpus store; stage `store-open` after an edit before/after; a cancellation test during the read |
+| L31 | The warm differential measures the warm process alone. Today it starts the cold oracle before the warm query of each step, on the same clone, so the oracle's launch (index build, priming, the mirror lock) is charged to the warm query's wall time. Run every warm query of a step first, then start the oracle; record the oracle's launch time apart | The differential's equality verdicts unchanged on main; warm wall times no longer include the oracle's launch |
 
 ## Open questions
 
