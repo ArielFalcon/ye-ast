@@ -69,6 +69,16 @@ store without it, so the reading had nothing to key the stages by.
   misses.
 - The live working set of a repository grows by the two slots per generation, measured by ADR-0147's floor like every
   other slot.
+- Measured with the latency bench (`unchanged` and `edit-now`, 5 calls per cell, two interleaved rounds, Apple M1 Max),
+  with a stage line on the implemented-declarations question added to both engines for the run:
+
+  | Cell | Import origins (B6) | Implemented declarations | Wall p50 |
+  |---|---|---|---|
+  | Java backend (1,210 files), live `callers`, unchanged | 3 ms, 5 of 5 calls -> not asked | 8 ms -> 0 ms | 913-931 -> 839-848 ms |
+  | Angular and Java monolith, live `callers`, unchanged | 21-22 ms -> 0 ms | under 1 ms | 210-219 -> 176-179 ms |
+  | either repository, live `callers` and `impact`, edit-now | unchanged | unchanged | unchanged within noise |
+
+  Cache evictions over the session moved by 4 of about 2,450; RSS stayed within the run-to-run spread.
 
 ## Not decided here
 
