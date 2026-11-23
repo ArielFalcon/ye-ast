@@ -52,6 +52,19 @@ export function heldProjectOnce(hold: ParseHold, parser: () => Promise<JavaParse
   return () => (hold.open() ? (project ??= heldProject(hold, parser, sources, build, over)) : Promise.reject(new ReleasedParseHoldError()));
 }
 
+/** One derivation over the held project, every question it asks of `index` recorded with its answer. */
+async function recordedReading<A>(index: JavaDeclarationIndex, projectOf: () => ReturnType<typeof heldProject>, record: (question: string, answer: string) => void, derive: (reading: FileReading) => A): Promise<A> {
+  const { project, files } = await projectOf();
+  const asked = (question: string): string => {
+    const answer = index.answer(question);
+    record(question, answer);
+    return answer;
+  };
+  const recorded = { get: (at: string) => (asked(questions.file(at)), files.get(at)) };
+  const everyFile = () => (asked(questions.listing()), [...files.values()]);
+  return project.reading((question) => void asked(question), () => derive({ project, files: recorded, everyFile, asked }));
+}
+
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
@@ -76,17 +89,7 @@ export async function keptByFile<S extends { file: string }, A>(
     if (content === "") continue;
     const places = [...new Map(entries.map(([, site]) => [placeOf(site), site])).entries()].sort(([a], [b]) => byText(a, b));
     const subject = { path, content, places: places.map(([place]) => place), generatesInterfaces: reading.build.generatesInterfaces === true };
-    const answers = await kept.facts.ofReads(reading.slot, subject, index, async (record) => {
-      const { project: over, files } = await projectOf();
-      const asked = (question: string): string => {
-        const answer = index.answer(question);
-        record(question, answer);
-        return answer;
-      };
-      const recorded = { get: (at: string) => (asked(questions.file(at)), files.get(at)) };
-      const everyFile = () => (asked(questions.listing()), [...files.values()]);
-      return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, everyFile, asked }, places.map(([, site]) => site)));
-    }, "request");
+    const answers = await kept.facts.ofReads(reading.slot, subject, index, (record) => recordedReading(index, projectOf, record, (read) => derive(read, places.map(([, site]) => site))), "request");
     const at = new Map(places.map(([place], position) => [place, position]));
     for (const [position, site] of entries) results[position] = answers[at.get(placeOf(site))!]!;
   }
@@ -111,17 +114,7 @@ export async function keptFirstByFile<A>(
     const content = index.answer(questions.file(path));
     if (content === "") continue;
     const subject = { path, content, generatesInterfaces: reading.build.generatesInterfaces === true };
-    const answer = await kept.facts.ofReads<A>(reading.slot, subject, index, async (record) => {
-      const { project: over, files } = await projectOf();
-      const asked = (question: string): string => {
-        const answer = index.answer(question);
-        record(question, answer);
-        return answer;
-      };
-      const recorded = { get: (at: string) => (asked(questions.file(at)), files.get(at)) };
-      const everyFile = () => (asked(questions.listing()), [...files.values()]);
-      return over.reading((question) => void asked(question), () => derive({ project: over, files: recorded, everyFile, asked }, path));
-    });
+    const answer = await kept.facts.ofReads<A>(reading.slot, subject, index, (record) => recordedReading(index, projectOf, record, (read) => derive(read, path)));
     if (stops(answer)) return answer;
   }
   return undefined;
