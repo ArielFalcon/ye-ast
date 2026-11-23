@@ -1,6 +1,6 @@
 /**
  * Java syntax trees and the project a snapshot read derives from them. The read's parse hold (ADR-0040) owns both: it
- * keeps the sources and frees every tree at the read's end, and `heldJavaProject` reads one project over them, split
+ * keeps the sources and gives up its trees at the read's end (ADR-0155), and `heldJavaProject` reads one project over them, split
  * into the read's own sources and the declarations a host declared (V4.2).
  */
 import { sourceKey } from "../../domain/shared/source-identity.ts";
@@ -37,7 +37,7 @@ export interface HeldJavaSource {
 
 /**
  * One project per read, held by the read's parse hold (ADR-0040): `keep` gives the sources the hold parses once,
- * `release` frees every tree at the read's end. One held value per (sources identity, declared outputs identity).
+ * `release` gives up its trees at the read's end. One held value per (sources identity, declared outputs identity).
  */
 /** A read asked for a project of a parse hold that was released: its trees are gone, so a new read must open a hold. */
 export class ReleasedParseHoldError extends Error {

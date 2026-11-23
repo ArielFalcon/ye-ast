@@ -5,7 +5,7 @@ import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import { entrypointReadingOf, snapshotRetention } from "./prepared-snapshot.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
-import { ABORTED, extractSources, readSources, type CommitExtraction, type PreparedCommit, type ReadScope, type SnapshotReaderDeps } from "./read-snapshot.ts";
+import { ABORTED, extractSources, readSources, type CommitExtraction, type PreparedCommit, type SnapshotReaderDeps } from "./read-snapshot.ts";
 
 /** What a live capture is read from: its mirror root, read only while the capture is pinned, its listing and the inputs besides the listing that the read depends on. */
 export interface LiveCapture {
@@ -31,7 +31,6 @@ export interface LiveSnapshotReaders {
  * whose files did not change reuses what an earlier one read, and an edit misses.
  */
 export async function pinLiveSnapshot(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "derivedFactDisk" | "digest">, capture: LiveCapture, hold?: ParseHold, signal?: AbortSignal): Promise<Result<LiveSnapshotReaders, VcsFault>> {
-  const keep: ReadScope["keep"] = hold === undefined ? (sources) => [...sources] : (sources) => hold.keep(sources);
   const retention = snapshotRetention(deps, { repository: capture.repo, snapshot: "live" }, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export, capture.trust);
   let retainedReading: Pick<CommitExtraction, "findings" | "readingCuts"> | undefined;
   /** The sources as read, the only ones retention stores; readers take the capture's own copies of them. */
@@ -46,7 +45,7 @@ export async function pinLiveSnapshot(deps: Pick<SnapshotReaderDeps, "reader" | 
     read = answer.value.sources;
     retention?.keepSources(read);
   }
-  const pinned: Pick<CommitExtraction, "export" | "sources"> = { export: capture.export, sources: keep(read) };
+  const pinned: Pick<CommitExtraction, "export" | "sources"> = { export: capture.export, sources: hold === undefined ? [...read] : hold.keep(read, retention?.residence) };
   let extracted: Promise<Result<CommitExtraction, VcsFault>> | undefined;
   const sources: LiveSnapshotReaders["sources"] = async (signal) => (signal?.aborted ? ABORTED : { ok: true, value: pinned });
   return {

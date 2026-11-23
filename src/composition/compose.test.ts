@@ -607,12 +607,12 @@ test("workspace impact replays persisted moving members from their original cont
   assert.ok(!mismatch.ok && mismatch.fault.kind === "workspace-replay-mismatch");
 });
 
-test("a measured map writes its commit resolution, export, materialize and entrypoint stages before its query line", async () => {
+test("a measured map writes its commit resolution, export, materialize, entrypoint and Java parse stages before its query line", async () => {
   const lines: string[] = [];
   await mapOf({ measure: (line) => lines.push(line) });
 
   const records = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string });
-  assert.deepEqual(records.filter((record) => record.event !== "cache").map((record) => record.stage ?? record.event), ["resolve-commit", "export", "materialize", "entrypoints", "query"]);
+  assert.deepEqual(records.filter((record) => record.event !== "cache").map((record) => record.stage ?? record.event), ["resolve-commit", "export", "materialize", "entrypoints", "java-parse", "query"]);
 });
 
 test("a repeated map lists the commit again but writes none of its files when the snapshot data is kept", async () => {

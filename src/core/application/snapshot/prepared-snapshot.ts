@@ -7,7 +7,7 @@ import type { PathSelection } from "../../domain/shared/scope.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { EntrypointExtraction, EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ParseHold } from "../../ports/parse-holds.port.ts";
+import type { ParseHold, TreeResidence } from "../../ports/parse-holds.port.ts";
 import { createDerivedFacts } from "./derived-facts.ts";
 import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type ReadScope, type SnapshotData, type SnapshotReaderDeps, type SnapshotReadContent, type SnapshotReading, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
@@ -46,6 +46,8 @@ export interface SnapshotRetention {
   output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean, keyedBy?: KeyedBy): Promise<T>;
   /** The derived facts of the files read under this snapshot's trust, kept by their content (ADR-0035). */
   facts: DerivedFacts;
+  /** Where the trees of this snapshot's sources stay resident, charged to its content (ADR-0155). */
+  residence: TreeResidence;
 }
 
 /** What the extractor reads over: the hold that owns the sources it receives and the derived facts the snapshot cache keeps for them. */
@@ -61,6 +63,7 @@ export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache"
   let reading: SnapshotReading | undefined;
   const current = (): SnapshotReading => reading ?? cache;
   return {
+    residence: { reside: (key, bytes, evicted) => current().reside(key, bytes, evicted) },
     facts: createDerivedFacts({ getFact: (key) => current().getFact(key), putFact: (key, json, keyedBy) => current().putFact(key, json, keyedBy), usage: () => cache.usage() }, deps.digest, trust, deps.derivedFactDisk),
     lookup() {
       if (entry === undefined) {
@@ -124,7 +127,7 @@ export async function prepareCommit(
       if (loaded !== undefined) return { ok: true, value: loaded };
       const retained = retention?.lookup();
       if (retained !== undefined) {
-        loaded = { read: retained.sources, kept: { export: exported.value, sources: keep(retained.sources) } };
+        loaded = { read: retained.sources, kept: { export: exported.value, sources: keep(retained.sources, retention?.residence) } };
         if (retained.findings !== undefined && retained.readingCuts !== undefined) extracted = { ...loaded.kept, findings: retained.findings, readingCuts: retained.readingCuts };
         return { ok: true, value: loaded };
       }
@@ -132,7 +135,7 @@ export async function prepareCommit(
       if (!ready.ok) return ready;
       const answer = await readSources(deps, root, exported.value, signal);
       if (!answer.ok) return answer;
-      loaded = { read: answer.value.sources, kept: { export: exported.value, sources: keep(answer.value.sources) } };
+      loaded = { read: answer.value.sources, kept: { export: exported.value, sources: keep(answer.value.sources, retention?.residence) } };
       retention?.keepSources(loaded.read);
       return { ok: true, value: loaded };
     };
