@@ -6,6 +6,8 @@
   transversal y no parches puntuales" (the corrections and improvements must be cross-cutting, not point patches).
 - Related: RFC-0037 (design), ADR-0010, ADR-0020, ADR-0035, RFC-0012
 - Extends: ADR-0035 (the same facts and keys, with a second tier)
+- Amended by: [ADR-0151](0151-an-answer-is-kept-in-memory-for-the-snapshot-identity-it-was-derived-from.md) ("Not
+  decided here": whole facts are kept, in memory only, never on disk)
 
 **In short:** the derived facts ADR-0035 retains in memory gain a disk tier behind the same port, keyed by content and
 reader version, in a directory a host may name. A process that starts and exits, as a pipeline job does, no longer
