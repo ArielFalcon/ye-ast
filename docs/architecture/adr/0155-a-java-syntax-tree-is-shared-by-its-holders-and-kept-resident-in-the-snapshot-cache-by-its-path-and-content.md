@@ -90,17 +90,30 @@ alive (the first copy also grows the WASM memory once, which is never returned a
 | `importers` | 2,270 ms / 400 ms | 1,749 ms / 6 ms |
 | `outline` | 1,500 ms / 398 ms | 1,051 ms / 3 ms |
 | `workspace` | 2,503 ms / 389 ms | 1,983 ms / 5 ms |
-| `entrypoints` | 2,605 ms / 383 ms | 2,667 ms / 385 ms |
+| `entrypoints` | 2,605 ms / 383 ms | 1,099 ms / 3 ms (2,667 / 385 before the live map read through a hold) |
 
   On jhipster-monolith/application the bench's edits leave Java parsing at 0-22 ms before and after; its `callers` and
-  `trace` moved 771 → 699 and 946 → 849 ms. The live `entrypoints` read opens no parse hold, so it keeps parsing every
-  source (not changed here). RSS over 200 edits: shopizer/backend max 3,013 → 3,006 MB with no upward trend in either
-  run. jhipster-monolith/application rises one step and then holds, confirmed by a second pair of `rss-slope` runs: its
-  plateau after the 40th edit moved from 1,074-1,089 to 1,143-1,163 MB (about +70 MB, against about 8 MiB of resident
-  trees charged), and the slope of the last 100 edits from 11 to 99 KiB per edit. The step is more than the trees'
-  charge; a likely cause is the WASM heap, which never shrinks and whose free space the long-lived trees fragment
-  (hypothesis, not measured).
-- The warm differential on petclinic/backend-rest and shopizer/backend passed 56 steps with 0 differing.
+  `trace` moved 771 → 699 and 946 → 849 ms. The live `map` now reads its capture through a parse hold like the other
+  families (before it opened none, so every one of its parses was its own).
+- Memory over long edit sessions. On shopizer/backend the RSS maximum over 200 edits moved 3,013 → 3,006 MB. The bench's `rss-slope` on jhipster-monolith/application (edits of one TypeScript
+  file, each followed by the next family) over 600 edits, base `main` against this decision on one machine state:
+
+| Edits | Base RSS / slope of the window before | With resident trees: RSS / slope |
+|---|---|---|
+| 100 | 1,108 MB / 1,893 KiB per edit | 1,139 MB / 2,491 KiB per edit |
+| 200 | 1,110 MB / 30 | 1,145 MB / 48 |
+| 400 | 1,007 MB / 75 | 1,048 MB / -800 |
+| 600 | 1,019 MB / 28 | 1,073 MB / 124 |
+
+  Both runs drop about 100 MB mid-session and climb back, so the windows' slopes do not settle the question alone. An
+  in-process replay of the same session (300 edits, a sample every 25, after a forced collection) settles it: with
+  resident trees, the live Java trees stay at 81 (191 KB of source), the tree-sitter WASM memory stays at 32 MiB from
+  the first edit to the last, the JS heap at 133-134 MB and the snapshot cache at 52 MB, and RSS holds 1,077-1,088 MB
+  from the 50th edit on (19 KiB per edit over the last 200). Base `main` in the same replay held 1,271-1,277 MB from
+  the 50th edit, and 873-898 MB in an earlier replay: the RSS level of one process differs by hundreds of MB from run to
+  run on either engine, while every quantity resident trees add stays constant. Nothing grows with the edits.
+- The warm differential on petclinic/backend-rest and shopizer/backend passed 56 steps with 0 differing, on the final
+  branch.
 - A resident tree is charged about 67 MiB for shopizer/backend's 3.5 MiB of Java sources; the floor counts it once,
   whatever the number of contents that share it.
 - Two reads that overlap share trees (decision 1): a reader never mutates a tree, and a release only gives up one
