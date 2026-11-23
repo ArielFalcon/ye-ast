@@ -2,11 +2,12 @@
  * The warm differential (RFC-0040 §4, L1). One long-lived MCP process per repository replays first-parent commits
  * through the live mirror and then single-file edits, each applied and reverted, plus the special steps: a commit
  * that does not change the tree, an `importers` query (synthesized) after a template edit the sync leaves unparsed, a
- * declared build output installed at the same path, and a change of the trust record. A second long-lived process on
- * an untrusted clone asks the same commits as sha queries. At every step the gate's queries of the repository run in
+ * declared build output installed at the same path, a sync committed by another process, and a change of the trust
+ * record. A second long-lived process on an untrusted clone asks the same commits as sha queries. At every step the gate's queries of the repository run in
  * the long-lived process and in a cold oracle (a new process with a new cache directory, so new memory, a new
  * derived-fact store and a new index cache; it shares only the clone and the trust record), and their answers must be
- * byte-equal: the reply text and the answer file. The long-lived process's RSS is recorded after each step.
+ * byte-equal: the reply text and the answer file. Every warm query of a step runs before its oracle starts, so the
+ * oracle's launch is never charged to a warm query. The long-lived process's RSS is recorded after each step.
  *
  *   node --import tsx scripts/warm-differential.ts --corpus <manifest> --repo <group>/<repo>... --out <dir>
  *     [--commits <n>] [--build-output <group>/<repo>=<flag>:<dir>]... [--fail-fast] [--engine <checkout>]
@@ -89,10 +90,18 @@ function usage(): never {
   process.exit(2);
 }
 
-/** Every occurrence of the cache directory, under each spelling the process may print, and the answer-file path line. */
+/**
+ * Every occurrence of the cache directory, under each spelling the process may print, and the answer-file path line. A
+ * live fact's `origin` (a sync or a full build, ADR-0015) and the result identity derived from it are replaced too: which
+ * process built the store a fact read depends on timing; every other byte must be equal.
+ */
 function normalized(text: string, cache: string): string {
   const spellings = [...new Set([cache, realpathSync(cache)])].sort((a, b) => b.length - a.length);
-  return spellings.reduce((out, spelling) => out.split(spelling).join("<cache>"), text).replace(/^answer files: \S+/gmu, "answer files: <path>");
+  return spellings
+    .reduce((out, spelling) => out.split(spelling).join("<cache>"), text)
+    .replace(/^answer files: \S+/gmu, "answer files: <path>")
+    .replace(/"origin":\{"kind":"(?:sync|full)"(?:,"base":"[0-9a-f]+")?\}/gu, '"origin":<origin>')
+    .replace(/mcp-r1:[0-9a-f]+/gu, "mcp-r1:<identity>");
 }
 
 /** The answer file the call just wrote or reused: the newest `answer.json` of the tool, touched at or after `since`. */
@@ -135,23 +144,49 @@ interface Run {
   oracles: number;
 }
 
-/** Runs `queries` at one state in the long-lived process and in a new cold oracle, and records whether each answer is equal. */
-async function compareStep(run: Run, warm: { session: McpSession; launch: McpLaunch }, side: StepResult["process"], step: string, queries: readonly { id: string; call: ToolCall; snapshot: Snapshot }[]): Promise<void> {
+interface Warm {
+  session: McpSession;
+  launch: McpLaunch;
+}
+
+/**
+ * Runs `queries` at one state in the long-lived process and in a new cold oracle, and records whether each answer is
+ * equal. By default every warm query runs before the oracle starts, so the oracle's launch is never charged to a warm
+ * query. `oracle-first` lets the oracle sync the shared mirror first, so the warm process must find a store generation
+ * another process committed.
+ */
+async function compareStep(run: Run, warm: Warm, side: StepResult["process"], step: string, queries: readonly { id: string; call: ToolCall; snapshot: Snapshot }[], order: "warm-first" | "oracle-first" = "warm-first"): Promise<void> {
   const oracleCache = privateDirectory(join(run.scratch, "oracles", String(++run.oracles)));
-  const oracle = await startMcp({ ...warm.launch, cache: oracleCache });
+  let oracle: McpSession | undefined;
   const comparisons: QueryComparison[] = [];
   let rssBytes: number | null = null;
+  const askOracle = async () => {
+    const started = performance.now();
+    oracle = await startMcp({ ...warm.launch, cache: oracleCache });
+    const answers = [];
+    for (const { call, snapshot } of queries) answers.push(await ask(oracle, oracleCache, call, snapshot));
+    log(run, `${step}: oracle launched and answered in ${Math.round(performance.now() - started)} ms`);
+    return answers;
+  };
+  const askWarm = async () => {
+    const answers = [];
+    for (const { call, snapshot } of queries) answers.push(await ask(warm.session, warm.launch.cache, call, snapshot));
+    return answers;
+  };
   try {
-    for (const { id, call, snapshot } of queries) {
-      const warmAnswer = await ask(warm.session, warm.launch.cache, call, snapshot);
-      const oracleAnswer = await ask(oracle, oracleCache, call, snapshot);
+    const oracleFirst = order === "oracle-first" ? await askOracle() : undefined;
+    const warmAnswers = await askWarm();
+    const oracleAnswers = oracleFirst ?? (await askOracle());
+    for (const [index, { id }] of queries.entries()) {
+      const warmAnswer = warmAnswers[index]!;
+      const oracleAnswer = oracleAnswers[index]!;
       rssBytes = warmAnswer.rssBytes ?? rssBytes;
       const equal = warmAnswer.text === oracleAnswer.text && warmAnswer.file === oracleAnswer.file;
       comparisons.push({ query: id, equal, warm: warmAnswer, oracle: oracleAnswer });
       log(run, `${step} ${id}: ${equal ? "equal" : "DIFFERS"} (warm ${warmAnswer.wallMs} ms, oracle ${oracleAnswer.wallMs} ms)`);
     }
   } finally {
-    await oracle.close();
+    await oracle?.close();
     rmSync(oracleCache, { recursive: true, force: true });
   }
   run.results.push({ repo: run.repo.name, process: side, step, rssBytes, comparisons });
@@ -176,7 +211,7 @@ async function liveReplay(run: Run, shas: readonly string[]): Promise<void> {
   const declared = join(run.scratch, "build-output");
   const launch: McpLaunch = { engine: options.engine, repo: clone, cache, env, ...(output === undefined ? {} : { flags: [output.flag, declared] }) };
   const session = await startMcp(launch);
-  const warm = { session, launch };
+  const warm: Warm = { session, launch };
   const live: Snapshot = { kind: "live" };
   const liveQueries = run.calls.map(({ id, call }) => ({ id, call, snapshot: live }));
   const step = (name: string) => compareStep(run, warm, "live", name, liveQueries);
@@ -188,6 +223,7 @@ async function liveReplay(run: Run, shas: readonly string[]): Promise<void> {
     const targets = namedSourceFiles(run.calls.map(({ call }) => call));
     if (targets.length === 0) skip(run, "live", "edits", "no query targets a Java or TypeScript file");
     for (const target of targets) await editSteps(run, clone, target, (name) => step(`${name} (${target})`));
+    if (targets[0] !== undefined) await foreignSyncSteps(run, clone, warm, targets[0], liveQueries);
     git(clone, ["commit", "--quiet", "--allow-empty", "-m", "ye-ast differential: no tree change"], env);
     await step("commit without a tree change");
     await synthesizedStep(run, clone, warm);
@@ -249,6 +285,19 @@ async function editSteps(run: Run, clone: string, target: string, step: (name: s
   await step("parses again");
 }
 
+/**
+ * Another process syncs first (RFC-0040 §5, the worker and image traps): a file is added and the oracle answers before
+ * the warm process, so the warm process finds a store generation it did not commit and must reload its image and reopen
+ * its sync worker; the removal is then synced by the warm process again.
+ */
+async function foreignSyncSteps(run: Run, clone: string, warm: Warm, target: string, queries: readonly { id: string; call: ToolCall; snapshot: Snapshot }[]): Promise<void> {
+  const added = addedFile(target, readFileSync(join(clone, target), "utf8"));
+  writeFileSync(join(clone, added.path), added.text);
+  await compareStep(run, warm, "live", `foreign sync: new file added, the oracle syncs first (${target})`, queries, "oracle-first");
+  rmSync(join(clone, added.path));
+  await compareStep(run, warm, "live", `foreign sync: new file removed, the warm process syncs (${target})`, queries);
+}
+
 /** Another source file in the target's directory, else anywhere, with the same extension. */
 function siblingOf(clone: string, target: string, env: NodeJS.ProcessEnv): string | undefined {
   const extension = target.slice(target.lastIndexOf("."));
@@ -261,7 +310,7 @@ function siblingOf(clone: string, target: string, env: NodeJS.ProcessEnv): strin
  * `importers` of the rendered component (a synthesized query) then finds the store synced at the same `stateId` and
  * must rebuild it; on the revert it runs first.
  */
-async function synthesizedStep(run: Run, clone: string, warm: { session: McpSession; launch: McpLaunch }): Promise<void> {
+async function synthesizedStep(run: Run, clone: string, warm: Warm): Promise<void> {
   const name = "synthesized importers after an unparsed edit";
   const tracked = git(clone, ["ls-files"], run.env).split("\n");
   const components = tracked.filter((path) => path.endsWith(".ts")).flatMap((path) => {
