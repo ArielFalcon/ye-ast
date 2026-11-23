@@ -233,7 +233,7 @@ test("captured callers walk selected live and SHA states while every live lease 
     trust: { read: async () => ({ ok: true, value: "trusted" }) },
     digest: { of: () => "b".repeat(64) }, matcher: { matches: () => true },
     scratch: { create: async () => "/scratch", remove: async () => undefined },
-    reader: { read: async () => assert.fail("unexpected read") },
+    reader: { read: async () => [] },
     extractor: { extract: async () => assert.fail("unexpected extraction") },
     producer: { name: "test", version: "0" }, graph: fake.deps.graph, live: fake.deps,
   };
@@ -259,7 +259,7 @@ test("captured callers walk selected live and SHA states while every live lease 
     assert.strictEqual(context, contextSeen);
     return {
       callers: async (request) => {
-        assert.equal(fake.held.locks - fake.held.released, 2);
+        assert.equal(fake.held.locks - fake.held.released, 0);
         assert.strictEqual(request.signal, signal);
         requests.push(request);
         const snapshot = context.selectedSnapshots.find((entry) => entry.repo === request.repoId)!;
@@ -290,7 +290,7 @@ test("captured callers walk selected live and SHA states while every live lease 
     const failing = createCapturedWorkspaceImpactQueries({ operation, digest: { of: (text) => text }, impactAt: (context) => ({
       callers: async (request) => {
         assert.strictEqual(request.signal, context.signal);
-        assert.equal(fake.held.locks - fake.held.released, 2);
+        assert.equal(fake.held.locks - fake.held.released, 0);
         if (cancelled) controller.abort();
         return { ok: false, fault: { kind: "unknown-symbol", detail: "missing", entries: [] } };
       },
@@ -703,7 +703,7 @@ function capturedChangeFixture() {
     trust: { read: async () => ({ ok: true, value: "trusted" }) },
     digest: { of: () => "b".repeat(64) }, matcher: { matches: () => true },
     scratch: { create: async () => "/scratch", remove: async () => undefined },
-    reader: { read: async () => assert.fail("unexpected read") },
+    reader: { read: async () => [] },
     extractor: { extract: async () => assert.fail("unexpected extraction") },
     producer: { name: "test", version: "0" }, graph: fake.deps.graph, live: fake.deps,
   };
@@ -735,14 +735,14 @@ test("captured change walks its selected live trigger and downstream live and SH
     assert.strictEqual(context, s.context());
     return {
       ofChange: async (request) => {
-        assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+        assert.equal(s.fake.held.locks - s.fake.held.released, 0);
         assert.strictEqual(request.signal, signal);
         changes.push(request);
         const snapshot = context.selectedSnapshots.find(({ repo }) => repo === "webapp")!;
         return { ok: true, value: { ...fact("webapp", "trusted", impactOf([{ ...REACHED[0]!, name: "POST /web" }], { mergeBase: OTHER_SHA, seeds: [{ file: "src/app/webapp.api.ts", symbol: "call9", line: 9, basis: "lines" }] })), snapshot } };
       },
       callers: async (request) => {
-        assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+        assert.equal(s.fake.held.locks - s.fake.held.released, 0);
         assert.strictEqual(request.signal, signal);
         callers.push(request);
         const snapshot = context.selectedSnapshots.find(({ repo }) => repo === request.repoId)!;
@@ -789,7 +789,7 @@ test("captured change pins a moving committed trigger and preserves its request"
   let received: ImpactOfChangeRequest | undefined;
   const queries = createCapturedWorkspaceImpactQueries({ operation: s.operation, digest: { of: (text) => text }, impactAt: (context) => ({
     ofChange: async (request) => {
-      assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+      assert.equal(s.fake.held.locks - s.fake.held.released, 0);
       received = request;
       return { ok: true, value: { ...fact("webapp", "trusted", impactOf([], { mergeBase: OTHER_SHA })), snapshot: context.selectedSnapshots.find(({ repo }) => repo === "webapp")! } };
     },
@@ -811,7 +811,7 @@ test("captured change propagates faults and cancellation after releasing every l
     const queries = createCapturedWorkspaceImpactQueries({ operation: s.operation, digest: { of: (text) => text }, impactAt: (context) => ({
       ofChange: async (request) => {
         assert.strictEqual(request.signal, context.signal);
-        assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+        assert.equal(s.fake.held.locks - s.fake.held.released, 0);
         if (cancelled) controller.abort();
         return { ok: false, fault };
       },

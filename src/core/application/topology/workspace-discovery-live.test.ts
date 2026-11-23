@@ -30,7 +30,7 @@ test("live discovery uses held dirty sources and retains its snapshot through po
     graph: fake.deps.graph, live: fake.deps,
   };
   const result = await createWorkspaceReadOperation(deps).withRead({ repo: { path: "/app", id: "app", live: true } }, async (read, context) => {
-    assert.equal(fake.held.locks - fake.held.released, 1);
+    assert.equal(fake.held.locks - fake.held.released, 0);
     assert.notEqual(read.fact.status, "unknown");
     if (read.fact.status === "unknown") throw new Error("unexpected unknown");
     const section = read.fact.value.sections.app;
@@ -100,7 +100,7 @@ function multipleLive() {
 test("two held repositories join captured sources and retain separate findings and snapshots", async () => {
   const s = multipleLive();
   const result = await createWorkspaceReadOperation(s.deps).withRead(s.request, async (read, context) => {
-    assert.equal(s.held(), 2);
+    assert.equal(s.held(), 0);
     assert.notEqual(read.fact.status, "unknown");
     if (read.fact.status === "unknown") throw new Error("unexpected unknown");
     const repos = read.fact.value.repositories;
@@ -137,7 +137,7 @@ test("mismatched live replay rejects before discovery extraction or consumer", a
   assert.equal(s.held(), 0);
 });
 
-test("captured decisions read origins while both leases are held and return stale notice after release", async () => {
+test("captured decisions read origins on both pinned captures with no lock held and return stale notice after release", async () => {
   const s = multipleLive();
   const controller = new AbortController();
   const original = s.deps.vcs.remotes;
@@ -152,7 +152,7 @@ test("captured decisions read origins while both leases are held and return stal
   const result = await queries.decisions({ ...s.request, signal: controller.signal });
   assert.ok(result.ok);
   assert.equal(libReads, 2);
-  assert.deepEqual(s.originEvents.filter(({ repo }) => repo === "/lib").map(({ held, signal }) => ({ held, signal })), [{ held: 2, signal: controller.signal }, { held: 2, signal: controller.signal }]);
+  assert.deepEqual(s.originEvents.filter(({ repo }) => repo === "/lib").map(({ held, signal }) => ({ held, signal })), [{ held: 0, signal: controller.signal }, { held: 0, signal: controller.signal }]);
   assert.equal(s.held(), 0);
   assert.deepEqual(result.value.workspaceLive?.map((notice) => notice.repo), ["lib"]);
   assert.notEqual(result.value.fact.status, "unknown");

@@ -9,7 +9,7 @@ import { effectSites, type TraceQueriesDeps } from "../trace/trace-queries.ts";
 
 /** When priming lets the queries of its process run first. */
 export interface PrimingTurns {
-  /** Whether a query of the process is in flight: priming then ends the step it runs and releases the mirror. */
+  /** Whether a query of the process is in flight: priming then ends its capture after the step it runs. */
   queryWaiting(): boolean;
   /** Settles once no query of the process is in flight, or once `signal` is aborted. */
   queriesDone(signal?: AbortSignal): Promise<void>;
@@ -45,10 +45,10 @@ type Step = (read: PrimingRead) => Promise<boolean>;
  * declarations, and the call sites and data effects. Each is kept where the query that needs it looks it up, under the
  * same key, so that query finds it instead of deriving it.
  *
- * Priming reads the mirror under its lock, as a query does, one step at a time: before each step it releases the mirror
- * when a query of its process is in flight, and resumes in a new capture once those queries are done, so a query waits
- * at most for the step that runs. A value the signal cut is never kept: the derivations a step calls admit nothing an
- * abort cut.
+ * Priming pins a capture of the mirror as a query does, under its lock, and runs its steps outside the lock on the pinned
+ * capture (ADR-0144). Before each step it ends the capture when a query of its process is in flight, and pins a new one
+ * once those queries are done, so it primes the state they left and a query shares the process with at most the step
+ * that runs. A value the signal cut is never kept: the derivations a step calls admit nothing an abort cut.
  */
 export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest, turns: PrimingTurns): Promise<PrimingOutcome> {
   const { signal } = request;

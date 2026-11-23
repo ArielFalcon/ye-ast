@@ -1,4 +1,4 @@
-import type { CodeGraph, CodeGraphFault, IndexSummary, MirrorSyncSummary, SyncGenerations } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary, MirrorSyncSummary, SyncGenerations } from "../../ports/code-graph.port.ts";
 import type { IndexTreeDeviation, MirrorEntry, MirrorFault, MirrorState, MirrorUsage, MirrorVersions, LiveMirror, MirrorLocation } from "../../ports/live-mirror.port.ts";
 import type { SkippedEntry } from "../../ports/vcs.port.ts";
 import type { WorkingTree } from "../../ports/working-tree.port.ts";
@@ -28,6 +28,10 @@ export interface FakeLive {
   materialized: string[][];
   /** Paths each staging into the index tree copied, in call order. */
   staged: string[][];
+  /** The files each `materializePinned` was asked to copy, in call order. */
+  pinnedCopies: { path: string; blob: string }[][];
+  /** Paths `materializePinned` answers as moved since the pin: set it to simulate a sync by another process. */
+  movedSincePin: string[];
   /** Paths each `prune` was asked to remove from the index tree, in call order. */
   pruned: string[][];
   /** The written files each `verifyIndexTree` was handed, in call order. */
@@ -52,6 +56,8 @@ export interface FakeLive {
   openable: { value: boolean };
   /** Readers the engine opened and closed. */
   stores: { opened: number; closed: number };
+  /** What an opened store answers; closing the opened reader closes it too. */
+  storeReader: CodeGraphReader | undefined;
   /** The store generation each `open` named, in call order; `undefined` when it named none. */
   openedAt: (string | undefined)[];
   /** The generations each `syncMirror` was handed, in call order. */
@@ -79,6 +85,8 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     syncs: [],
     materialized: [],
     staged: [],
+    pinnedCopies: [],
+    movedSincePin: [],
     pruned: [],
     verified: [],
     built: [],
@@ -93,6 +101,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     touches: 0,
     openable: { value: true },
     stores: { opened: 0, closed: 0 },
+    storeReader: undefined,
     openedAt: [],
     syncGenerations: [],
     engine: {
@@ -157,6 +166,10 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.verified.push(files.map(({ path, blob }) => ({ path, blob })));
       return fake.engine.verify;
     },
+    materializePinned: async (_location, files) => {
+      fake.pinnedCopies.push(files.map((file) => ({ ...file })));
+      return { ok: true, value: files.map(({ path }) => path).filter((path) => fake.movedSincePin.includes(path)) };
+    },
     prune: async (_location, paths) => {
       fake.calls.push("prune");
       fake.pruned.push([...paths]);
@@ -214,7 +227,8 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       if (!fake.openable.value) return { ok: false, fault: { kind: "store-unreadable", detail: "the store cannot be opened" } };
       fake.stores.opened++;
       fake.openedAt.push(generation);
-      return { ok: true, value: { close: () => void fake.stores.closed++ } };
+      const reader = fake.storeReader;
+      return { ok: true, value: { ...reader, close: () => { fake.stores.closed++; reader?.close(); } } };
     }) as CodeGraph["open"],
   };
   fake.deps = { workingTree, mirror, graph, digest, versions: VERSIONS, retention: RETENTION, now: () => NOW, newStoreGeneration: () => `generation-${++generations}` };

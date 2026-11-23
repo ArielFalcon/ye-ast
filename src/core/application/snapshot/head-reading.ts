@@ -16,7 +16,7 @@ import type { CommitExport, Vcs, VcsFault } from "../../ports/vcs.port.ts";
 import { openLive, type LiveDeps, type LiveTree, type LiveFailure, type OpenLive } from "../live/live-tree.ts";
 import { ABORTED, extractExport, readSources, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction, type PreparedCommit, type ReadScope, type SnapshotReaderDeps } from "./read-snapshot.ts";
 import { prepareCommit } from "./prepared-snapshot.ts";
-import { liveSnapshotReaders } from "./live-snapshot.ts";
+import { pinLiveSnapshot } from "./live-snapshot.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 
@@ -49,13 +49,17 @@ export interface HeldLive {
   facts?: PreparedCommit["facts"];
 }
 
-/** Consumers of a capture share one operation signal; independent operations create their own capture. */
-export function createHeldLive(input: { repo: string; repoId: string; scope: DeclaredScope; head: string; tree: LiveTree; trust: "trusted"; deps: HeadReaderDeps; hold?: ParseHold }): HeldLive {
+/**
+ * Pins one live capture under its mirror lock: reads its sources (ADR-0144), so nothing its consumers run afterwards reads
+ * the mirror. Consumers of a capture share one operation signal; independent operations create their own capture.
+ */
+export async function pinHeldLive(input: { repo: string; repoId: string; scope: DeclaredScope; head: string; tree: LiveTree; trust: "trusted"; deps: HeadReaderDeps; hold?: ParseHold }, signal?: AbortSignal): Promise<Result<HeldLive, VcsFault>> {
   const { hold, ...held } = input;
   const { vcs, reader, extractor, graph, matcher, live } = held.deps;
   const captureDeps = { vcs, reader, extractor, graph, matcher, ...(live === undefined ? {} : { live }) };
-  const readers = liveSnapshotReaders(held.deps, { repo: held.repo, scope: held.scope, trust: held.trust, root: held.tree.root, export: held.tree.export }, hold);
-  return { ...held, ...(hold === undefined ? {} : { hold }), deps: captureDeps, kind: "live", ...readers };
+  const readers = await pinLiveSnapshot(held.deps, { repo: held.repo, scope: held.scope, trust: held.trust, root: held.tree.root, export: held.tree.export }, hold, signal);
+  if (!readers.ok) return readers;
+  return { ok: true, value: { ...held, ...(hold === undefined ? {} : { hold }), deps: captureDeps, kind: "live", ...readers.value } };
 }
 
 /** The held capture as the readers of a snapshot take it: nothing to write, since the mirror already holds the files. */
@@ -79,7 +83,10 @@ export interface LiveCaptureSelection {
   onStalenessUnavailable?: OpenLive["onStalenessUnavailable"];
 }
 
-/** Holds every selected tree for the duration of the callback. Roots must already be canonical where required. */
+/**
+ * Pins every selected tree, one mirror lock at a time in root order, and runs the callback on the pinned captures with no
+ * lock held (ADR-0144). Roots must already be canonical where required.
+ */
 export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: readonly LiveCaptureSelection[], signal: AbortSignal | undefined, use: (captures: ReadonlyMap<string, HeldLive>) => Promise<T>): Promise<Result<T, { repoId: string; cause: LiveFailure }>> {
   if (new Set(selections.map((s) => s.repo)).size !== selections.length || new Set(selections.map((s) => s.repoId)).size !== selections.length) throw new TypeError("duplicate live capture selection");
   if (selections.length === 0) {
@@ -103,13 +110,17 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
       const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, synthesized: selection.synthesized, signal,
         ...(selection.onStale === undefined ? {} : { onStale: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStale!(notice) }); } }),
         ...(selection.onStalenessUnavailable === undefined ? {} : { onStalenessUnavailable: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStalenessUnavailable!(notice) }); } }),
-      }, async (tree): Promise<Result<T, { repoId: string; cause: LiveFailure }>> => {
-        const head = await deps.vcs.resolveCommit(selection.repo, LIVE_HEAD, signal);
+      }, async (_tree, pinned: Result<HeldLive, LiveFailure>): Promise<Result<T, { repoId: string; cause: LiveFailure }>> => {
         if (signal?.aborted) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "aborted", detail: "live query aborted" } } };
-        if (!head.ok) return { ok: false, fault: { repoId: selection.repoId, cause: head.fault } };
-        if (selection.head !== undefined && head.value !== selection.head) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "live-mirror-failed", detail: "repository HEAD changed during live capture" } } };
-        captures.set(selection.repoId, createHeldLive({ ...selection, head: head.value, tree, deps, ...(hold === undefined ? {} : { hold }) }));
+        if (!pinned.ok) return { ok: false, fault: { repoId: selection.repoId, cause: pinned.fault } };
+        captures.set(selection.repoId, pinned.value);
         return acquire(index + 1);
+      }, async (tree): Promise<Result<HeldLive, LiveFailure>> => {
+        const head = await deps.vcs.resolveCommit(selection.repo, LIVE_HEAD, signal);
+        if (signal?.aborted) return { ok: false, fault: { kind: "aborted", detail: "live query aborted" } };
+        if (!head.ok) return head;
+        if (selection.head !== undefined && head.value !== selection.head) return { ok: false, fault: { kind: "live-mirror-failed", detail: "repository HEAD changed during live capture" } };
+        return pinHeldLive({ ...selection, head: head.value, tree, deps, ...(hold === undefined ? {} : { hold }) }, signal);
       });
       if (opened.ok) return opened.value;
       const failure = { repoId: selection.repoId, cause: opened.fault };
@@ -254,7 +265,7 @@ export interface HeadReader {
   factBase(trust: TrustMode, snapshot: SnapshotRef, content: string, spec: FactSpec, scope: DeclaredScope, origin: IndexOrigin | undefined): FactBase;
   /** The head's index; the caller closes its store. A kept index is reused without writing the snapshot; a build writes it first. */
   indexHead(head: Pick<PreparedCommit, "root" | "tree" | "materialize">, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadOpening>;
-  /** The head of a live query: the mirror under the lock, its store opened where the engine left it. */
+  /** The head of a live query: the capture pinned under the mirror lock, its store the one the capture pinned. */
   liveReading<Tree extends Pick<CommitExtraction, "export">>(tree: LiveTree, extraction: Tree, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading<Tree>;
   /** What a live query answers when the refresh did not finish: `unknown`, with a state id of nothing read. */
   unavailableLive(trust: TrustMode, scope: DeclaredScope, head: string, repoId: string, spec: FactSpec): UnknownFact;
@@ -303,12 +314,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
       ...(hold === undefined ? {} : { hold }),
       selected,
       base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? tree.origin : undefined),
-      open: async () => {
-        const proven = deps.live?.graph === deps.graph ? tree.takeStore?.() : undefined;
-        if (proven !== undefined) return { store: proven, summary: notHeldInExport(tree.notHeld, extraction.export) };
-        const opened = deps.graph.open(tree.root);
-        return opened.ok ? { store: opened.value, summary: notHeldInExport(tree.notHeld, extraction.export) } : "unavailable";
-      },
+      open: async () => (tree.store === undefined ? "unavailable" : { store: tree.store, summary: notHeldInExport(tree.notHeld, extraction.export) }),
     };
   };
 

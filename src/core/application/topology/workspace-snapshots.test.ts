@@ -25,7 +25,7 @@ function setup(options: { alias?: boolean; untrusted?: string; abort?: AbortCont
     refresh: { refresh: async (_: unknown, signal?: AbortSignal) => { events.push("refresh"); signals.push(signal); return [{ url, freshness: { status: "unverified", reason: "failed" }, listing: { branches: [] } }]; } },
     digest: { of: () => "b".repeat(64) }, matcher: { matches: () => true },
     scratch: { create: async () => "/scratch", remove: async () => undefined },
-    reader: { read: async () => assert.fail("preflight must not load sources") },
+    reader: { read: async () => [] },
     extractor: { extract: async () => assert.fail("preflight must not extract sources") },
     producer: { name: "test", version: "0" },
     graph: fake.deps.graph, live: fake.deps,
@@ -147,14 +147,14 @@ test("replay kind mismatch precedes canonical preflight and refresh", async () =
 });
 
 
-test("workspace callback runs with every selected live lease held", async () => {
+test("workspace callback runs on every selected live capture pinned, with no lock held", async () => {
   const s = setup();
   const fake = fakeLive({ "src/a.ts": "v1" });
   const deps = { ...s.deps, graph: fake.deps.graph, live: fake.deps };
   let observed = false;
   const result = await withWorkspaceSnapshots(deps, request, async (context) => {
     observed = true;
-    assert.equal(fake.held.locks - fake.held.released, 2);
+    assert.equal(fake.held.locks - fake.held.released, 0);
     assert.equal(context.liveCaptures.size, 2);
     return { ok: true, value: "read" };
   });
@@ -168,7 +168,7 @@ test("selected vector includes actual live states and unavailable committed pins
   const signal = new AbortController().signal;
   const result = await withWorkspaceSnapshots(s.deps, { ...request, signal }, async (context) => {
     assert.equal(context.signal, signal);
-    assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+    assert.equal(s.fake.held.locks - s.fake.held.released, 0);
     assert.strictEqual(context.liveCaptures.get("a"), context.liveCaptures.get("a"));
     return { ok: true, value: context.selectedSnapshots.map((item) => item.repo) };
   });
@@ -256,7 +256,7 @@ test("callback failure, throw and abort unwind all leases without success metada
   }
 });
 
-test("a held live handle shares successful lazy sources and extraction", async () => {
+test("each pinned live handle reads its sources once, at its pin, and shares its extraction", async () => {
   const s = setup();
   let reads = 0;
   let extracts = 0;
@@ -277,7 +277,7 @@ test("a held live handle shares successful lazy sources and extraction", async (
     return { ok: true, value: "done" };
   });
   assert.ok(result.ok);
-  assert.equal(reads, 1);
+  assert.equal(reads, 2, "one read per live repository, under its lock");
   assert.equal(extracts, 1);
   assert.ok(signals.length > 0 && signals.every((passed) => passed === signal));
 });
