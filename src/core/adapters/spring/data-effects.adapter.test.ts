@@ -327,3 +327,16 @@ class Service { void run(Orders orders, Order order, String text, java.lang.Stri
   assert.deepEqual(await placedEffects("src/Settled.java", body(overloads, "orders.findByCode(text)", "import org.springframework.data.domain.*;")), [["findByCode", "read", ORDER_TARGET]]);
   assert.deepEqual(await placedEffects("src/Hidden.java", body(overloads, "orders.findByCode(qualified)", "import org.springframework.data.domain.*;\nclass String {}")), []);
 });
+
+test("a reading given a turn awaits it between the sources it reads and answers the effects it answers without one; a turn that rejects ends the reading", async () => {
+  const reader = createJavaDataEffects(await createJavaParser());
+  const files = [{ path: "src/Repositories.java", content: source("repositories") }, { path: "src/Jdbc.java", content: source("jdbc") }];
+  const without = await reader.placed(files);
+  let turns = 0;
+  const turned = await reader.placed(files, { between: async () => void (turns += 1) });
+
+  assert.ok(without.some(({ site }) => site.effect !== undefined));
+  assert.deepEqual(turned, without);
+  assert.ok(turns >= files.length, `${turns} turns over ${files.length} sources`);
+  await assert.rejects(reader.placed(files, { between: async () => { throw new Error("cut"); } }), /cut/);
+});

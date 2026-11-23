@@ -47,6 +47,7 @@ import { pagePlans } from "./page-plans.ts";
 import { createBaseReadings, withOutputs, type BaseReadingDeps, type TypedReading } from "../snapshot/base-reading.ts";
 import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
 import { sourceIdentity } from "../../domain/shared/source-identity.ts";
+import type { Between } from "../../domain/shared/work-units.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs" | "libraries" | "frameworks"> {
   workspace?: WorkspaceReadOperation;
@@ -228,21 +229,24 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
 
 /**
  * The call sites and data effects of a snapshot read, the rows a trace's effects come from: whole-snapshot derivations,
- * kept under the read's sources and what else they read, whatever the trace's targets.
+ * kept under the read's sources and what else they read, whatever the trace's targets. `between` is awaited between the
+ * bounded units of both readings, the turn background work passes to the queries (ADR-0156); a query passes none.
  */
 export function effectSites(
   deps: Pick<TraceQueriesDeps, "callSites" | "dataEffects" | "librarySources">,
   head: { tree: Pick<CommitExtraction, "export" | "sources">; prepared?: { facts?: DerivedFacts } | undefined },
   request: { repoId: string; scope?: ScopeRequest | undefined },
   typed: Pick<TypedReading, "libraries" | "outputs">,
+  between?: Between,
 ): { callSites(): ReturnType<LibraryPlacedCallSiteReader["placed"]>; dataSites(): ReturnType<DataEffectReader["placed"]> } {
   const { sources } = head.tree;
   const facts = head.prepared?.facts;
-  const dataEffects = () => deps.dataEffects?.placed(sources) ?? Promise.resolve([]);
+  const passing = between === undefined ? {} : { between };
+  const dataEffects = () => deps.dataEffects?.placed(sources, passing) ?? Promise.resolve([]);
   const completeSource = completeSourceRead(head.tree.export, new Set(sources.map(({ path }) => path)), {
     include: request.scope?.include ?? [], exclude: request.scope?.exclude ?? [],
   }) && (deps.librarySources?.length ?? 0) === 0;
-  const placedCallSites = () => deps.callSites.placed(sources, request.repoId, deps.librarySources, { completeSource, ...(typed.libraries === undefined ? {} : { libraries: typed.libraries }) });
+  const placedCallSites = () => deps.callSites.placed(sources, request.repoId, deps.librarySources, { completeSource, ...(typed.libraries === undefined ? {} : { libraries: typed.libraries }), ...passing });
   return {
     dataSites: () => facts === undefined ? dataEffects() : facts.ofInputs("trace-data-effects", { sources: sources.map(sourceIdentity) }, dataEffects),
     callSites: () => facts === undefined ? placedCallSites() : facts.ofInputs("trace-call-sites", {

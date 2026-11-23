@@ -14,6 +14,7 @@ import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import { undecidedTarget } from "../../domain/topology/evaluated.ts";
 import { statesDestination } from "../../domain/topology/event-destination.ts";
 import { NO_PROOF, type CallSiteProof } from "./java-call-site-owner.ts";
+import { allUnits, type Units } from "../../domain/shared/work-units.ts";
 
 /** One publish call: where it is written, the client that publishes, the argument that names the destination and the one that names the exchange. */
 interface Publish {
@@ -41,9 +42,17 @@ export class JavaEventReader {
   }
 
   sites(repo: string, includeNested = false): CallSite[] {
+    return allUnits(this.siteUnits(repo, includeNested));
+  }
+
+  /** `sites` in units (ADR-0156): one unit per file of the invocations it reads. */
+  *siteUnits(repo: string, includeNested = false): Units<CallSite[]> {
     const found: CallSite[] = [];
+    let file: JavaFile | undefined;
     const flow = new JavaMethodFlow<Publish>(this.project, this.text, (call) => this.publishOf(call), this.proof, this.calls);
     for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
+      if (file !== undefined && invocation.type.file !== file) yield;
+      file = invocation.type.file;
       if (!includeNested && flow.nested(invocation)) continue;
       const scope = this.scopeOf(invocation, new Map());
       const direct = this.publishOf(invocation);

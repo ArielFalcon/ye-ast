@@ -10,6 +10,10 @@ import type { LanguageProfile } from "../../domain/languages/profiles.ts";
 import type { Cut, Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { TemplateEventCall, TemplateHandlerCall } from "../../ports/template-usage.port.ts";
+import { keptOverReadSources } from "../snapshot/kept-over-read-sources.ts";
+
+/** The slot the framework relations are kept under by the contents they read (ADR-0153). */
+export const FRAMEWORK_RELATIONS = "framework-relations";
 
 /**
  * What the impact use case asks for language and framework relations. It lives here, not in `core/ports`, because an
@@ -61,7 +65,11 @@ export function createRelationExtractor(framework: RelationExtractor, languages:
   return {
     language: framework.language,
     async extract(files, options) {
-      const [base, additions] = await Promise.all([framework.extract(files, options), languages.extract(files, options)]);
+      const frameworkInputs = { language: framework.language.language, memberProofs: options?.memberProofs ?? null, completeSource: options?.completeSource ?? null, paths: options?.paths ?? null };
+      const [base, additions] = await Promise.all([
+        keptOverReadSources(options?.facts, FRAMEWORK_RELATIONS, files, frameworkInputs, (read) => framework.extract(read, options)),
+        languages.extract(files, options),
+      ]);
       return {
         ...base,
         relations: sortFindings([...base.relations, ...additions.relations]),

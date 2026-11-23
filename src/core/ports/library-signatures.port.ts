@@ -1,5 +1,6 @@
 import type { CallSiteReadOptions, PlacedCallSite } from "../domain/topology/call-site.ts";
 import type { LibrarySource } from "../domain/topology/library-source.ts";
+import type { Between } from "../domain/shared/work-units.ts";
 
 /** A method or constructor (`<init>`) of a library type, with its types as the generic signature writes them. */
 export interface LibraryMember {
@@ -54,6 +55,12 @@ export interface LibrarySignatureSource {
 /** The options of a placed read of call sites when the host declared JDKs: the signatures the owner's proof of a body reads by path (ADR-0044 decision 7). */
 export interface LibraryCallSiteOptions extends CallSiteReadOptions {
   libraries?: LibraryReading;
+  /**
+   * Awaited between the bounded units of the reading (a source, a type, a file a reader walks), never inside one; the
+   * sites are the same with or without it. Background work passes its turn to the queries of its process there
+   * (ADR-0156), and a rejection ends the reading with nothing of it kept.
+   */
+  between?: Between;
 }
 
 /** `PlacedCallSiteReader` for a reader that can use the declared JDKs' signatures. */

@@ -17,7 +17,7 @@ import { createEntrypointQueries } from "../core/application/entrypoints/entrypo
 import { trustOf } from "../core/application/snapshot/read-snapshot.ts";
 import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
 import { exportSelection } from "../core/domain/shared/scope.ts";
-import { WRITTEN_UNIVERSE_VERSION, isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
+import { WRITTEN_UNIVERSE_VERSION, canMoveLiveListing, isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
 import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
 import { isTypeCheckerInput } from "../core/domain/languages/typescript.ts";
 import { createRevisionSources } from "../core/application/snapshot/revision-sources.ts";
@@ -43,6 +43,7 @@ import { createJdkLibrarySource } from "../core/adapters/jdk/jdk-library.adapter
 import { createFixedLayerStore } from "../core/adapters/fs/fixed-layer-store.adapter.ts";
 import { createWorkspaceDefaults } from "../core/adapters/fs/workspace-defaults.adapter.ts";
 import { createTrustRecords } from "../core/adapters/fs/trust-record.adapter.ts";
+import { createTreeWatch } from "../core/adapters/fs/tree-watch.adapter.ts";
 import { createLiveMirror, defaultLiveMirrorDeps } from "../core/adapters/fs/live-mirror.adapter.ts";
 import { createFsSourceReader } from "../core/adapters/fs/fs-source-reader.adapter.ts";
 import { createTempScratchDirectory } from "../core/adapters/fs/temp-scratch-directory.adapter.ts";
@@ -74,6 +75,7 @@ import { createModuleDependenciesReader } from "../core/adapters/typescript/modu
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
 import type { LibraryPlacedCallSiteReader, LibraryReading } from "../core/ports/library-signatures.port.ts";
+import type { DataEffectReader } from "../core/domain/trace/data-effect-site.ts";
 import type { ParseHold } from "../core/ports/parse-holds.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
@@ -87,11 +89,14 @@ import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { RemoteRefresh } from "../core/ports/remote-refresh.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
+import type { TreeWatch } from "../core/ports/tree-watch.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredAnswerMemo, measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
+import { measuredAnswerMemo, measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWatch, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
 import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
 import { queriesFirst } from "./priming-turns.ts";
+import { watchLive } from "../core/application/live/live-watch.ts";
+import { isEngineEntry } from "../core/ports/staging-rules.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -153,6 +158,8 @@ export interface CompositionOptions {
    * request that declares none itself; none by default.
    */
   buildOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined;
+  /** The watcher `warmLive` keeps on a trusted live tree to refresh it ahead of the next query (ADR-0152); the platform's recursive watcher by default. */
+  treeWatch?: TreeWatch;
 }
 
 export interface ComposedQueries {
@@ -175,7 +182,9 @@ export interface ComposedQueries {
    * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, then primes the snapshot
    * facts no target narrows, letting any query run first between steps, so the first live query finds both ready.
    * `repoId` is the id the queries name the repository by; the repository's name when absent. Resolves once priming
-   * ended, to a redacted line describing why the mirror could not be built, or `null`; it never rejects.
+   * ended, to a redacted line describing why the mirror could not be built, or `null`; it never rejects. A trusted
+   * repository is also watched until `signal` or the composition's signal is aborted, and each change primes it again
+   * ahead of the next query (ADR-0152).
    */
   warmLive(repo: string, signal?: AbortSignal, repoId?: string): Promise<string | null>;
 }
@@ -185,14 +194,17 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const redaction = createPatternRedaction();
   const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction, tallies: stageTallies() };
   const holds = createJavaTreeHolds();
-  const javaParser = () => createJavaParser(holds);
+  const javaParser = async () => {
+    const parser = await createJavaParser(holds);
+    return measurement === undefined ? parser : measuredTalliedStages(parser, { parse: "java-parse" }, measurement);
+  };
   const staged = <T extends object>(port: T, stages: { readonly [K in keyof T]?: string }): T => (measurement === undefined ? port : measuredStages(port, stages, measurement));
   const frameworks = composeFrameworkPlugins();
   const contracts = createContractRoutes();
   const extractor = staged<EntrypointExtractor>({
     extract: async (files, libraries, reading) => {
       const spring = await createSpringRoutesExtractor(await javaParser(), contracts).extract(files, libraries, reading);
-      const routes = await frameworkEntrypoints(frameworks, files);
+      const routes = await frameworkEntrypoints(frameworks, files, reading?.facts);
       return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },
   }, { extract: "entrypoints" });
@@ -371,7 +383,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     memberNames,
     relations: impactDeps.relations,
     callSites: placedCallSites,
-    dataEffects: { placed: async (files) => createJavaDataEffects(await javaParser()).placed(files) },
+    dataEffects: staged<DataEffectReader>({ placed: async (files, options) => createJavaDataEffects(await javaParser()).placed(files, options) }, { placed: "data-effects" }),
     sourceSelection: isWritten,
     typeBindings: impactDeps.typeBindings,
     checkerInputs: createRevisionSources({ ...headDeps, sourceSelection: isTypeCheckerInput }),
@@ -381,22 +393,38 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const bareTrace = createTraceQueries(traceDeps);
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const priority = queriesFirst();
-  const prime = (repo: string, repoId: string | undefined, signal?: AbortSignal): Promise<void> => measuredPriming(async () => {
+  const prime = (repo: string, repoId: string | undefined, trigger: "launch" | "watch", signal?: AbortSignal): Promise<void> => measuredPriming(async () => {
     const named = repoId === undefined ? await vcs.repositoryName(repo, signal) : { ok: true as const, value: repoId };
     const request = { repo, repoId: named.ok ? named.value : basename(repo), ...(signal === undefined ? {} : { signal }) };
     return primeLive({ ...traceDeps, memberNames: merged.memberNames }, request, priority.turns);
-  }, measurement);
+  }, trigger, measurement);
+  const trusted = async (repo: string): Promise<boolean> => (await trustOf(trust ?? {}, repo).catch(() => "untrusted")) === "trusted";
+  const treeWatch = options.treeWatch ?? createTreeWatch();
+  const watch = (repo: string, repoId: string | undefined, selected: (path: string) => boolean, signal: AbortSignal | undefined) =>
+    watchLive(repo, {
+      treeWatch,
+      turns: priority.turns,
+      relevant: (path) => canMoveLiveListing(path, selected, isEngineEntry),
+      trusted: () => trusted(repo),
+      refresh: (stopped) => prime(repo, repoId, "watch", stopped),
+      report: measuredWatch(measurement),
+    }, [signal, options.signal]);
   const warmLive = async (repo: string, signal?: AbortSignal, repoId?: string): Promise<string | null> => {
+    let watching: ReturnType<typeof watch>;
     try {
-      if ((await trustOf(trust ?? {}, repo)) !== "trusted") return null;
+      if (!(await trusted(repo))) return null;
       const scope = liveScope();
-      const warmed = await openLive(live, { repo, scope, selected: exportSelection(scope, matcher.matches, isExtractorConfiguration), store: true, signal }, async () => undefined);
+      const selected = exportSelection(scope, matcher.matches, isExtractorConfiguration);
+      watching = watch(repo, repoId, selected, signal);
+      const warmed = await openLive(live, { repo, scope, selected, store: true, signal }, async () => undefined);
       if (!warmed.ok) return redaction.redact(`ye-ast: live index not built (${warmed.fault.kind}): ${warmed.fault.detail}`);
+      await prime(repo, repoId, "launch", signal);
+      return null;
     } catch (error) {
       return redaction.redact(`ye-ast: live index not built: ${redaction.redactError(error)}`);
+    } finally {
+      watching?.launched();
     }
-    await prime(repo, repoId, signal);
-    return null;
   };
   const bareWorkspace = createWorkspaceQueries(workspaceDeps, operation);
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);

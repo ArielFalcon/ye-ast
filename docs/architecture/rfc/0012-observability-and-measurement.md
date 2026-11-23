@@ -206,7 +206,7 @@ kept store into the mirror ([ADR-0129](../adr/0129-a-full-live-build-goes-throug
 
 A **stage line**, one per call of a reader a request runs over the whole snapshot (the export listing, writing its files,
 opening the store, entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java
-imports, call sites), and one per origin read of a reference proof (`import-origins` for the origins of imported names,
+imports, call sites, data effects), and one per origin read of a reference proof (`import-origins` for the origins of imported names,
 `root-origins` for the origins of resolved root names):
 
 ```json
@@ -221,7 +221,8 @@ by time only.
 
 A reader a request calls once per file writes one **tallied stage line** per query instead, just before the query line:
 the calls it made and their summed time, with no `start_ms`. Its outcome is the first one that was not `ok`. Today
-these are `member-names`, the syntax of each source a family reads, and one line per method of an opened store's
+these are `member-names`, the syntax of each source a family reads, `java-parse`, each Java source a reader asked
+the parser for (a tree a hold already had answers fast; the time is the parses), and one line per method of an opened store's
 reader: `graph-symbols-in-files`, `graph-symbols-by-ids`, `graph-declarations-named`, `graph-incoming-edges`,
 `graph-outgoing-edges` and `unresolved-references`. A request asks the reader once per symbol or file, so its calls
 count the store reads behind the answer. The batch readers `root-bindings`, `declared-types` and `receiver-methods`
@@ -302,6 +303,27 @@ is configured:
 `outcome` is `hit` (the fact kept for the pinned snapshot identity answered, and nothing was derived), `admitted` (the
 fact was derived and kept) or `not-kept` (derived and not kept: cut by a deadline, aborted, `unknown` for a transient
 reason, over declared build outputs, or a request field the key does not name). The key never appears.
+
+A **prime line**, one per run of live priming, when measurement is configured: at launch, and each time the watcher of
+a trusted live tree starts it after a change
+([ADR-0152](../adr/0152-a-watcher-on-a-trusted-live-tree-only-triggers-the-launch-priming-refresh-ahead-of-the-next-query.md)):
+
+```json
+{"ye_ast":{"event":"prime","trigger":"watch","outcome":"primed","yields":0,"duration_ms":412}}
+```
+
+`trigger` is `launch` or `watch`; `outcome` is `primed`, `aborted`, `unavailable` (what priming needs could not be read)
+or `threw`; `yields` counts the times priming waited for the queries of its process.
+
+A **watch line**, when the watcher's refreshes drain or the watcher turns off (ADR-0152):
+
+```json
+{"ye_ast":{"event":"watch","outcome":"off","reason":"EMFILE: too many open files","start_ms":5231}}
+```
+
+`outcome` is `settled` (no change is left unrefreshed and no refresh of the watcher runs) or `off` (the watcher closed
+because it could not open, failed, or found the repository no longer `trusted`; `reason` says which). A watcher closed
+by a server stop writes no line. Queries never depend on it: each proves freshness itself.
 
 **Child CPU is not measured.** `process.cpuUsage()` covers only the ye-ast process, so `cpu_ms` excludes the git and
 indexer children, and Node exposes neither `RUSAGE_CHILDREN` nor the resource usage of a `spawn`ed child. The cost of a
