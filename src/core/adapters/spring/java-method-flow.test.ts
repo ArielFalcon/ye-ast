@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { createJavaProject, describeFile } from "./java-symbols.ts";
+import { createJavaProject, describeFile, type TypeDecl } from "./java-symbols.ts";
 import { fieldBindings } from "./java-members.ts";
 import { invocationsOf } from "./java-invocations.ts";
-import { JavaMethodFlow } from "./java-method-flow.ts";
+import { JavaMethodFlow, javaCallsOf, type JavaCalls } from "./java-method-flow.ts";
 import { stagedSelections, NO_PROOF, type CallSiteProof } from "./java-call-site-owner.ts";
 import { librariesOf } from "./java-library.testing.ts";
 
@@ -100,6 +100,29 @@ test("nested dispatch reuses the same forwarded binding context", async () => {
     const root = flow.invocations.find((call) => call.type.name === "D");
     assert.ok(root);
     assert.equal(flow.expand(root, { type: root.type, locals: root.locals, env: new Map() })?.flat().length, 1);
+  } finally { parsed.value.dispose(); }
+});
+
+test("a reader takes a root call's methods from the shared reading of the calls only when it expands from the call's own type", async () => {
+  const source = `class W { void all(String p) { sink(p); } }
+    class D { W w; String u = w.all("/y"); void load() { w.all("/x"); } }`;
+  const parsed = (await createJavaParser()).parse({ path: "src/D.java", content: source });
+  assert.ok(parsed.ok);
+  try {
+    const project = createJavaProject([describeFile("Probe.java", parsed.value.root)]);
+    const text = { fieldOf: (owner: TypeDecl, name: string) => { const binding = fieldBindings(owner).get(name); return binding === undefined ? undefined : { binding, owner }; } };
+    const read = javaCallsOf(project, text);
+    const [load, field] = ["/x", "/y"].map((path) => read.invocations.find((call) => call.type.name === "D" && call.node.text.includes(path)));
+    assert.ok(load?.member !== undefined && field !== undefined && field.member === undefined);
+    const edges = new Map([...read.edges].map(([member, written]) => [member, written.map((edge) => (edge.call === load ? { ...edge, selections: [] } : edge))]));
+    const calls: JavaCalls = { invocations: read.invocations, edges };
+    const flow = new JavaMethodFlow(project, text, (invocation) => invocation.node.childForFieldName("name")?.text === "sink" ? { invocation } : undefined, NO_PROOF, calls);
+    const w = project.types.find((type) => type.name === "W");
+    assert.ok(w);
+
+    assert.equal(flow.expand(load, { type: load.type, locals: load.locals, env: new Map() }), undefined, "the shared reading selects nothing for the call, so nothing is reached");
+    assert.equal(flow.expand(load, { type: load.type, receiver: w, locals: load.locals, env: new Map() })?.flat().length, 1, "another concrete type selects again");
+    assert.equal(flow.expand(field, { type: field.type, locals: field.locals, env: new Map() })?.flat().length, 1, "a call outside a member has no shared selection and selects again");
   } finally { parsed.value.dispose(); }
 });
 
