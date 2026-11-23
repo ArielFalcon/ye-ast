@@ -132,11 +132,19 @@ test("an edit the platform's watcher sees is synced and re-derived with no query
 });
 
 test("with the watcher silent, unable to open or failing, the next query still answers the edited tree, and a failure turns the watcher off with one line", { timeout: 120_000 }, async () => {
-  const fault = { code: "EMFILE", detail: "too many open files" };
-  const watchers: Record<string, { treeWatch: TreeWatch; failing: boolean; after?: (listener: TreeWatchListener) => void }> = {
+  const failingLater = drivenWatch();
+  const watchers: Record<string, { treeWatch: TreeWatch; failing: boolean; after?: () => void }> = {
     silent: { treeWatch: { watch: () => ({ close: () => undefined }) }, failing: false },
-    "unable to open": { treeWatch: { watch: () => ({ fault }) }, failing: true },
-    "failing after it opened": { ...drivenFailing(), failing: true },
+    "unable to open": { treeWatch: { watch: () => ({ fault: { code: "EMFILE", detail: "too many open files" } }) }, failing: true },
+    "failing after it opened": {
+      treeWatch: failingLater.treeWatch,
+      failing: true,
+      after: () => {
+        const { listener } = failingLater.opened[0]!;
+        listener.failed({ code: "ENOSPC", detail: "watch limit reached" });
+        listener.changed(`${DIR}First.java`);
+      },
+    },
   };
   for (const [name, { treeWatch, failing, after }] of Object.entries(watchers)) {
     const stop = new AbortController();
@@ -145,7 +153,7 @@ test("with the watcher silent, unable to open or failing, the next query still a
       git("checkout", "-q", "--", ".");
       assert.equal(await queries.warmLive(repo, stop.signal, REPO_ID), null, name);
       const before = canonicalJson(await callersOfFmt(queries));
-      after?.(listenerOf(treeWatch));
+      after?.();
       edit();
       const answer = canonicalJson(await callersOfFmt(queries));
       assert.notEqual(answer, before, name);
@@ -157,26 +165,6 @@ test("with the watcher silent, unable to open or failing, the next query still a
     }
   }
 });
-
-const listeners = new WeakMap<TreeWatch, TreeWatchListener>();
-const listenerOf = (treeWatch: TreeWatch): TreeWatchListener => listeners.get(treeWatch)!;
-
-/** A watcher that opens, then fails when the test says so and reports one more change after failing. */
-function drivenFailing(): { treeWatch: TreeWatch; after: (listener: TreeWatchListener) => void } {
-  const treeWatch: TreeWatch = {
-    watch(_root, listener) {
-      listeners.set(treeWatch, listener);
-      return { close: () => undefined };
-    },
-  };
-  return {
-    treeWatch,
-    after: (listener) => {
-      listener.failed({ code: "ENOSPC", detail: "watch limit reached" });
-      listener.changed(`${DIR}First.java`);
-    },
-  };
-}
 
 test("a burst of changes costs the refresh in flight plus one follow-up, never one refresh per change", { timeout: 120_000 }, async () => {
   const stop = new AbortController();

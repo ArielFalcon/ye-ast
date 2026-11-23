@@ -395,11 +395,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   }, trigger, measurement);
   const trusted = async (repo: string): Promise<boolean> => (await trustOf(trust ?? {}, repo).catch(() => "untrusted")) === "trusted";
   const treeWatch = options.treeWatch ?? createTreeWatch();
-  const watched = new Set<string>();
-  const watch = (repo: string, repoId: string | undefined, selected: (path: string) => boolean, signal: AbortSignal | undefined) => {
-    if (watched.has(repo)) return undefined;
-    watched.add(repo);
-    return watchLive(repo, {
+  const watch = (repo: string, repoId: string | undefined, selected: (path: string) => boolean, signal: AbortSignal | undefined) =>
+    watchLive(repo, {
       treeWatch,
       turns: priority.turns,
       relevant: (path) => canMoveLiveListing(path, selected),
@@ -407,7 +404,6 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
       refresh: (stopped) => prime(repo, repoId, "watch", stopped),
       report: measuredWatch(measurement),
     }, [signal, options.signal]);
-  };
   const warmLive = async (repo: string, signal?: AbortSignal, repoId?: string): Promise<string | null> => {
     let watching: ReturnType<typeof watch>;
     try {
