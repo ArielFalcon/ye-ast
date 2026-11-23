@@ -220,8 +220,8 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         }
       };
       return entrypoints.length === 0
-        ? headReader.atSources(request, spec, (head) => read(head, []))
-        : headReader.atHead(request, spec, (head) => read(head, head.tree.findings));
+        ? headReader.atSources(request, spec, (head) => read(head, []), "trace")
+        : headReader.atHead(request, spec, (head) => read(head, head.tree.findings), "trace");
     },
   };
 }

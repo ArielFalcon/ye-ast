@@ -239,7 +239,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         } finally {
           store.close();
         }
-      });
+      }, "callers");
     },
 
     async importers(request) {
@@ -299,7 +299,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         } finally {
           store.close();
         }
-      });
+      }, "importers");
     },
   };
 

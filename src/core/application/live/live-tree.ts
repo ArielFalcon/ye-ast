@@ -49,6 +49,8 @@ export interface LiveTree {
   notHeld: readonly string[];
   /** Where the store came from; set when the query asked for a store. */
   origin: IndexOrigin | undefined;
+  /** The store generation `store` was pinned at (ADR-0125); absent when the query asked for no store or none was committed. */
+  generation?: string | undefined;
   /** The paths whose synthesized edges the store holds stale (`MirrorState.unparsedSinceBuild`); empty when the query asked for no store. */
   unparsedSinceBuild: readonly string[];
   location: MirrorLocation;
@@ -163,7 +165,7 @@ export async function openLive<A, P = undefined>(deps: LiveDeps, request: OpenLi
         if (signal?.aborted) return aborted();
         if (!refreshed.ok) return refreshed;
         const { reader } = pinnedStore;
-        const tree: LiveTree = reader === undefined ? refreshed.value.tree : { ...refreshed.value.tree, store: shared(reader) };
+        const tree: LiveTree = reader === undefined ? { ...refreshed.value.tree, generation: undefined } : { ...refreshed.value.tree, store: shared(reader) };
         await mirror.touch(location);
         if (signal?.aborted) return aborted();
         const read = (await pin?.(tree)) as P;
@@ -320,6 +322,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     stateId,
     notHeld: request.store ? heldState.notHeld : [],
     origin: request.store ? (heldState.fullBuildStateId === stateId ? { kind: "full" } : { kind: "sync", base: heldState.fullBuildStateId }) : undefined,
+    generation: request.store ? committedGeneration(heldState) : undefined,
     unparsedSinceBuild: request.store ? heldState.unparsedSinceBuild : [],
     location,
   });

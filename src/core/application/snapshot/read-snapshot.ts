@@ -124,9 +124,10 @@ export interface PreparedCommit {
   extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
   /**
    * What `produce` answers over this snapshot's sources, kept between requests under `slot`, which names every input
-   * besides the sources the output depends on. Absent where nothing is retained.
+   * besides the sources the output depends on; an output `admit` refuses is answered as produced and not kept. Absent
+   * where nothing is retained.
    */
-  retained?<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+  retained?<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean): Promise<T>;
   /** The derived facts of this snapshot's files, kept between requests by content (ADR-0035). Absent where nothing is retained. */
   facts?: DerivedFacts;
 }

@@ -43,7 +43,7 @@ export interface SnapshotRetention {
   lookup(): SnapshotData | undefined;
   keepSources(sources: readonly SourceFile[]): void;
   keepExtraction(sources: readonly SourceFile[], extraction: EntrypointExtraction): void;
-  output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+  output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean): Promise<T>;
   /** The derived facts of the files read under this snapshot's trust, kept by their content (ADR-0035). */
   facts: DerivedFacts;
 }
@@ -72,13 +72,13 @@ export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache"
     keepExtraction(sources, extraction) {
       if (entry !== undefined && !extraction.findings.some((finding) => finding.status === "unknown" && finding.reason === "deadline")) cache.put(entry, { sources, findings: extraction.findings, readingCuts: extraction.readingCuts });
     },
-    async output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    async output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean): Promise<T> {
       if (entry === undefined) return produce();
       const outputKey = deps.digest.of(canonicalJson({ entry, output: slot }));
       const kept = cache.get(outputKey);
       if (kept?.output !== undefined) return kept.output as T;
       const output = await produce();
-      if (signal?.aborted) return output;
+      if (signal?.aborted || admit?.(output) === false) return output;
       const admitted = cache.put(outputKey, { sources: [], output });
       return (admitted === undefined ? frozenValue(JSON.stringify(output)) : admitted.output) as T;
     },

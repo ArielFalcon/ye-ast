@@ -2281,7 +2281,7 @@ test("a file that cannot be written is the fault of the source read, and of the 
   const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
   const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, cache: true as const, buildIndex: true as const };
   callersFact(await setup({ ...shared, lazy: {} }).callers(LAZY_TARGETS));
-  const build = await setup({ ...shared, lazy }).callers(LAZY_TARGETS);
+  const build = await setup({ ...shared, lazy }).callers({ ...LAZY_TARGETS, budget: { depth: 50 } });
   assert.ok(!build.ok && build.fault.kind === "export-write-failed");
 });
 
