@@ -34,6 +34,9 @@ export function daemonDialectClient(streams: { input: Readable; output: { write(
   const pending = new Map<RequestId, Pending>();
   let nextId = 1;
   let closed = false;
+  const handle = streams.input as Partial<{ ref(): void; unref(): void }>;
+  /** The connection keeps the process alive only while a call waits on it, so an idle client exits normally. */
+  const holding = (): void => (pending.size > 0 ? handle.ref?.() : handle.unref?.());
 
   const reader = readLines(streams.input, (line) => {
     let message: unknown;
@@ -55,6 +58,7 @@ export function daemonDialectClient(streams: { input: Readable; output: { write(
     if (!isId(message.id)) return;
     const waiting = pending.get(message.id);
     pending.delete(message.id);
+    holding();
     if ("result" in message) waiting?.resolve(message.result);
     else waiting?.reject(new DaemonUnavailableError("refused", isRecord(message.error) ? String(message.error.message) : "no answer"));
   });
@@ -64,6 +68,7 @@ export function daemonDialectClient(streams: { input: Readable; output: { write(
     pending.clear();
   });
   streams.input.resume();
+  holding();
 
   const send = (method: string, params: object, signal?: AbortSignal, onStale?: Pending["onStale"]): Promise<unknown> =>
     new Promise((resolve, reject) => {
@@ -75,6 +80,7 @@ export function daemonDialectClient(streams: { input: Readable; output: { write(
         finish(value);
       };
       pending.set(id, { resolve: settle(resolve), reject: settle(reject), ...(onStale === undefined ? {} : { onStale }) });
+      holding();
       streams.output.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
       signal?.addEventListener("abort", cancel, { once: true });
       if (signal?.aborted) cancel();

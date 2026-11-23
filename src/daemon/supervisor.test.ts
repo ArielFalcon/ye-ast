@@ -129,6 +129,14 @@ test("a client of another version retires the daemon: no new attach, the call in
   assert.equal(await exists(join(runtime.directory, PID_FILE)), false);
 });
 
+test("a client never connects through a runtime directory that is not private: it answers in process", async () => {
+  const served = runSupervisor(deps());
+  (await attached(testLink(runtime.directory, VERSION), "/repo")).destroy();
+  assert.deepEqual(await testLink(runtime.directory, VERSION, undefined, async () => false).attach("/repo", {}), { kind: "refused" });
+  stops[0]!.abort();
+  await served;
+});
+
 test("stopping the daemon closes attached clients and removes the socket and the pid file", async () => {
   const served = runSupervisor(deps());
   const link = testLink(runtime.directory, VERSION);

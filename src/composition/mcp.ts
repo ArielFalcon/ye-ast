@@ -66,7 +66,7 @@ export async function runMcp(commandLine: readonly string[], host: ProcessHost):
     return EXIT_CODE.usage;
   }
   let launchRoot: string | undefined;
-  const queries = served.queries({ trustRecord: true, ...(outputs.length > 0 && { buildOutputs: (repo: string) => (repo === launchRoot ? outputs : undefined) }) });
+  const queries = served.queries({ trustRecord: true, throughDaemon: true, ...(outputs.length > 0 && { launchOutputs: { outputs, root: () => launchRoot } }) });
   const canonical = async (path: string) => queries.canonicalRepositoryRoot(resolve(host.cwd, path), host.signal);
   const root = await canonical(launchPath);
   if (host.signal.aborted) return EXIT_CODE.interrupted;

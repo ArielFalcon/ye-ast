@@ -92,8 +92,8 @@ export function inProcessWorkers(idleMs: number): { spawnWorker(): WorkerProcess
   };
 }
 
-export function testLink(directory: string, version: string, spawnDaemon: () => void = () => undefined): DaemonLink {
-  return daemonLink({ directory, version, connect: (path) => createConnection(path), spawnDaemon, now: () => Date.now() });
+export function testLink(directory: string, version: string, spawnDaemon: () => void = () => undefined, verify: () => Promise<boolean> = async () => true): DaemonLink {
+  return daemonLink({ directory, version, connect: (path) => createConnection(path), spawnDaemon, now: () => Date.now(), verify });
 }
 
 /** Writes a request line on an attached socket and resolves its answer's `result`. */

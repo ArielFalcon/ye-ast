@@ -9,6 +9,7 @@ export type Attachment =
   | { kind: "absent" }
   | { kind: "version-mismatch"; producer: string }
   | { kind: "retiring" }
+  | { kind: "refused" }
   | { kind: "failed" };
 
 export interface DaemonLinkDeps {
@@ -19,6 +20,8 @@ export interface DaemonLinkDeps {
   /** Starts a daemon detached from this process. */
   spawnDaemon(): void;
   now(): number;
+  /** True while the runtime directory is private to this account; a client never connects through one that is not. */
+  verify(): Promise<boolean>;
 }
 
 export interface DaemonLink {
@@ -60,6 +63,7 @@ export function daemonLink(deps: DaemonLinkDeps): DaemonLink {
   let startedAt: number | undefined;
 
   const attach = async (repo: string, configuration: WorkerConfiguration): Promise<Attachment> => {
+    if (!(await deps.verify())) return { kind: "refused" };
     const socket = deps.connect(join(deps.directory, SOCKET_FILE));
     const reached = await connected(socket);
     if (reached !== "connected") return { kind: reached };
@@ -103,7 +107,7 @@ export function daemonLink(deps: DaemonLinkDeps): DaemonLink {
       const deadline = deps.now() + timeoutMs;
       for (;;) {
         const attachment = await attach(repo, configuration);
-        if (attachment.kind === "attached" || attachment.kind === "failed" || deps.now() >= deadline) return attachment;
+        if (attachment.kind === "attached" || attachment.kind === "failed" || attachment.kind === "refused" || deps.now() >= deadline) return attachment;
         if (attachment.kind === "absent") spawnAfter(RESPAWN_MS);
         await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
       }

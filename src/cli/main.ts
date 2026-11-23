@@ -60,6 +60,11 @@ export interface CliDeps {
   readWorkspaceFile?: (path: string) => Promise<Result<{ path: string; text: string }, WorkspaceManifestFault>>;
   /** Aborted when the process is asked to stop. */
   signal: AbortSignal;
+  /**
+   * Asks the per-user daemon, started when absent, to prime the installed repository for the MCP registration `init`
+   * prints, without waiting for the priming (ADR-0157 decision 8); absent when the daemon is off.
+   */
+  warmInBackground?: (launch: { repo: string; buildOutputs: readonly DeclaredBuildOutput[] }) => Promise<void>;
 }
 
 const MEASURE_FLAG = "--measure";
@@ -180,6 +185,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps, cache:
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
     for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], answerBytes, cache)) io.out(line);
+    await deps.warmInBackground?.({ repo: request.repo, buildOutputs: buildOutputs ?? [] });
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
