@@ -7,6 +7,7 @@ import { createSnapshotDataCache } from "../core/application/snapshot/snapshot-d
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
 import type { SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
+import { composeFrameworkPlugins, FRAMEWORK_ENTRYPOINTS, frameworkEntrypoints } from "./framework-plugins.ts";
 
 const CORE = "import { Component, inject } from '@angular/core';\n";
 const TEMPLATE: SourceFile = { path: "src/app/shell/shell.html", content: "<app-card></app-card>\n" };
@@ -35,6 +36,7 @@ function oneProcess(slot: string, stage: (sources: readonly SourceFile[], facts?
 }
 
 const relations = (sources: readonly SourceFile[], facts?: DerivedFacts) => createRelationExtractor(composeAngularRelations(), NO_LANGUAGE_RELATIONS).extract(sources, { memberProofs: { completeSource: true }, ...(facts === undefined ? {} : { facts }) });
+const entrypoints = (sources: readonly SourceFile[], facts?: DerivedFacts) => frameworkEntrypoints(composeFrameworkPlugins(), sources, facts);
 const edited = (target: SourceFile, addition: string) => SOURCES.map((file) => (file === target ? { ...file, content: `${file.content}${addition}` } : file));
 
 test("the Angular relations are kept across an edit of a file they never read, and an edit of the template a component names derives them again as a cold read does", async () => {
@@ -46,4 +48,12 @@ test("the Angular relations are kept across an edit of a file they never read, a
   assert.match(cold.output, /uses-component/u);
   assert.deepEqual({ cold: cold.derived, java: afterJava, template: afterTemplate.derived }, { cold: true, java: { output: cold.output, derived: false }, template: true });
   assert.equal(afterTemplate.output, JSON.stringify(await relations(templateEdit)));
+});
+
+test("the framework entrypoints are kept across an edit of a file they never read", async () => {
+  const read = oneProcess(FRAMEWORK_ENTRYPOINTS, entrypoints);
+  const cold = await read(SOURCES);
+  const afterJava = await read(edited(JAVA, "// edit\n"));
+  assert.match(cold.output, /app\.routes\.ts/u);
+  assert.deepEqual({ cold: cold.derived, java: afterJava }, { cold: true, java: { output: cold.output, derived: false } });
 });
