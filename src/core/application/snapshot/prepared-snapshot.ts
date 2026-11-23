@@ -9,7 +9,7 @@ import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { EntrypointExtraction, EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import { createDerivedFacts } from "./derived-facts.ts";
-import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type ReadScope, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
+import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type ReadScope, type SnapshotData, type SnapshotReaderDeps, type SnapshotReadContent, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
 type Sources = Pick<CommitExtraction, "export" | "sources">;
 
@@ -36,8 +36,8 @@ export function withSnapshotPreparation<T>(deps: Pick<SnapshotReaderDeps, "scrat
 
 /**
  * The snapshot data cache over one listing. `identity` names everything but the listing that the retained data
- * depends on; the key adds `listing`, what every reader of the data observes. The first `lookup` fixes the key;
- * `output` retains nothing before it.
+ * depends on; the key adds `listing`, what every reader of the data observes. The first `lookup` fixes the key and
+ * counts the read as one of `read`'s repository (ADR-0147); `output` retains nothing before it.
  */
 export interface SnapshotRetention {
   lookup(): SnapshotData | undefined;
@@ -53,7 +53,7 @@ export function entrypointReadingOf(hold: ParseHold | undefined, retention: Pick
   return { ...(hold === undefined ? {} : { hold }), ...(retention === undefined ? {} : { facts: retention.facts }) };
 }
 
-export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "derivedFactDisk" | "digest">, identity: string, listing: object, trust: TrustMode): SnapshotRetention | undefined {
+export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "derivedFactDisk" | "digest">, read: Omit<SnapshotReadContent, "key">, identity: string, listing: object, trust: TrustMode): SnapshotRetention | undefined {
   const cache = deps.snapshotCache;
   if (cache === undefined) return undefined;
   let entry: string | undefined;
@@ -61,8 +61,8 @@ export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache"
     facts: createDerivedFacts(cache, deps.digest, trust, deps.derivedFactDisk),
     lookup() {
       if (entry === undefined) {
-        cache.beginRead();
         entry = deps.digest.of(canonicalJson({ key: identity, listing }));
+        cache.beginRead({ ...read, key: entry });
       }
       return cache.get(entry);
     },
@@ -112,7 +112,7 @@ export async function prepareCommit(
       const answer = await (written ??= listed.value.materialize(signal));
       return signal?.aborted ? ABORTED : answer;
     };
-    const retention = snapshotRetention(deps, identity, writtenListing(exported.value), context.trust);
+    const retention = snapshotRetention(deps, { repository: repo, snapshot: "revision" }, identity, writtenListing(exported.value), context.trust);
     /** The sources as read, the only ones retention stores, and the read scope's own copies of them, the ones readers take. */
     let loaded: { read: readonly SourceFile[]; kept: Sources } | undefined;
     let extracted: CommitExtraction | undefined;
