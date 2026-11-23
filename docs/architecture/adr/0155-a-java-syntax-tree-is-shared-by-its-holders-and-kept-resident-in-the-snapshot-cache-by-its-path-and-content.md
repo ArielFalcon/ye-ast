@@ -70,14 +70,41 @@ alive (the first copy also grows the WASM memory once, which is never returned a
    never reachable from a kept value (ADR-0040 decision 4 holds). Eviction follows ADR-0147 unchanged: nothing below
    the floor, a content that left its lane first, never what the current read, the two before it or an open query used.
    An explicit `snapshotCacheBytes` counts resident trees against its cap and zero keeps none, so each read frees its
-   own trees as before. A parse that fails keeps nothing resident.
+   own trees as before. A parse that fails keeps nothing resident. A parse is whole or absent, so a read cut by an
+   abort or a deadline keeps resident only the trees it finished, which equal a cold parse of their text.
 5. **Fresh parses only.** A changed file parses from its text; no tree is edited. The held project, the per-file
    descriptions and every derivation are built per read from the trees exactly as before, so no answer changes.
 6. TypeScript is out (D6): its programs are built per file or group, and no stage line shows a cost there.
 
 ## Consequences
 
-- To be completed with the measurements of unit L24 (stage line before and after, RSS after 200 edits).
+- Measured with the latency bench (`edit-now`, five repetitions, and `rss-slope` over 200 edits; medians; Apple M1
+  Max, machine shared with other runs), the engine before this decision against it. `java-parse` is the tallied stage
+  of every Java parse a query asked for:
+
+| Cell, shopizer/backend right after an edit | Before: wall p50 / `java-parse` | After: wall p50 / `java-parse` |
+|---|---|---|
+| `callers` | 3,211 ms / 396 ms | 2,554 ms / 6 ms |
+| `trace` | 4,404 ms / 390 ms | 3,778 ms / 9 ms |
+| `impact` | 2,907 ms / 391 ms | 2,476 ms / 6 ms |
+| `importers` | 2,270 ms / 400 ms | 1,749 ms / 6 ms |
+| `outline` | 1,500 ms / 398 ms | 1,051 ms / 3 ms |
+| `workspace` | 2,503 ms / 389 ms | 1,983 ms / 5 ms |
+| `entrypoints` | 2,605 ms / 383 ms | 2,667 ms / 385 ms |
+
+  On jhipster-monolith/application the bench's edits leave Java parsing at 0-22 ms before and after; its `callers` and
+  `trace` moved 771 → 699 and 946 → 849 ms. The live `entrypoints` read opens no parse hold, so it keeps parsing every
+  source (not changed here). RSS over 200 edits: shopizer/backend max 3,013 → 3,006 MB with no upward trend in either
+  run. jhipster-monolith/application rises one step and then holds, confirmed by a second pair of `rss-slope` runs: its
+  plateau after the 40th edit moved from 1,074-1,089 to 1,143-1,163 MB (about +70 MB, against about 8 MiB of resident
+  trees charged), and the slope of the last 100 edits from 11 to 99 KiB per edit. The step is more than the trees'
+  charge; a likely cause is the WASM heap, which never shrinks and whose free space the long-lived trees fragment
+  (hypothesis, not measured).
+- The warm differential on petclinic/backend-rest and shopizer/backend passed 56 steps with 0 differing.
+- A resident tree is charged about 67 MiB for shopizer/backend's 3.5 MiB of Java sources; the floor counts it once,
+  whatever the number of contents that share it.
+- Two reads that overlap share trees (decision 1): a reader never mutates a tree, and a release only gives up one
+  ownership, so neither can free what the other reads.
 
 ## Not decided here
 
