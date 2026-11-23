@@ -188,17 +188,42 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
     if (!prepared.value) return { ok: true, value: undefined };
     const file = lockOf(location);
     const pid = deps.pid();
-    const created = await tryCreateLock(file, pid);
+    const turn = freeTurn(file, pid);
+    if (turn === undefined) return { ok: true, value: undefined };
+    let created: Result<boolean, MirrorFault> | undefined;
+    try {
+      created = await tryCreateLock(file, pid);
+    } finally {
+      if (created?.ok !== true || !created.value) turn.pass();
+    }
     if (!created.ok) return created;
     if (!created.value) return { ok: true, value: undefined };
     try {
       try {
         return await action();
       } finally {
-        await lockHeld(file, pid).release();
+        await lockHeld(file, pid, turn).release();
       }
     } catch (error) {
       return fault("write-failed", error);
+    }
+  }
+
+  /** The head of the process's line contends for the lock file: a live holder it finds is another process, which it polls. */
+  async function contend(file: string, pid: number, signal: AbortSignal | undefined): Promise<Result<void, MirrorFault>> {
+    for (;;) {
+      if (signal?.aborted) return waitAborted(file);
+      const created = await tryCreateLock(file, pid);
+      if (!created.ok) return created;
+      if (created.value) return { ok: true, value: undefined };
+      const holder = await readHolder(file);
+      if (holder === null) continue;
+      if (holder.pid === null || !deps.isAlive(holder.pid)) {
+        const again = await readHolder(file);
+        if (again !== null && again.text === holder.text) await rm(file, { force: true }).catch(() => undefined);
+        continue;
+      }
+      await deps.sleep(LOCK_POLL_MS, signal);
     }
   }
 
@@ -253,20 +278,15 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       if (!prepared.ok) return prepared;
       const file = lockOf(location);
       const pid = deps.pid();
-      for (;;) {
-        if (signal?.aborted) return { ok: false, fault: { kind: "aborted", detail: `waiting for ${file} was aborted` } };
-        const created = await tryCreateLock(file, pid);
-        if (!created.ok) return created;
-        if (created.value) return { ok: true, value: lockHeld(file, pid) };
-        const holder = await readHolder(file);
-        if (holder === null) continue;
-        if (holder.pid === null || !deps.isAlive(holder.pid)) {
-          const again = await readHolder(file);
-          if (again !== null && again.text === holder.text) await rm(file, { force: true }).catch(() => undefined);
-          continue;
-        }
-        await deps.sleep(LOCK_POLL_MS, signal);
+      const turn = await takeTurn(file, pid, signal);
+      if (turn === undefined) return waitAborted(file);
+      let held: Result<void, MirrorFault> | undefined;
+      try {
+        held = await contend(file, pid, signal);
+      } finally {
+        if (held?.ok !== true) turn.pass();
       }
+      return held.ok ? { ok: true, value: lockHeld(file, pid, turn) } : held;
     },
 
     async readState(location) {
@@ -601,13 +621,77 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
   };
 }
 
-function lockHeld(file: string, pid: number): MirrorLock {
+function lockHeld(file: string, pid: number, turn: Turn): MirrorLock {
+  let released = false;
   return {
     async release() {
-      const text = await readFile(file, "utf8").catch(() => undefined);
-      if (text?.trim() === String(pid)) await rm(file, { force: true });
+      if (released) return;
+      released = true;
+      try {
+        const text = await readFile(file, "utf8").catch(() => undefined);
+        if (text?.trim() === String(pid)) await rm(file, { force: true });
+      } finally {
+        turn.pass();
+      }
     },
   };
+}
+
+/** One acquisition's place at the head of its line: passing it gives the line to the next acquisition, once. */
+interface Turn {
+  pass(): void;
+}
+
+/**
+ * The lines of this process (ADR-0148), one per lock file and the pid written into it: each holds the acquisitions
+ * waiting behind the one at its head, which alone contends for the file. A line exists while its head holds it.
+ */
+const lines = new Map<string, (() => void)[]>();
+
+const lineOf = (file: string, pid: number): string => `${file}\0${pid}`;
+
+function headOf(key: string): Turn {
+  let passed = false;
+  return {
+    pass() {
+      if (passed) return;
+      passed = true;
+      const next = lines.get(key)?.shift();
+      if (next === undefined) lines.delete(key);
+      else next();
+    },
+  };
+}
+
+/** The head of a free line, or `undefined` when an acquisition of this process holds or waits for the lock. */
+function freeTurn(file: string, pid: number): Turn | undefined {
+  const key = lineOf(file, pid);
+  if (lines.has(key)) return undefined;
+  lines.set(key, []);
+  return headOf(key);
+}
+
+/** Joins the line and settles at its head, or with `undefined` when `signal` aborts first, which leaves the line. */
+function takeTurn(file: string, pid: number, signal: AbortSignal | undefined): Promise<Turn | undefined> {
+  const free = freeTurn(file, pid);
+  if (free !== undefined) return Promise.resolve(free);
+  if (signal?.aborted) return Promise.resolve(undefined);
+  const key = lineOf(file, pid);
+  const waiting = lines.get(key)!;
+  return new Promise((settle) => {
+    const resume = (): void => {
+      signal?.removeEventListener("abort", leave);
+      settle(headOf(key));
+    };
+    const leave = (): void => {
+      const at = waiting.indexOf(resume);
+      if (at < 0) return;
+      waiting.splice(at, 1);
+      settle(undefined);
+    };
+    waiting.push(resume);
+    signal?.addEventListener("abort", leave, { once: true });
+  });
 }
 
 /** The bytes a directory's regular files occupy, from `readdir` and `stat` alone; a directory that cannot be read counts as none. */
@@ -749,6 +833,10 @@ function isEntry(value: unknown): value is MirrorEntry {
 
 function isSkipped(value: unknown): value is SkippedEntry {
   return isRecord(value) && typeof value.path === "string" && typeof value.reason === "string" && SKIP_REASONS.has(value.reason);
+}
+
+function waitAborted(file: string): Failure {
+  return { ok: false, fault: { kind: "aborted", detail: `waiting for ${file} was aborted` } };
 }
 
 function aborted(): Failure {
