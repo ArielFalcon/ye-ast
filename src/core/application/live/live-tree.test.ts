@@ -200,6 +200,17 @@ test("a capture declined once its lock is held releases it before listing, recon
   assert.equal(fake.state.current, null);
 });
 
+test("the lock is released when the decline asked once it is held throws", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+
+  await assert.rejects(query(fake, { declined: () => {
+    if (fake.held.locks > 0) throw new Error("boom");
+    return false;
+  } }), /boom/);
+
+  assert.deepEqual(fake.held, { locks: 1, released: 1 });
+});
+
 test("the lock is released when the answer throws", async () => {
   const fake = fakeLive({ "src/A.java": "1" });
 

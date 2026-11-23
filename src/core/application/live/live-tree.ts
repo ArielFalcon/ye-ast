@@ -161,10 +161,6 @@ export async function openLive<A, P = undefined>(deps: LiveDeps, request: OpenLi
   if (request.declined?.() === true) return unavailable(DECLINED);
   const lock = await mirror.lock(location, signal);
   if (!lock.ok) return signal?.aborted ? aborted() : mirrorFailure(lock.fault);
-  if (request.declined?.() === true) {
-    await lock.value.release();
-    return unavailable(DECLINED);
-  }
   const pinnedStore: PinnedStore = { reader: undefined };
   let answered: A;
   let reflected: { state: Pick<MirrorState, "manifest" | "skipped">; stateId: string };
@@ -173,6 +169,7 @@ export async function openLive<A, P = undefined>(deps: LiveDeps, request: OpenLi
     const pinned = await (async (): Promise<Result<{ tree: LiveTree; pinned: P; state: MirrorState; reshaped: boolean }, LiveFailure>> => {
       try {
         if (signal?.aborted) return aborted();
+        if (request.declined?.() === true) return unavailable(DECLINED);
         const refreshed = await refresh(deps, request, location, pinnedStore);
         if (signal?.aborted) return aborted();
         if (!refreshed.ok) return refreshed;
