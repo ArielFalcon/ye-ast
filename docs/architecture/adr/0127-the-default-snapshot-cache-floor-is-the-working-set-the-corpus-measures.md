@@ -8,6 +8,7 @@
 - Amends: [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md) decision 1 (the default budget) and
   [ADR-0112](0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) decision 1 (the size of
   the floor)
+- Superseded by: [ADR-0147](0147-the-snapshot-cache-floor-is-what-each-repositorys-recent-contents-used-charged-as-decoded-heap.md) (decision 1: no configured floor; the floor is measured)
 - Related: [RFC-0006](../rfc/0006-configuration.md), [RFC-0040](../rfc/0040-resident-generations-and-answer-latency.md),
   [ADR-0126](0126-the-snapshot-cache-keeps-decoded-frozen-values-and-names-a-file-by-its-blob-id.md)
 

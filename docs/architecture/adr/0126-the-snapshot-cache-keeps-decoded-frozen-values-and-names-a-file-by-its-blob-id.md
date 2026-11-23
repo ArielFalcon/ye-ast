@@ -10,6 +10,8 @@
   (its last sentence: returned data deserialized afresh)
 - Amends: [ADR-0035](0035-derived-facts-are-retained-by-content.md) decision 1 (what a derived fact is) and decision 4
   (what a hit and a miss answer)
+- Amended by: [ADR-0147](0147-the-snapshot-cache-floor-is-what-each-repositorys-recent-contents-used-charged-as-decoded-heap.md) (decision 1: an entry is charged the heap its decoded
+  value takes, by a measured factor of its serialized bytes)
 - Related: [RFC-0040](../rfc/0040-resident-generations-and-answer-latency.md) §2 M3, §3.2, §3.5;
   [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md) decision 7,
   [ADR-0030](0030-live-captures-use-the-snapshot-data-cache.md), [ADR-0077](0077-derived-facts-persist-by-content-in-ye-asts-own-store.md)
