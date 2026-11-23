@@ -69,17 +69,49 @@ yields to the queries of its process before it takes the lock and between steps.
 
 ## Consequences
 
-- An edit followed by idle time is synced and re-derived before the next query, which then pays the proof, the pin and
-  what depends on its question. Figures: see "Measured" below.
-- An edit followed at once by a query is unchanged: the query finds priming either not started (it yields before the
-  lock) or holding the lock (the query waits its turn in the lock line, as with launch priming).
+- An edit followed by enough idle time is synced and re-derived before the next query, which then pays the proof, the
+  pin and what depends on its question. Figures: see "Measured" below.
+- A query that arrives while the watcher's priming runs finds it either not started (it yields before the lock),
+  holding the lock (the query waits its turn in the lock line, as with launch priming), or in a step (the query shares
+  the process with that step until it ends). The last two cost a query time that it would not pay without the watcher.
 - Activity under paths git ignores (a build writing `target/` or `dist/`) runs refreshes back to back while it lasts,
   each proving the tree unchanged; the cost is one listing and the kept priming steps per refresh.
 - A linked worktree's `.git` is a file, so its HEAD and index events are not seen; its file events still are.
 
 ## Measured
 
-Pending the bench run of this unit (RFC-0040 L20).
+The latency bench on the stdio MCP over clones of the corpus, `main` `0261d1f5e` against this decision, five rounds of
+every family per scenario, p50 in ms, Apple M1 Max. `edit-settled` is new: the edit, then the call once the server's
+`watch` line reports `settled`; every one of its 105 edits settled (none hit the bench's one-minute guard).
+
+| Repository, family | unchanged | edit-now, before | edit-settled, after | edit-idle (2 s), before → after |
+|---|---|---|---|---|
+| shopizer/backend, `callers` | 179 | 2,972 | 1,866 | 3,073 → 4,180 |
+| shopizer/backend, `trace` | 175 | 4,181 | 686 | 4,234 → 2,942 |
+| shopizer/backend, `outline` | 176 | 1,429 | 135 | 1,480 → 2,421 |
+| shopizer/backend, `entrypoints` | 195 | 1,820 | 165 | 1,938 → 2,447 |
+| shopizer/backend, `workspace` | 1,452 | 2,277 | 1,412 | 2,398 → 3,721 |
+| petclinic/backend-rest, `callers` | 79 | 413 | 197 | 438 → 211 |
+| petclinic/backend-rest, `trace` | 67 | 294 | 55 | 331 → 75 |
+| petclinic/backend-rest, `outline` | 65 | 214 | 54 | 227 → 63 |
+| realworld-nx/frontend, `callers` | 70 | 345 | 133 | 416 → 157 |
+| realworld-nx/frontend, `importers` | 68 | 279 | 83 | 327 → 104 |
+| realworld-nx/frontend, `outline` | 69 | 208 | 59 | 230 → 69 |
+
+- From the edit to `settled`: shopizer/backend about 4.3 s, petclinic/backend-rest about 0.39 s, realworld-nx/frontend
+  about 0.35 s. On shopizer/backend `callers`, `impact` and `importers` still derive after a settled edit what priming
+  does not cover (the target's own derivation); `outline`, `entrypoints` and `workspace` answer at the unchanged cost.
+- Idle with the watcher on: 10 ms of CPU over 10 s and 24 open files, the same as before (macOS keeps one FSEvents
+  stream and no descriptor per directory).
+- `edit-now` is unchanged within 30 ms except where the query arrives after the watcher's priming took the lock: it
+  waits for that refresh (`entrypoints` 170 → 301 ms on petclinic/backend-rest, 96 → 236 on realworld-nx/frontend,
+  1,820 → 2,557 on shopizer/backend).
+- `edit-idle` on shopizer/backend regresses by 0.5-1.3 s: a query that arrives 2 s after the edit meets the watcher's
+  priming in the middle of a step it does not leave (the `call-sites` step, about 860 ms, shows inside the query's
+  window), so the two share the process. This is the residual of ADR-0144 decision 7 ("a query shares the process with
+  at most the step that runs"), now met after every edit; yielding inside a step is RFC-0040 L21.
+- The warm differential on petclinic/backend-rest and realworld-nx/frontend passed 55 steps with 0 differing, its
+  trust-record change included.
 
 ## Not decided here
 
