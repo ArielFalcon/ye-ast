@@ -31,7 +31,7 @@ import type { ModuleDependenciesReader } from "../../ports/module-dependencies.p
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import { withSnapshotPreparation } from "../snapshot/prepared-snapshot.ts";
-import type { ParseHold } from "../../ports/parse-holds.port.ts";
+import type { ParseHold, ParseHolds } from "../../ports/parse-holds.port.ts";
 import type { SnapshotDataCache } from "../snapshot/read-snapshot.ts";
 import type { TypeBindings, TypeBindingsAnswer, TypeTarget } from "../../ports/type-bindings.port.ts";
 import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
@@ -113,6 +113,8 @@ interface Options {
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
   snapshotCache?: SnapshotDataCache;
+  /** The parse holds a query opens, as composition wires them. */
+  holds?: ParseHolds;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
   /** The files the unmodelled-constructs reader marks among the sources it receives. */
   unmodelled?: readonly string[];
@@ -221,6 +223,7 @@ function setup(options: Options = {}) {
     ...(options.sourceTokens && { tokens: options.sourceTokens }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
+    ...(options.holds && { holds: options.holds }),
     ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),
     ...(options.syntax && { memberNames: { memberNames: async (file: SourceFile) => ({ ...NOTHING_DECLARED, calls: (options.unresolved ?? []).filter((use) => use.file === file.path).map(({ line, column, name }) => ({ kind: "calls" as const, line, column: (column ?? 0) + 1, name, owners: [] })) }) } }),
     ...(options.written && { memberNames: { memberNames: async (file: SourceFile) => ({ ...NOTHING_DECLARED, calls: options.written![file.path] ?? [] }) } }),
@@ -1505,6 +1508,65 @@ test("a live callers query cuts a file the mirror and the export hold but the st
   const answer = callersFact(await queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true }));
 
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Odd.java"], reason: "not-indexed", reach: { kind: "anything", runtime: "java" } }]);
+});
+
+const KEPT_STAGE_FILES = { base: "src/Base.java", svc: "src/Svc.java", caller: "src/Caller.java" } as const;
+const KEPT_STAGE_NODES = [fakeNode("Base", "class", KEPT_STAGE_FILES.base, 1, 9), fakeNode("Base.run", "method", KEPT_STAGE_FILES.base, 2, 2, "run"), fakeNode("Svc", "class", KEPT_STAGE_FILES.svc, 1, 20), fakeNode("run", "method", KEPT_STAGE_FILES.svc, 3, 5), fakeNode("use", "method", KEPT_STAGE_FILES.caller, 6, 8)];
+const KEPT_STAGE_EDGES: FakeEdge[] = [{ from: "Base", to: "Base.run", kind: "contains" }, { from: "Svc", to: "run", kind: "contains" }, { from: "Svc", to: "Base", kind: "extends", line: 1, column: 20 }];
+const KEPT_STAGE_UNRESOLVED: FakeUnresolved[] = [{ from: "use", name: "run", kind: "calls", file: KEPT_STAGE_FILES.caller, line: 7, column: 0 }];
+
+/**
+ * A live line over a method whose supertype declares one by its name, which its own signature proves it does not implement,
+ * and an unresolved call by its name that B6 proves external: both kept stages ask, and the answer reads both.
+ */
+function keptStageLine(cache: SnapshotDataCache | null = createSnapshotDataCache(1 << 20)) {
+  const live = fakeLive({ [KEPT_STAGE_FILES.base]: "1", [KEPT_STAGE_FILES.svc]: "1", [KEPT_STAGE_FILES.caller]: "1" });
+  const asked = { proofs: 0, contracts: 0 };
+  const importOrigins: ImportOriginsReader = (...read) => ({
+    ...externalImports(["run"])(...read),
+    origins: async (sites, signal) => (asked.proofs++, externalImports(["run"])(...read).origins(sites, signal)),
+    implementedDeclarations: async (sites) => (asked.contracts++, sites.map(() => ({ kind: "declarations" as const, declarations: [] }))),
+  });
+  const holds = { opened: 0, released: 0 };
+  const parseHolds: ParseHolds = {
+    open: () => {
+      holds.opened++;
+      let open = true;
+      return { keep: (sources) => sources.map((file) => ({ ...file })), open: () => open, release: () => void (open = false, holds.released++) };
+    },
+  };
+  const sources = [{ path: KEPT_STAGE_FILES.base, content: "class Base {}" }, { path: KEPT_STAGE_FILES.svc, content: "class Svc extends Base {}" }, { path: KEPT_STAGE_FILES.caller, content: "class Caller {}" }];
+  const { queries } = setup({ trust: TRUSTED, live, nodes: KEPT_STAGE_NODES, edges: KEPT_STAGE_EDGES, unresolved: KEPT_STAGE_UNRESOLVED, sources, importOrigins, ...(cache && { snapshotCache: cache }), holds: parseHolds });
+  const callers = async (symbol: string, file: string) => callersFact(await queries.callers({ ...LIVE_BASE, targets: [{ file, symbol }], live: true }));
+  return { live, asked, holds, queries, callers };
+}
+
+test("live callers at one pinned store generation ask B6 and the implemented contracts once, and a second query with other targets after the first released its hold answers as a cold read", async () => {
+  const line = keptStageLine();
+
+  await line.callers("Base", KEPT_STAGE_FILES.base);
+  assert.deepEqual(line.holds, { opened: 1, released: 1 });
+  const second = await line.callers("run", KEPT_STAGE_FILES.svc);
+
+  assert.deepEqual(line.asked, { proofs: 1, contracts: 1 }, "one question per stage over both queries");
+  assert.deepEqual(new Set(line.live.openedAt).size, 1, "both queries pinned one generation");
+  assert.deepEqual(second, await keptStageLine(null).callers("run", KEPT_STAGE_FILES.svc), "a read with no snapshot cache assembles every stage");
+});
+
+test("a synthesized rebuild that keeps the stateId but commits a new store generation misses the kept live stages", async () => {
+  const line = keptStageLine();
+  await line.callers("run", KEPT_STAGE_FILES.svc);
+  line.live.tree.set(KEPT_STAGE_FILES.svc, "2");
+  line.live.engine.sync = { ok: true, value: { ...SUMMARY, filesFailed: [], filesUnparsed: [KEPT_STAGE_FILES.svc] } };
+  const synced = await line.callers("run", KEPT_STAGE_FILES.svc);
+  assert.deepEqual(line.asked, { proofs: 2, contracts: 2 }, "an edit is another listing and another generation");
+
+  importersFact(await line.queries.importers({ ...LIVE_BASE, files: [KEPT_STAGE_FILES.svc], live: true }));
+  const rebuilt = await line.callers("run", KEPT_STAGE_FILES.svc);
+
+  assert.equal(rebuilt.snapshot.kind === "live" && rebuilt.snapshot.stateId, synced.snapshot.kind === "live" && synced.snapshot.stateId, "the rebuild keeps the stateId");
+  assert.equal(line.live.builds, 2, "the synthesized request rebuilt the store in full");
+  assert.deepEqual(line.asked, { proofs: 3, contracts: 3 });
 });
 
 test("a live importers query cuts nothing for a file the mirror holds outside what the export staged", async () => {

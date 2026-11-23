@@ -77,7 +77,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         try {
           const held = new Set(listing ?? headTree.export.files.map((file) => file.path));
           const snapshot = snapshotFiles(store, [...held]);
-          const reading = readings.of({ tree: headTree, prepared: head.prepared, hold: head.hold, store, digest: index.digest, snapshot: head.base(content).snapshot, request });
+          const reading = readings.of({ tree: headTree, prepared: head.prepared, hold: head.hold, store, digest: index.digest, generation: index.generation, snapshot: head.base(content).snapshot, request });
           const focused = focus === undefined ? undefined : await readFocus(store, focus.filter(({ file }) => isReadableFile(file)), snapshot, reading.declarations);
           const unknown = focused === undefined ? [] : snapshot.describe(focused.unknown);
           if (unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(unknown, unmodelled)}`, entries: unknown } };

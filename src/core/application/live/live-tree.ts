@@ -58,6 +58,8 @@ export interface LiveTree {
    * returns.
    */
   store?: CodeGraphReader | undefined;
+  /** The committed store generation `store` was opened at; absent with it. Stage outputs that read the store are kept under it (ADR-0150). */
+  generation?: string | undefined;
 }
 
 export interface OpenLive {
@@ -86,14 +88,14 @@ function unavailable(detail: string): Result<never, LiveUnavailable> {
 }
 
 /**
- * The store a committed state names, if it can still be opened: the state is a claim, and the open is the proof. It is
- * opened at the committed generation, so the reader holds it whole; a state that names none does not serve.
+ * Pins the store a committed state names, if it can still be opened: the state is a claim, and the open is the proof. It
+ * is opened at the committed generation, so the reader holds it whole; a state that names none does not serve.
  */
-function storeServes(deps: LiveDeps, root: string, state: MirrorState): CodeGraphReader | undefined {
+function pinServingStore(deps: LiveDeps, root: string, state: MirrorState, pinned: PinnedStore): void {
   const generation = committedGeneration(state);
-  if (generation === undefined) return undefined;
-  const opened = deps.graph.open(root, generation);
-  return opened.ok ? opened.value : undefined;
+  const opened = generation === undefined ? undefined : deps.graph.open(root, generation);
+  pinned.reader = opened?.ok ? opened.value : undefined;
+  pinned.generation = pinned.reader === undefined ? undefined : generation;
 }
 
 /** A view of the pinned reader that every reading of the tree may close without closing it for the others. */
@@ -151,7 +153,7 @@ export async function openLive<A, P = undefined>(deps: LiveDeps, request: OpenLi
   if (signal?.aborted) return aborted();
   const lock = await mirror.lock(location, signal);
   if (!lock.ok) return signal?.aborted ? aborted() : mirrorFailure(lock.fault);
-  const pinnedStore: PinnedStore = { reader: undefined };
+  const pinnedStore: PinnedStore = { reader: undefined, generation: undefined };
   let answered: A;
   let reflected: { state: Pick<MirrorState, "manifest" | "skipped">; stateId: string };
   let reshaped: boolean;
@@ -162,8 +164,8 @@ export async function openLive<A, P = undefined>(deps: LiveDeps, request: OpenLi
         const refreshed = await refresh(deps, request, location, pinnedStore);
         if (signal?.aborted) return aborted();
         if (!refreshed.ok) return refreshed;
-        const { reader } = pinnedStore;
-        const tree: LiveTree = reader === undefined ? refreshed.value.tree : { ...refreshed.value.tree, store: shared(reader) };
+        const { reader, generation } = pinnedStore;
+        const tree: LiveTree = reader === undefined ? refreshed.value.tree : { ...refreshed.value.tree, store: shared(reader), generation };
         await mirror.touch(location);
         if (signal?.aborted) return aborted();
         const read = (await pin?.(tree)) as P;
@@ -236,10 +238,11 @@ async function sweep(deps: LiveDeps, repo: string, current: string): Promise<boo
 
 /**
  * The store the query pins, opened under the lock at a committed generation: the reader that proved an unchanged store,
- * or the one a build or sync just committed. `openLive` closes it when the query returns.
+ * or the one a build or sync just committed, with that generation. `openLive` closes it when the query returns.
  */
 interface PinnedStore {
   reader: CodeGraphReader | undefined;
+  generation: string | undefined;
 }
 
 interface Refreshed {
@@ -304,7 +307,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   // was removed, truncated or left unreadable behind such a state is rebuilt here, under the lock this refresh already
   // holds, instead of answering `unknown` with `index-unavailable` to every later query (RFC-0005 "First index").
   const claimsBuild = current.fullBuildStateId !== "" && behind.length === 0;
-  pinned.reader = request.store && claimsBuild ? storeServes(deps, mirror.indexRoot(location), current) : undefined;
+  if (request.store && claimsBuild) pinServingStore(deps, mirror.indexRoot(location), current, pinned);
   if (request.store && claimsBuild && pinned.reader === undefined) {
     current.fullBuildStateId = "";
     staging = sorted(written);
@@ -335,6 +338,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   }
   pinned.reader?.close();
   pinned.reader = undefined;
+  pinned.generation = undefined;
 
   // A refresh that only copied files keeps the generation, since it left the store as it was; one that begins to write
   // the store clears it until it commits, so a reader or a worker that finds the write unfinished trusts nothing kept.
@@ -376,7 +380,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   const committed: MirrorState = { ...current, notHeld: sorted(notHeld), indexed: sorted(written), fullBuildStateId: full ? stateId : current.fullBuildStateId, unparsedSinceBuild: full ? [] : unparsed, pending: [], storeGeneration: next };
   const writtenState = await mirror.writeState(location, committed);
   if (!writtenState.ok) return mirrorFailure(writtenState.fault);
-  pinned.reader = storeServes(deps, indexRoot, committed);
+  pinServingStore(deps, indexRoot, committed, pinned);
   return { ok: true, value: { tree: tree(committed), state: committed, reshaped: created || full } };
 }
 

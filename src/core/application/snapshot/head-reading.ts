@@ -218,6 +218,8 @@ export interface HeadIndex {
    * and the store's versions. Derived facts that read the index are kept under it; without it they are kept by none.
    */
   digest?: string;
+  /** The committed store generation a live capture pinned the store at; the kept stage outputs are kept under it in memory (ADR-0150). */
+  generation?: string;
 }
 
 /** What opening a head's index answers; `fault` is the export fault that kept the index from being built. */
@@ -314,7 +316,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
       ...(hold === undefined ? {} : { hold }),
       selected,
       base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? tree.origin : undefined),
-      open: async () => (tree.store === undefined ? "unavailable" : { store: tree.store, summary: notHeldInExport(tree.notHeld, extraction.export) }),
+      open: async () => (tree.store === undefined ? "unavailable" : { store: tree.store, summary: notHeldInExport(tree.notHeld, extraction.export), ...(tree.generation === undefined ? {} : { generation: tree.generation }) }),
     };
   };
 
