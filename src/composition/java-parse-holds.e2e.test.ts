@@ -107,23 +107,33 @@ test("after a commit changes one source, the next query of a composition parses 
   assert.equal(canonicalJson(warm), canonicalJson(await trace(composeQueries({ scratchRoot }), "HEAD")));
 });
 
-test("after an edit of the working tree, the next live query parses only the edited source and answers as a cold composition does", async () => {
+/** A trusted clone of the fixture at its first commit, where an edit of the store's working tree is what the head commit changed. */
+async function trustedClone(): Promise<{ live: string; trustDirectory: string }> {
   const live = join(root, `live-${randomUUID()}`);
   execFileSync("git", ["clone", "-q", repo, live], { env: GIT_ENV });
   execFileSync("git", ["checkout", "-q", "HEAD~1"], { cwd: live, env: GIT_ENV });
   const trustDirectory = join(root, `trust-${randomUUID()}`);
   assert.equal(await composeCli({ scratchRoot, trustDirectory })(["init", "--trust", "trusted", live], { out: () => undefined, err: () => undefined }), EXIT_CODE.ok);
-  const liveTrace = (queries: ReturnType<typeof composeQueries>) => queries.trace.walk({ repo: live, repoId: "java-parse-holds-live", live: true, targets: [{ file: CALLER, symbol: "OrderController.one" }] });
-  const queries = composeQueries({ scratchRoot, trustDirectory });
-  assert.ok((await liveTrace(queries)).ok);
-  await writeFile(join(live, STORE), CHANGED_STORE);
-  native.parses.clear();
+  return { live, trustDirectory };
+}
 
-  const warm = await liveTrace(queries);
+for (const [family, ask] of [
+  ["trace", (queries: ReturnType<typeof composeQueries>, live: string) => queries.trace.walk({ repo: live, repoId: "java-parse-holds-live", live: true, targets: [{ file: CALLER, symbol: "OrderController.one" }] })],
+  ["map", (queries: ReturnType<typeof composeQueries>, live: string) => queries.entrypoints.map({ repo: live, repoId: "java-parse-holds-live", live: true })],
+] as const) {
+  test(`after an edit of the working tree, the next live ${family} parses only the edited source and answers as a cold composition does`, async () => {
+    const { live, trustDirectory } = await trustedClone();
+    const queries = composeQueries({ scratchRoot, trustDirectory });
+    assert.ok((await ask(queries, live)).ok);
+    await writeFile(join(live, STORE), CHANGED_STORE);
+    native.parses.clear();
 
-  assert.deepEqual(parsedJava(), { [`${STORE}@HEAD`]: 1 });
-  assert.equal(canonicalJson(warm), canonicalJson(await liveTrace(composeQueries({ scratchRoot, trustDirectory }))));
-});
+    const warm = await ask(queries, live);
+
+    assert.deepEqual(parsedJava(), { [`${STORE}@HEAD`]: 1 });
+    assert.equal(canonicalJson(warm), canonicalJson(await ask(composeQueries({ scratchRoot, trustDirectory }), live)));
+  });
+}
 
 test("concurrent queries on one snapshot and on two share the tree of each source, parse it once, and answer as they do one at a time", async () => {
   const alone = [];
@@ -157,4 +167,16 @@ test("a query aborted while it parses keeps the trees it parsed whole resident, 
 
   assert.deepEqual(parsedJava(), { [CALLER]: 1, [SERVICE]: 1, [`${STORE}@HEAD`]: 1 });
   assert.equal(canonicalJson(answer), canonicalJson(await trace(composeQueries({ scratchRoot }), "HEAD")));
+});
+
+test("a live map that keeps nothing resident frees every tree it parsed before it answers", async () => {
+  const { live, trustDirectory } = await trustedClone();
+  native.parses.clear();
+  native.alive.clear();
+
+  const answer = await composeQueries({ scratchRoot, trustDirectory, snapshotCacheBytes: 0 }).entrypoints.map({ repo: live, repoId: "java-parse-holds-live", live: true });
+
+  assert.ok(answer.ok, JSON.stringify(answer));
+  assert.ok(native.parses.size > 0);
+  assert.equal(native.alive.size, 0);
 });
