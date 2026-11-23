@@ -42,6 +42,8 @@ export interface McpLaunch {
 export interface McpSession {
   readonly pid: number;
   call(tool: string, args: Record<string, unknown>): Promise<CallOutcome>;
+  /** Settles on the first measurement line written from now on that `match` accepts, or `undefined` once the server exits or `timeoutMs` passed. */
+  next(match: (record: MeasurementRecord) => boolean, timeoutMs: number): Promise<MeasurementRecord | undefined>;
   close(): Promise<void>;
 }
 
@@ -102,6 +104,7 @@ function session(child: ChildProcess): Promise<McpSession> {
   let queryLines = 0;
   let exited = false;
   let nextId = 1;
+  let awaited: { match: (record: MeasurementRecord) => boolean; settle: (record: MeasurementRecord | undefined) => void }[] = [];
   const stderrTail: string[] = [];
 
   createInterface({ input: child.stderr! }).on("line", (line) => {
@@ -114,6 +117,9 @@ function session(child: ChildProcess): Promise<McpSession> {
     }
     records.push(record);
     if (record.event === "query") queryLines += 1;
+    const waiting = awaited;
+    awaited = waiting.filter((waiter) => !waiter.match(record));
+    for (const waiter of waiting) if (!awaited.includes(waiter)) waiter.settle(record);
   });
   createInterface({ input: child.stdout! }).on("line", (line) => {
     let message: Record<string, unknown>;
@@ -129,6 +135,7 @@ function session(child: ChildProcess): Promise<McpSession> {
   });
   child.on("exit", () => {
     exited = true;
+    for (const waiter of awaited.splice(0)) waiter.settle(undefined);
     for (const [id, resolve] of pending) resolve({ id, error: { code: -1, message: `server exited: ${stderrTail.join(" | ")}` } });
     pending.clear();
   });
@@ -176,6 +183,17 @@ function session(child: ChildProcess): Promise<McpSession> {
         records = [];
         notices = [];
         return outcome;
+      },
+      next(match, timeoutMs) {
+        if (exited) return Promise.resolve(undefined);
+        return new Promise((settle) => {
+          const timer = setTimeout(() => {
+            awaited = awaited.filter((waiter) => waiter !== entry);
+            settle(undefined);
+          }, timeoutMs);
+          const entry = { match, settle: (record: MeasurementRecord | undefined) => { clearTimeout(timer); settle(record); } };
+          awaited.push(entry);
+        });
       },
       async close() {
         if (exited) return;

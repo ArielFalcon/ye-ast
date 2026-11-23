@@ -9,7 +9,9 @@
  *   node --import tsx scripts/latency-bench.ts --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]
  *
  * Scenarios: `unchanged` (interleaved rounds of every family on a warm live process), `edit-idle` (an edit, 2 s idle,
- * then the call), `edit-now` (an edit, then the call at once), `new-process` (the first call of a new process over the
+ * then the call), `edit-now` (an edit, then the call at once), `edit-settled` (an edit, then the call once the
+ * server's watcher reported its refreshes settled, ADR-0152; a missing report within a minute is counted, never waited
+ * for longer), `idle` (the server's CPU over 10 s without calls, and its open files), `new-process` (the first call of a new process over the
  * warm disk cache), `three-servers` (three processes on one clone ask at once), `revision` (a first-parent sha sequence
  * on an untrusted clone, first and repeated call per sha) and `rss-slope` (`--edits` edits, each followed by the next
  * family's call). Every live scenario first runs one round that warms the process (`first-round`). `--quick` asks
@@ -18,6 +20,7 @@
  * `<out>/latency-report.json` and `<out>/latency-report.md`; exits 1 when a call wrote no query line.
  */
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { loadavg, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -29,8 +32,12 @@ import { cellSummary, cellTable, sampleOf, slope, type CallSample, type CellSumm
 const USAGE = "usage: node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>] | --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]";
 const FAMILIES = ["callers", "trace", "impact", "outline", "importers", "entrypoints", "workspace"] as const;
 const QUICK = { families: ["callers", "outline"], scenarios: ["unchanged", "edit-now"], repetitions: 5 } as const;
-const SCENARIOS = ["unchanged", "edit-idle", "edit-now", "new-process", "three-servers", "revision", "rss-slope"] as const;
+const SCENARIOS = ["unchanged", "edit-idle", "edit-now", "edit-settled", "idle", "new-process", "three-servers", "revision", "rss-slope"] as const;
 const IDLE_MS = 2_000;
+/** How long `edit-settled` waits for the watcher's report before it counts the edit as unsettled and calls anyway. */
+const SETTLE_GUARD_MS = 60_000;
+/** The window `idle` reads the server's CPU over. */
+const IDLE_WINDOW_MS = 10_000;
 
 type Scenario = (typeof SCENARIOS)[number];
 
@@ -129,6 +136,17 @@ async function measuredCall(session: McpSession, call: ToolCall, snapshot: Snaps
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
+/** The CPU time a process used so far, from `ps` (user plus system, centisecond resolution). */
+function cpuMsOf(pid: number): number {
+  const [minutes = "0", seconds = "0"] = execFileSync("ps", ["-o", "time=", "-p", String(pid)], { encoding: "utf8" }).trim().split(":");
+  return Math.round((Number(minutes) * 60 + Number(seconds)) * 1000);
+}
+
+/** The files, sockets and pipes a process holds open, from `lsof`. */
+function openFilesOf(pid: number): number {
+  return execFileSync("lsof", ["-p", String(pid)], { encoding: "utf8" }).trim().split("\n").length - 1;
+}
+
 async function benchRepository(options: Options, repo: CorpusRepository, recorder: Recorder): Promise<void> {
   const scratch = mkdtempSync(join(tmpdir(), "ye-ast-latency-bench-"));
   const home = join(scratch, "home");
@@ -170,6 +188,25 @@ async function benchRepository(options: Options, repo: CorpusRepository, recorde
     if (wants("edit-now")) {
       log("edit-now");
       for (let r = 0; r < options.repetitions; r += 1) await round("edit-now", edit);
+    }
+    if (wants("edit-settled")) {
+      log("edit-settled");
+      const settles: (number | null)[] = [];
+      for (let r = 0; r < options.repetitions; r += 1) {
+        await round("edit-settled", async () => {
+          const started = performance.now();
+          const settled = session.next((record) => record.event === "watch" && record.outcome === "settled", SETTLE_GUARD_MS);
+          edit();
+          settles.push((await settled) === undefined ? null : Math.round(performance.now() - started));
+        });
+      }
+      recorder.extras.push({ repo: repo.name, scenario: "edit-settled", settleMs: settles, unsettled: settles.filter((ms) => ms === null).length });
+    }
+    if (wants("idle")) {
+      log("idle");
+      const cpuBefore = cpuMsOf(session.pid);
+      await sleep(IDLE_WINDOW_MS);
+      recorder.extras.push({ repo: repo.name, scenario: "idle", windowMs: IDLE_WINDOW_MS, cpuMs: cpuMsOf(session.pid) - cpuBefore, openFiles: openFilesOf(session.pid) });
     }
     if (wants("new-process")) {
       log("new-process");
