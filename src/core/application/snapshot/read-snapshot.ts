@@ -5,7 +5,7 @@ import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { DerivedFactDisk } from "../../ports/derived-fact-store.port.ts";
-import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import type { DerivedFacts, KeyedBy } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { EntrypointExtractor, EntrypointReading, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { LiveFault } from "../../ports/live-queries.port.ts";
@@ -96,18 +96,22 @@ export interface SnapshotDataCache {
    * Starts one snapshot read: the entries it and the reads before it use are what a floor budget keeps (ADR-0112), and
    * what its repository's recent contents use is what the working-set floor measures (ADR-0147).
    */
-  beginRead(of?: SnapshotReadContent): void;
+  beginRead(of?: SnapshotReadContent): SnapshotReading;
   /** Groups the reads made until the returned function is called into one read, so a query over many snapshots holds what all of them used (ADR-0121). */
   beginQuery(): () => void;
+  /** A lookup on the cache itself counts for the content of the latest read; one on a `SnapshotReading`, for the content of its read. */
   get(key: string): SnapshotData | undefined;
   /** Keeps `data` after its round trip and answers the frozen value it keeps; `undefined` when it keeps nothing. */
-  put(key: string, data: SnapshotData): SnapshotData | undefined;
+  put(key: string, data: SnapshotData, keyedBy?: KeyedBy): SnapshotData | undefined;
   /** A derived fact (ADR-0035), frozen; facts share the budget and the eviction order and write no `cache` line. */
   getFact(key: string): unknown;
-  putFact(key: string, json: string): FactAdmission;
+  putFact(key: string, json: string, keyedBy?: KeyedBy): FactAdmission;
   /** The bytes the cache holds now, how many of them are derived facts, and the floor or cap it evicts above. */
   usage(): { factBytes: number; retainedBytes: number; floorBytes: number };
 }
+
+/** The lookups and admissions of one snapshot read, counted for the content it reads whatever read began after it (ADR-0147). */
+export type SnapshotReading = Pick<SnapshotDataCache, "get" | "put" | "getFact" | "putFact">;
 
 export interface PreparedCommit {
   /** The hold that owns the prepared sources, for the lifetime of this preparation. */
@@ -127,7 +131,7 @@ export interface PreparedCommit {
    * besides the sources the output depends on; an output `admit` refuses is answered as produced and not kept. Absent
    * where nothing is retained.
    */
-  retained?<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean): Promise<T>;
+  retained?<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal, admit?: (output: T) => boolean, keyedBy?: KeyedBy): Promise<T>;
   /** The derived facts of this snapshot's files, kept between requests by content (ADR-0035). Absent where nothing is retained. */
   facts?: DerivedFacts;
 }

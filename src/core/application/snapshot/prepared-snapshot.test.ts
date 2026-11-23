@@ -5,7 +5,7 @@ import { createWorkspaceImpactQueries } from "../topology/workspace-impact.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createEntrypointQueries } from "../entrypoints/entrypoint-queries.ts";
-import { withSnapshotPreparation } from "./prepared-snapshot.ts";
+import { snapshotRetention, withSnapshotPreparation } from "./prepared-snapshot.ts";
 import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
@@ -186,7 +186,8 @@ test("a failed export is not retained for the next consumer", async () => {
 
 function dataCache(): SnapshotDataCache {
   const entries = new Map<string, SnapshotData>();
-  return { beginRead: () => {}, beginQuery: () => () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: (_key, json) => ({ admitted: false, entryBytes: 0, evicted: 0, value: JSON.parse(json) }), usage: () => ({ factBytes: 0, retainedBytes: 0, floorBytes: 0 }) };
+  const cache: SnapshotDataCache = { beginRead: () => cache, beginQuery: () => () => {}, get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: (_key, json) => ({ admitted: false, entryBytes: 0, evicted: 0, value: JSON.parse(json) }), usage: () => ({ factBytes: 0, retainedBytes: 0, floorBytes: 0 }) };
+  return cache;
 }
 
 test("the extractor reads over the hold of the read that owns the sources and the facts the snapshot cache keeps for them", async () => {
@@ -459,4 +460,23 @@ test("deadline findings are not reused as a completed extraction", async () => {
   assert.deepEqual(complete.value.value.entrypoints.value, []);
   assert.equal(log.reads, 1);
   assert.equal(log.extracts, 2);
+});
+
+test("overlapping reads of two repositories charge each repository's own working set, so the floor is the larger one and not their sum", async () => {
+  const snapshotCache = createSnapshotDataCache("working-set");
+  const retentionOf = (repository: string) => snapshotRetention({ snapshotCache, digest: { of: (value) => value } }, { repository, snapshot: "revision" }, "identity", [repository], "untrusted")!;
+  const [large, small] = [retentionOf("/large"), retentionOf("/small")];
+  large.lookup();
+  small.lookup();
+  const retained = () => snapshotCache.usage().retainedBytes;
+  large.keepSources([{ path: "src/a.ts", content: "l".repeat(3000) }]);
+  const largeSources = retained();
+  small.keepSources([{ path: "src/b.ts", content: "s".repeat(1000) }]);
+  const smallSources = retained() - largeSources;
+  await large.output("slot", async () => "o".repeat(500));
+  await large.facts.ofInputs("fact", { at: 1 }, async () => "f".repeat(300));
+  const largeOutput = retained() - largeSources - smallSources;
+
+  assert.ok(smallSources > 0 && largeOutput > 0);
+  assert.equal(snapshotCache.usage().floorBytes, largeSources + largeOutput);
 });

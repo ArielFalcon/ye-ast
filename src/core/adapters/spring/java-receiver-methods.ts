@@ -166,7 +166,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
             return receiverMethodAt(source.invocations.get(callKey(line, column, member)), source, resolver, proves) ?? UNKNOWN;
           });
         });
-      });
+      }, "request");
       for (const [index, site] of entries) results[index] = readings[placeIndex.get(callKey(site.line, site.column, site.member))!]!;
     }
     return results;
@@ -180,7 +180,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         const results = keeping === undefined ? await resolved(sites, signal) : await keptByReads(sites, signal, keeping);
         if (signal?.aborted) throw new DeadlineCut(results);
         return results;
-      });
+      }, "request");
     } catch (error) {
       if (error instanceof DeadlineCut) return error.results;
       throw error;

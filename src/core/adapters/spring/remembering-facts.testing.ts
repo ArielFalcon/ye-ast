@@ -1,20 +1,22 @@
 import { frozenValue } from "../../domain/shared/frozen-value.ts";
-import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import type { DerivedFacts, KeyedBy } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 
 export const java = (name: string, lines: readonly string[], directory = "app"): SourceFile => ({ path: `src/main/java/${directory}/${name}.java`, content: `${lines.join("\n")}\n` });
 export const edited = (file: SourceFile, replace: [string, string]): SourceFile => ({ path: file.path, content: file.content.replace(...replace) });
 
-/** Derived facts in memory, frozen as the snapshot data cache answers them (ADR-0126): what each derivation did is listed in `derived` (`slot path`) and in `reads` (`hit` and `miss` of `ofReads`, in all and by slot). */
-export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: { hits: number; misses: number }; readsOf: (slot: string) => { hits: number; misses: number } } {
+/** Derived facts in memory, frozen as the snapshot data cache answers them (ADR-0126): what each derivation did is listed in `derived` (`slot path`) and in `reads` (`hit` and `miss` of `ofReads`, in all and by slot), and what each slot's key grows with in `keyedBy`. */
+export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: { hits: number; misses: number }; readsOf: (slot: string) => { hits: number; misses: number }; keyedBy: Map<string, KeyedBy> } {
   const kept = new Map<string, string>();
   const entries = new Map<string, string>();
   const derived: string[] = [];
+  const keyedBy = new Map<string, KeyedBy>();
   const reads = { hits: 0, misses: 0 };
   const bySlot = new Map<string, { hits: number; misses: number }>();
   const tallyOf = (slot: string) => bySlot.get(slot) ?? bySlot.set(slot, { hits: 0, misses: 0 }).get(slot)!;
   return {
     derived,
+    keyedBy,
     reads,
     readsOf: (slot) => ({ ...tallyOf(slot) }),
     ofFile(slot, file, derive) {
@@ -25,7 +27,8 @@ export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: {
       }
       return frozenValue(kept.get(key)!) as never;
     },
-    async ofInputs(slot, inputs, derive) {
+    async ofInputs(slot, inputs, derive, keyed = "content") {
+      keyedBy.set(slot, keyed);
       const key = JSON.stringify([slot, inputs]);
       if (!kept.has(key)) {
         derived.push(slot);
@@ -33,7 +36,8 @@ export function rememberingFacts(): DerivedFacts & { derived: string[]; reads: {
       }
       return frozenValue(kept.get(key)!) as never;
     },
-    async ofReads(slot, subject, answers, derive) {
+    async ofReads(slot, subject, answers, derive, keyed = "content") {
+      keyedBy.set(slot, keyed);
       const key = JSON.stringify([slot, subject]);
       const entry = entries.has(key) ? (frozenValue(entries.get(key)!) as { value: never; reads: [string, string][] }) : undefined;
       if (entry !== undefined && entry.reads.every(([question, answer]) => answers.answerIfKnown(question) === answer)) {

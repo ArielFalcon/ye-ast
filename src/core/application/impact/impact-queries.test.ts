@@ -32,7 +32,8 @@ import type { ModuleDependency } from "../../domain/impact/module-dependency.ts"
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import { withSnapshotPreparation } from "../snapshot/prepared-snapshot.ts";
 import type { ParseHold, ParseHolds } from "../../ports/parse-holds.port.ts";
-import type { SnapshotDataCache } from "../snapshot/read-snapshot.ts";
+import type { SnapshotDataCache, SnapshotReadContent } from "../snapshot/read-snapshot.ts";
+import type { KeyedBy } from "../../ports/derived-facts.port.ts";
 import type { TypeBindings, TypeBindingsAnswer, TypeTarget } from "../../ports/type-bindings.port.ts";
 import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 
@@ -2642,7 +2643,8 @@ test("the reverse lookup keeps each source's alignment only for an index the ind
   const kept = async (cache: boolean): Promise<string[]> => {
     const real = createSnapshotDataCache(RETAINED_BYTES);
     const slots: string[] = [];
-    const snapshotCache = { ...real, putFact: (key: string, json: string) => (slots.push(key), real.putFact(key, json)) };
+    const recording = <T extends Pick<SnapshotDataCache, "putFact">>(cache: T): T => ({ ...cache, putFact: (key: string, json: string, keyedBy?: KeyedBy) => (slots.push(key), cache.putFact(key, json, keyedBy)) });
+    const snapshotCache = recording({ ...real, beginRead: (of?: SnapshotReadContent) => recording(real.beginRead(of)) });
     const nodes = [fakeNode("Svc", "class", SVC_FILE, 2, 9), fakeNode("get", "method", SVC_FILE, 4, 6), fakeNode("Cmp", "class", CMP_FILE, 2, 9), fakeNode("viaSvc", "method", CMP_FILE, 5, 7)];
     const edges = [{ from: "Svc", to: "get", kind: "contains" }, { from: "Cmp", to: "viaSvc", kind: "contains" }];
     const unresolved = [{ from: "viaSvc", name: "this.svc.get", kind: "calls", file: CMP_FILE, line: 6, column: 4 }];
