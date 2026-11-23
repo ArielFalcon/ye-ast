@@ -14,11 +14,8 @@ import { takeCacheFlag } from "../cli/cache-flag.ts";
 import { EXIT_CODE, run, type CliIo } from "../cli/main.ts";
 import { cacheDirectoryRefusal } from "./cache-directory-refusal.ts";
 import { createEntrypointQueries } from "../core/application/entrypoints/entrypoint-queries.ts";
-import { trustOf } from "../core/application/snapshot/read-snapshot.ts";
-import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
-import { exportSelection } from "../core/domain/shared/scope.ts";
-import { WRITTEN_UNIVERSE_VERSION, canMoveLiveListing, isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
-import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
+import type { LiveDeps } from "../core/application/live/live-tree.ts";
+import { WRITTEN_UNIVERSE_VERSION, isWritten } from "../core/domain/snapshot/live-export.ts";
 import { isTypeCheckerInput } from "../core/domain/languages/typescript.ts";
 import { createRevisionSources } from "../core/application/snapshot/revision-sources.ts";
 import type { IndexRetentionPolicy } from "../core/ports/index-cache.port.ts";
@@ -95,8 +92,7 @@ import { installedVersion, ownVersion } from "./installed-versions.ts";
 import { measuredAnswerMemo, measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWatch, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
 import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
 import { queriesFirst } from "./priming-turns.ts";
-import { watchLive } from "../core/application/live/live-watch.ts";
-import { isEngineEntry } from "../core/ports/staging-rules.ts";
+import { warmLive, type LiveWarmingDeps } from "../core/application/live/live-warming.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -398,33 +394,16 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     const request = { repo, repoId: named.ok ? named.value : basename(repo), ...(signal === undefined ? {} : { signal }) };
     return primeLive({ ...traceDeps, memberNames: merged.memberNames }, request, priority.turns);
   }, trigger, measurement);
-  const trusted = async (repo: string): Promise<boolean> => (await trustOf(trust ?? {}, repo).catch(() => "untrusted")) === "trusted";
-  const treeWatch = options.treeWatch ?? createTreeWatch();
-  const watch = (repo: string, repoId: string | undefined, selected: (path: string) => boolean, signal: AbortSignal | undefined) =>
-    watchLive(repo, {
-      treeWatch,
-      turns: priority.turns,
-      relevant: (path) => canMoveLiveListing(path, selected, isEngineEntry),
-      trusted: () => trusted(repo),
-      refresh: (stopped) => prime(repo, repoId, "watch", stopped),
-      report: measuredWatch(measurement),
-    }, [signal, options.signal]);
-  const warmLive = async (repo: string, signal?: AbortSignal, repoId?: string): Promise<string | null> => {
-    let watching: ReturnType<typeof watch>;
-    try {
-      if (!(await trusted(repo))) return null;
-      const scope = liveScope();
-      const selected = exportSelection(scope, matcher.matches, isExtractorConfiguration);
-      watching = watch(repo, repoId, selected, signal);
-      const warmed = await openLive(live, { repo, scope, selected, store: true, signal }, async () => undefined);
-      if (!warmed.ok) return redaction.redact(`ye-ast: live index not built (${warmed.fault.kind}): ${warmed.fault.detail}`);
-      await prime(repo, repoId, "launch", signal);
-      return null;
-    } catch (error) {
-      return redaction.redact(`ye-ast: live index not built: ${redaction.redactError(error)}`);
-    } finally {
-      watching?.launched();
-    }
+  const warming: LiveWarmingDeps = {
+    live,
+    matcher,
+    redaction,
+    ...trust,
+    treeWatch: options.treeWatch ?? createTreeWatch(),
+    turns: priority.turns,
+    prime,
+    reportWatch: measuredWatch(measurement),
+    closing: options.signal,
   };
   const bareWorkspace = createWorkspaceQueries(workspaceDeps, operation);
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
@@ -442,7 +421,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
   const { counted } = priority;
-  return { version, entrypoints: counted(entrypoints), impact: counted(impact), outline: counted(outline), trace: counted(trace), workspace: counted(workspace), workspaceImpact: counted(workspaceImpact), contractConsequences: counted(contractConsequences), decisions: counted(decisions), redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
+  return { version, entrypoints: counted(entrypoints), impact: counted(impact), outline: counted(outline), trace: counted(trace), workspace: counted(workspace), workspaceImpact: counted(workspaceImpact), contractConsequences: counted(contractConsequences), decisions: counted(decisions), redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive: (repo, signal, repoId) => warmLive(warming, repo, signal, repoId) };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {
