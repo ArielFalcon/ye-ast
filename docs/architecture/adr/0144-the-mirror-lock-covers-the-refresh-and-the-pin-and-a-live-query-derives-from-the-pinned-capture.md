@@ -62,7 +62,9 @@ refresh:
    releases it before taking the next. No two mirror locks are held at once.
 7. **Launch priming.** Priming pins a capture as a query does and runs its steps outside the lock. Before each step it
    checks for queries of its process; when one is in flight it ends the capture, waits for those queries and pins
-   again, so it primes the state the queries left.
+   again, so it primes the state the queries left. It checks them again right before it takes the lock and once it
+   holds it, before the refresh: a query that arrived meanwhile finds neither the lock nor a refresh of priming ahead
+   of its own, and priming waits for it as it does between steps (amended 2026-11-23, L32).
 8. **Unchanged.** What a refresh copies, syncs and commits; `unknown` with `index-unavailable` for a refresh cut by the
    deadline or a lock still held at it; the staleness notice, computed after the answer against the pinned manifest;
    the sync worker (ADR-0125 decision 4). An older state is never served as current: a query answers the state it

@@ -75,6 +75,13 @@ export interface OpenLive {
    */
   synthesized?: boolean | undefined;
   signal?: AbortSignal | undefined;
+  /**
+   * Asked right before the lock is taken and again once it is held, before the refresh: when it answers true the
+   * capture is given up as `unavailable`, with no lock taken in the first case and the lock released unused in the
+   * second, and nothing listed, reconciled or synced. Launch priming names the queries of its process here, so it never
+   * refreshes a state a query is about to refresh itself.
+   */
+  declined?: (() => boolean) | undefined;
   onStale?: ((notice: LiveStaleNotice) => void) | undefined;
   onStalenessUnavailable?: ((notice: { stateId: string } & ({ stage: "listing"; cause: VcsFault } | { stage: "comparison"; cause: MirrorFault })) => void | Promise<void>) | undefined;
 }
@@ -82,6 +89,8 @@ export interface OpenLive {
 function aborted(): Result<never, VcsFault> {
   return { ok: false, fault: { kind: "aborted", detail: "live query aborted" } };
 }
+
+const DECLINED = "the capture was given up for the queries of the process";
 
 function unavailable(detail: string): Result<never, LiveUnavailable> {
   return { ok: false, fault: { kind: "unavailable", detail } };
@@ -151,6 +160,7 @@ export async function openLive<A, P = undefined>(deps: LiveDeps, request: OpenLi
   const location: MirrorLocation = { repo, scope: digest.of(JSON.stringify(scope)) };
 
   if (signal?.aborted) return aborted();
+  if (request.declined?.() === true) return unavailable(DECLINED);
   const lock = await mirror.lock(location, signal);
   if (!lock.ok) return signal?.aborted ? aborted() : mirrorFailure(lock.fault);
   const pinnedStore: PinnedStore = { reader: undefined, generation: undefined };
@@ -161,6 +171,7 @@ export async function openLive<A, P = undefined>(deps: LiveDeps, request: OpenLi
     const pinned = await (async (): Promise<Result<{ tree: LiveTree; pinned: P; state: MirrorState; reshaped: boolean }, LiveFailure>> => {
       try {
         if (signal?.aborted) return aborted();
+        if (request.declined?.() === true) return unavailable(DECLINED);
         const refreshed = await refresh(deps, request, location, pinnedStore);
         if (signal?.aborted) return aborted();
         if (!refreshed.ok) return refreshed;

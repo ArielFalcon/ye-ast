@@ -12,8 +12,8 @@ import { openLive, type LiveTree } from "./live-tree.ts";
 const SCOPE = liveScope();
 const selected = pathSelection(SCOPE, () => false);
 
-function query(fake: FakeLive, options: { store?: boolean; synthesized?: boolean; onStale?: (notice: LiveStaleNotice) => void; signal?: AbortSignal } = {}, use: (tree: LiveTree) => Promise<unknown> = async (tree) => tree) {
-  return openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: options.store ?? true, synthesized: options.synthesized, onStale: options.onStale, signal: options.signal }, use);
+function query(fake: FakeLive, options: { store?: boolean; synthesized?: boolean; onStale?: (notice: LiveStaleNotice) => void; signal?: AbortSignal; declined?: () => boolean } = {}, use: (tree: LiveTree) => Promise<unknown> = async (tree) => tree) {
+  return openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: options.store ?? true, synthesized: options.synthesized, onStale: options.onStale, signal: options.signal, declined: options.declined }, use);
 }
 
 async function tree(fake: FakeLive, store = true, synthesized = false): Promise<LiveTree> {
@@ -165,6 +165,50 @@ test("a lock still held when the signal aborts, or a refresh cut by it, is unava
   assert.equal(!built.ok && built.fault.kind, "unavailable");
   assert.deepEqual(cut.held, { locks: 1, released: 1 });
   assert.equal(cut.state.current?.fullBuildStateId, "");
+});
+
+test("a capture declined before the lock takes no lock and lists, reconciles and builds nothing; one not declined is refreshed as any other", async () => {
+  const declined = fakeLive({ "src/A.java": "1" });
+
+  const given = await query(declined, { declined: () => true });
+
+  assert.equal(!given.ok && given.fault.kind, "unavailable");
+  assert.deepEqual(declined.calls, []);
+  assert.deepEqual(declined.held, { locks: 0, released: 0 });
+  assert.equal(declined.state.current, null);
+
+  const kept = fakeLive({ "src/A.java": "1" });
+  let asked = 0;
+  const answered = await query(kept, { declined: () => {
+    asked += 1;
+    return false;
+  } });
+  assert.ok(answered.ok);
+  assert.equal(kept.builds, 1);
+  assert.equal(asked, 2, "asked before the lock and once it is held");
+});
+
+test("a capture declined once its lock is held releases it before listing, reconciling or building anything", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+
+  const given = await query(fake, { declined: () => fake.held.locks > 0 });
+
+  assert.equal(!given.ok && given.fault.kind, "unavailable");
+  assert.deepEqual(fake.calls, ["lock"]);
+  assert.deepEqual(fake.held, { locks: 1, released: 1 });
+  assert.equal(fake.builds, 0);
+  assert.equal(fake.state.current, null);
+});
+
+test("the lock is released when the decline asked once it is held throws", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+
+  await assert.rejects(query(fake, { declined: () => {
+    if (fake.held.locks > 0) throw new Error("boom");
+    return false;
+  } }), /boom/);
+
+  assert.deepEqual(fake.held, { locks: 1, released: 1 });
 });
 
 test("the lock is released when the answer throws", async () => {
