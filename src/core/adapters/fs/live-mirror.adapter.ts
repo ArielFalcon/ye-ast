@@ -43,6 +43,8 @@ export interface LiveMirrorDeps {
    */
   writes: (path: string) => boolean;
   pid: () => number;
+  /** When this process started, in epoch milliseconds: a lock naming its pid written before then is another process's. */
+  startedAt: () => number;
   isAlive: (pid: number) => boolean;
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   copyFile: (from: string, to: string) => Promise<void>;
@@ -55,6 +57,7 @@ export const defaultLiveMirrorDeps: LiveMirrorDeps = {
   ownerUid: process.getuid?.(),
   writes: () => true,
   pid: () => process.pid,
+  startedAt: () => performance.timeOrigin,
   isAlive: (pid) => {
     try {
       process.kill(pid, 0);
@@ -140,6 +143,11 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
     }
   }
 
+  async function writtenBefore(file: string, time: number): Promise<boolean> {
+    const written = await lstat(file).catch(() => undefined);
+    return written !== undefined && written.mtimeMs < time;
+  }
+
   async function readHolder(file: string): Promise<{ text: string; pid: number | null } | null> {
     let text: string;
     try {
@@ -209,7 +217,11 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
     }
   }
 
-  /** The head of the process's line contends for the lock file: a live holder it finds is another process, which it polls. */
+  /**
+   * The head of the process's line contends for the lock file. A dead or unreadable holder is stale, and so is one naming
+   * this process's pid that was written before the process started (an earlier process that had the pid); a live holder
+   * is another process, or a part of this one outside the line, which it polls.
+   */
   async function contend(file: string, pid: number, signal: AbortSignal | undefined): Promise<Result<void, MirrorFault>> {
     for (;;) {
       if (signal?.aborted) return waitAborted(file);
@@ -218,7 +230,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       if (created.value) return { ok: true, value: undefined };
       const holder = await readHolder(file);
       if (holder === null) continue;
-      if (holder.pid === null || !deps.isAlive(holder.pid)) {
+      if (holder.pid === null || !deps.isAlive(holder.pid) || (holder.pid === pid && (await writtenBefore(file, deps.startedAt())))) {
         const again = await readHolder(file);
         if (again !== null && again.text === holder.text) await rm(file, { force: true }).catch(() => undefined);
         continue;

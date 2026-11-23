@@ -46,9 +46,11 @@ to a poll. No other process and no worker thread held the lock in a single-serve
    the retention sweep and of the debris cleanup take a free line without waiting and are a no-op when the line is
    taken, as they are when the lock file exists.
 2. **Only the head contends.** The head of the line takes the lock file exactly as before: it creates the file, treats
-   a dead or unreadable holder as stale, and polls a live holder every 50 ms. A live holder the head finds is therefore
-   another process, or a part of this one outside the line (a worker thread). The other acquisitions of the line wait
-   for their turn without polling.
+   a dead or unreadable holder as stale, and polls a live holder every 50 ms. A holder naming this process's pid whose
+   lock file was written before the process started is stale too: an earlier process had the pid (a restarted
+   container's pid 1). A live holder the head finds is therefore another process, or a part of this one outside the
+   line (a worker thread), which wrote the file after the process started. The other acquisitions of the line wait for
+   their turn without polling.
 3. **A release hands the turn on.** Releasing a lock removes the file while it still names this pid, then gives the
    turn to the next acquisition of the line, in the order they joined. A release runs once per lock: a second call of
    the same handle does nothing, so it can neither remove the file the next holder created with the same pid nor hand
