@@ -72,7 +72,7 @@ import { createModuleDependenciesReader } from "../core/adapters/typescript/modu
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
 import type { LibraryPlacedCallSiteReader, LibraryReading } from "../core/ports/library-signatures.port.ts";
-import type { DataEffectReader } from "../core/domain/trace/data-effect-site.ts";
+import type { DataEffectReader } from "../core/ports/data-effect-reader.port.ts";
 import type { ParseHold } from "../core/ports/parse-holds.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";

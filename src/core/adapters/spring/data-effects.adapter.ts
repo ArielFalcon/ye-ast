@@ -1,36 +1,41 @@
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
-import { comparePlacement, type DataEffectReader, type PlacedDataEffect, type UnplacedCause } from "../../domain/trace/data-effect-site.ts";
+import { comparePlacement, type PlacedDataEffect, type UnplacedCause } from "../../domain/trace/data-effect-site.ts";
+import type { DataEffectReader } from "../../ports/data-effect-reader.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { DataEffect } from "../../domain/trace/trace-fact.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import type { Node } from "web-tree-sitter";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
-import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, resolve } from "./java-declared-types.ts";
 import { enclosingType, withJavaSourceUnits } from "./java-project.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { unitsOf, type Units } from "../../domain/shared/work-units.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { invocationsOf, type Invocation } from "./java-invocations.ts";
-import { callKey, createResolver, hasVarargs } from "./java-receiver-methods.ts";
+import { callKey, createResolver, hasVarargs, receiverBindingsOf } from "./java-receiver-methods.ts";
 import { createJavaProject, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { mapperDeclarations, mapperEffect, mapperStatements, type MapperDeclarations, type MapperStatements } from "./mybatis-mappers.ts";
 import { DATA_CLIENTS, ENTITY_OPERATIONS, QUERY_CONFIGURATION, QUERY_FACTORIES, MODIFYING_ANNOTATION, QUERY_ANNOTATION, QUERY_OPERATIONS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 
 export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
-  return { placed: (sources, options) => unitsOf(dataEffectUnits(parser, sources), options?.between) };
+  return { placed: (sources, options) => unitsOf(dataEffectUnits(parser, sources, options?.facts), options?.between) };
 }
 
-/** The data effects of `sources` in units (ADR-0156): one per source parsed, per file whose bindings are read and per type walked. */
-function dataEffectUnits(parser: JavaParser, sources: readonly SourceFile[]): Units<PlacedDataEffect[]> {
+/**
+ * The data effects of `sources` in units (ADR-0156): one per source parsed, per file whose bindings are read and per type
+ * walked. A file's receiver bindings read its own tree alone, so `facts` keeps them by its path and content (ADR-0159).
+ */
+function dataEffectUnits(parser: JavaParser, sources: readonly SourceFile[], facts: DerivedFacts | undefined): Units<PlacedDataEffect[]> {
   return withJavaSourceUnits(parser, function* (parse) {
     const { files, unparsed } = yield* parse(sources.filter(({ path }) => isJavaSource(path) && !isJvmTestFile(path)));
     const sites: PlacedDataEffect[] = unparsed.map(({ path, line }) => ({ site: { file: path, line, effect: undefined } }));
     const project = createJavaProject(files);
     const resolver = createResolver(project);
     const mappers = { declarations: mapperDeclarations(project), statements: mapperStatements(sources) };
-    const bindings = new Map<JavaFile, Map<string, ReceiverBinding>>();
+    const sourceOf = new Map(sources.map((source) => [source.path, source]));
+    const bindings = new Map<JavaFile, ReadonlyMap<string, ReceiverBinding>>();
     for (const file of files) {
-      bindings.set(file, new Map(javaReceiverBindings(file.root, { includeUnproven: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding])));
+      bindings.set(file, receiverBindingsOf(file, sourceOf.get(file.path), facts, "unproven"));
       yield;
     }
     for (const type of project.types) {
