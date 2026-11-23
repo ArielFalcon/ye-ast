@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { javaCallSitesOf, type JavaSiteReader } from "./java-call-sites.adapter.ts";
+import { createJavaCallSites, javaCallSitesOf, type JavaSiteReader } from "./java-call-sites.adapter.ts";
 import { stagedSelections } from "./java-call-site-owner.ts";
 import { invocationsOf } from "./java-invocations.ts";
 import { fieldBindings } from "./java-members.ts";
@@ -26,7 +26,7 @@ async function pipeline(files: readonly SourceFile[], libraries: readonly Librar
   const unproven: boolean[] = [];
   const capture: JavaSiteReader = {
     transport: "http",
-    read: (project, _configuration, _owned, _repo, _nested, proof) => {
+    *read(project, _configuration, _owned, _repo, _nested, proof) {
       proofs.push(proof);
       const call = project.types.flatMap(invocationsOf).find((invocation) => invocation.node.childForFieldName("name")?.text === "send");
       assert.ok(call !== undefined);
@@ -52,11 +52,35 @@ test("a library the parse left unread leaves the staged selection unproven", asy
 
 test("every reader of one pipeline walks the one reading of the project's calls", async () => {
   const read: unknown[] = [];
-  const reader = (transport: JavaSiteReader["transport"]): JavaSiteReader => ({ transport, read: (...[, , , , , , calls]) => (read.push(calls()), []) });
+  const reader = (transport: JavaSiteReader["transport"]): JavaSiteReader => ({ transport, *read(...[, , , , , , calls]) {
+    read.push(calls);
+    return [];
+  } });
 
   javaCallSitesOf(await createJavaParser(), [PORT], [], "probe", [reader("http"), reader("event")]);
 
   assert.equal(read.length, 2);
   assert.equal(read[0], read[1]);
   assert.ok((read[0] as { invocations: readonly unknown[] }).invocations.length > 0);
+});
+
+const CLIENT = { path: "src/main/java/app/Client.java", content: `package app;
+import org.springframework.web.client.RestTemplate;
+class Client {
+  private final RestTemplate rest = new RestTemplate();
+  String stock() { return rest.getForObject("http://stock/items", String.class); }
+  String order() { return rest.getForObject("http://orders/one", String.class); }
+}` };
+
+test("a reading given a turn awaits it between the sources it reads and answers the sites it answers without one; a turn that rejects ends the reading", async () => {
+  const reader = createJavaCallSites(await createJavaParser());
+  const files = [PORT, CLIENT, { ...PORT, path: "src/main/java/app/Copy.java", content: PORT.content.replaceAll("Controller", "Other").replaceAll("Port", "Gate").replaceAll("Sender", "Gatekeeper") }];
+  const without = await reader.placed(files, "probe");
+  let turns = 0;
+  const turned = await reader.placed(files, "probe", [], { between: async () => void (turns += 1) });
+
+  assert.ok(without.length > 0);
+  assert.deepEqual(turned, without);
+  assert.ok(turns >= files.length, `${turns} turns over ${files.length} sources`);
+  await assert.rejects(reader.placed(files, "probe", [], { between: async () => { throw new Error("cut"); } }), /cut/);
 });

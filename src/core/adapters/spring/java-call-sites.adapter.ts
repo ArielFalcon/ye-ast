@@ -7,23 +7,24 @@ import { compareCallSites, propagationOf, type CallSite, type CallSiteReader } f
 import { CALL_PLACES } from "./findings.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { withJavaSources } from "./java-project.ts";
+import { withJavaSourceUnits } from "./java-project.ts";
+import { allUnits, unitsOf, type Units } from "../../domain/shared/work-units.ts";
 import { configurationsOf, type Configuration } from "./application-config.ts";
 import { JavaEventReader } from "./event-call-sites.adapter.ts";
 import { JavaHttpReader } from "./http-call-sites.adapter.ts";
 import { createJavaProject, type JavaFile, type JavaProject } from "./java-symbols.ts";
 import { callSiteProofOf, type CallSiteProof } from "./java-call-site-owner.ts";
-import { javaCallsOf, type JavaCalls } from "./java-method-flow.ts";
+import { javaCallUnits, type JavaCalls } from "./java-method-flow.ts";
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 
 /** A reader of one kind of call site, over a project the snapshot was parsed into once and the calls every reader shares. */
 export interface JavaSiteReader {
   transport: CallSite["transport"];
-  read(project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string, includeNested: boolean | undefined, proof: CallSiteProof, calls: () => JavaCalls): CallSite[];
+  read(project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string, includeNested: boolean | undefined, proof: CallSiteProof, calls: JavaCalls): Units<CallSite[]>;
 }
 
-const httpSites: JavaSiteReader = { transport: "http", read: (project, configuration, owned, repo, includeNested, proof, calls) => new JavaHttpReader(project, configuration, owned, proof, calls()).sites(repo, includeNested) };
-const eventSites: JavaSiteReader = { transport: "event", read: (project, configuration, owned, repo, includeNested, proof, calls) => new JavaEventReader(project, configuration, owned, proof, calls()).sites(repo, includeNested) };
+const httpSites: JavaSiteReader = { transport: "http", read: (project, configuration, owned, repo, includeNested, proof, calls) => new JavaHttpReader(project, configuration, owned, proof, calls).siteUnits(repo, includeNested) };
+const eventSites: JavaSiteReader = { transport: "event", read: (project, configuration, owned, repo, includeNested, proof, calls) => new JavaEventReader(project, configuration, owned, proof, calls).siteUnits(repo, includeNested) };
 
 /**
  * The call sites of one repository's Java sources: each source is parsed once, and every reader walks the one project,
@@ -32,19 +33,26 @@ const eventSites: JavaSiteReader = { transport: "event", read: (project, configu
  * the first reader's transport: none of its calls can be read.
  */
 export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], repo: string, readers: readonly JavaSiteReader[], includeNested = false, jdks?: LibraryReading): CallSite[] {
+  return allUnits(javaCallSiteUnits(parser, files, libraries, repo, readers, includeNested, jdks));
+}
+
+/** `javaCallSitesOf` in units (ADR-0156): one per source parsed, per type whose calls are read and per file a reader walks. */
+function javaCallSiteUnits(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], repo: string, readers: readonly JavaSiteReader[], includeNested = false, jdks?: LibraryReading): Units<CallSite[]> {
   const readable = <T extends SourceFile>(sources: readonly T[]): T[] => sources.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
-  return withJavaSources(parser, (parse) => {
-    const { files: owned, unparsed: unreadable } = parse(readable(files));
-    const { files: foreign, unparsed: unreadableLibraries } = parse(readable(libraries));
+  return withJavaSourceUnits(parser, function* (parse) {
+    const { files: owned, unparsed: unreadable } = yield* parse(readable(files));
+    const { files: foreign, unparsed: unreadableLibraries } = yield* parse(readable(libraries));
     const project = createJavaProject([...owned, ...foreign]);
     const configuration = configurationsOf(files.filter((file) => isSpringConfigFile(file.path)));
     const held = new Set(owned);
     const transport = readers[0]?.transport;
     const unread = transport === undefined ? [] : unreadable.map((at): CallSite => ({ repo, file: at.path, line: at.line, symbol: basename(at.path, ".java"), transport, target: { status: "unknown", reason: "source-unreadable", evidence: [at] } }));
     const proof = callSiteProofOf(files, libraries, unreadable, unreadableLibraries, jdks);
-    let calls: JavaCalls | undefined;
-    const sharedCalls = (): JavaCalls => (calls ??= javaCallsOf(project, new JavaValueEvaluator(project, configuration, proof), proof));
-    const sites = readers.flatMap((reader) => reader.read(project, configuration, held, repo, includeNested, proof, sharedCalls));
+    const sites: CallSite[] = [];
+    if (readers.length > 0) {
+      const calls = yield* javaCallUnits(project, new JavaValueEvaluator(project, configuration, proof), proof);
+      for (const reader of readers) sites.push(...(yield* reader.read(project, configuration, held, repo, includeNested, proof, calls)));
+    }
     for (const site of sites) if (site.diagnostic?.source === "not-read" && unreadableLibraries.length > 0) {
       site.diagnostic = { ...site.diagnostic, unreadableSources: unreadableLibraries };
     }
@@ -77,6 +85,6 @@ export function createJavaEventCallSites(parser: JavaParser): CallSiteReader {
 export function createJavaCallSites(parser: JavaParser): CallSiteReader & LibraryPlacedCallSiteReader {
   return {
     of: async (files, repo, libraries = []) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites]),
-    placed: async (files, repo, libraries = [], options) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites], true, options?.libraries).map((site) => ({ site, ...CALL_PLACES.get(site) })),
+    placed: async (files, repo, libraries = [], options) => (await unitsOf(javaCallSiteUnits(parser, files, libraries, repo, [httpSites, eventSites], true, options?.libraries), options?.between)).map((site) => ({ site, ...CALL_PLACES.get(site) })),
   };
 }

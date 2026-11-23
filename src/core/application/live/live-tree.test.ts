@@ -185,7 +185,7 @@ test("a capture declined before the lock takes no lock and lists, reconciles and
   } });
   assert.ok(answered.ok);
   assert.equal(kept.builds, 1);
-  assert.equal(asked, 2, "asked before the lock and once it is held");
+  assert.equal(asked, 5, "asked before the lock, once it is held, once the listing is compared, once the build commits and before the pin");
 });
 
 test("a capture declined once its lock is held releases it before listing, reconciling or building anything", async () => {

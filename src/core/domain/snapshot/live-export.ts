@@ -1,7 +1,7 @@
 import { isJsonModuleResource } from "../languages/typescript.ts";
 import type { DeclaredScope, ExportSkipReason } from "../shared/fact.ts";
 import { declaredScope, isInMapScope } from "../map/entrypoint-map.ts";
-import type { ScopeRequest } from "../shared/scope.ts";
+import type { PathSelection, ScopeRequest } from "../shared/scope.ts";
 import { compareText } from "../shared/code-node.ts";
 
 interface Blob {
@@ -41,4 +41,15 @@ export function changedPaths(base: readonly Blob[], live: readonly Blob[]): stri
 /** The declared scope of a fact over a working tree: git's ignore rules decide what is listed. */
 export function liveScope(request?: ScopeRequest): DeclaredScope {
   return { ...declaredScope(request), ignored: "git" };
+}
+
+const GIT_STATE = new Set([".git/HEAD", ".git/index"]);
+
+/**
+ * Whether a change at `path`, relative to a working tree's root, can move the tree's live listing (ADR-0152): git's HEAD
+ * and index, and a path of the scope's selection that the listing can hold, which no engine entry is (`isEngineEntry`
+ * of the staging rules; it keeps the mirror itself out).
+ */
+export function canMoveLiveListing(path: string, selected: PathSelection, isEngineEntry: (path: string) => boolean): boolean {
+  return GIT_STATE.has(path) || (!isEngineEntry(path) && selected(path));
 }
