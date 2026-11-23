@@ -55,8 +55,9 @@ refresh:
    that claims a build but names no generation as a store that does not serve, and rebuilds it.
 5. **Bytes the pin does not hold.** A query that needs, after release, mirror bytes outside its sources (the live side
    of an of-change diff) copies them with each file's git blob id checked against the pinned export. A file whose
-   bytes moved since the pin, because another process synced the mirror meanwhile, is not used: the answer is
-   `unknown` with reason `source-unreadable`, never one built from bytes of another state.
+   bytes moved since the pin, because another process synced the mirror meanwhile or its retention sweep discarded the
+   mirror, is not used: the answer is `unknown` with reason `source-unreadable`, never one built from bytes of another
+   state.
 6. **Several repositories.** A capture over several repositories pins each one under its own lock, in root order, and
    releases it before taking the next. No two mirror locks are held at once.
 7. **Launch priming.** Priming pins a capture as a query does and runs its steps outside the lock. Before each step it
@@ -77,8 +78,10 @@ refresh:
   for a store reads it, so no query pays a load it did not pay before.
 - An of-change query can answer `unknown` with `source-unreadable` when another process synced one of its changed
   files between its pin and its diff. The window is the of-change derivation; the next query answers the new state.
-- `CodeGraph.open` changed, so the staging rules version moves to 15 and every mirror is rebuilt once, through the index
-  cache when it holds the content (ADR-0129).
+- A store that cannot be opened right after a build or sync answers `unknown` with `index-unavailable`; there is no
+  fallback to reading it without a generation, which would read a store a later sync may rewrite.
+- `CodeGraph.open` changed, so the staging rules version moves (to 16 once merged with the ADR-0129 verification) and
+  every mirror is rebuilt once, through the index cache when it holds the content (ADR-0129).
 
 ## Not decided here
 
