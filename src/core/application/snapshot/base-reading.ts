@@ -1,3 +1,4 @@
+import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import { isReadSource, profileOf } from "../../domain/languages/profiles.ts";
 import type { BuildOutputEvidence, DeclaredBuildOutput, UnreadOutputReason } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput, Cut, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
@@ -343,6 +344,17 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       const memberProofs = memberProofContextOf(deps.relations, tree, declaredScope(request.scope));
       return prepared.retained(canonicalJson({ output: "origin-calls", index: source.digest, memberProofs }), produce, request.signal);
     });
+    const modules = deps.modules;
+    /**
+     * B8's module statements of one file, read over every source of the snapshot and kept per file under the snapshot's
+     * entry, whose listing is everything they read (ADR-0147).
+     */
+    const moduleStatements = modules === undefined ? undefined : {
+      statementsIn(file: string): Promise<readonly ModuleDependency[]> {
+        const produce = async () => (await modules.extract(tree.sources, { files: [file] })).dependencies.filter((dependency) => dependency.file === file);
+        return kept === undefined ? produce() : kept(canonicalJson({ output: "module-statements", file }), produce, request.signal);
+      },
+    };
     let reconciled: { targets: EdgeTargets; calls: ReconciledCalls } | undefined;
     const reconciledCalls = (targets: EdgeTargets, uses: DeclarationUses): ReconciledCalls | undefined => {
       if (syntaxOf === undefined) return undefined;
@@ -366,7 +378,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       edgeTargets(typed) {
         const read = origins();
         if (read === undefined) return undefined;
-        return createEdgeTargets({ origins: read, store, declarations, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources: tree.sources }, syntaxOf, proofs: relations, typed, inScope: narrowing.inScope });
+        return createEdgeTargets({ origins: read, store, declarations, modules: moduleStatements, syntaxOf, proofs: relations, typed, inScope: narrowing.inScope });
       },
       reconciledCalls,
       contradictedCalls(targets) {

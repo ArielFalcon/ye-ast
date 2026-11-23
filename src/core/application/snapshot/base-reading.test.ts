@@ -412,3 +412,38 @@ test("a stage whose query was aborted is never kept for the next query", async (
 
   assert.equal(line.asked(), 4);
 });
+
+test("B8's module statements of a file are read once across two queries of one content, also on a store without a digest, and again for another content or after an aborted query", async () => {
+  const store = fakeCodeGraph(
+    [fakeNode("file-b", "file", "src/b.ts", 1, 3), fakeNode("run", "function", "src/a.ts", 2, 4), fakeNode("helper-a", "function", "src/a.ts", 6, 8, "helper"), fakeNode("helper-b", "function", "src/b.ts", 1, 3, "helper")],
+    [{ from: "run", to: "helper-a", kind: "calls", line: 3, column: 2 }, { from: "file-b", to: "helper-b", kind: "contains" }],
+  );
+  const origins = () => ({ rootOrigins: async (sites: readonly unknown[]) => sites.map(() => ({ status: "complete", value: { kind: "repository", file: "src/b.ts" }, bare: true, evidence: [] })) }) as unknown as ImportOrigins;
+  const extracted: (readonly string[] | undefined)[] = [];
+  const modules: ModuleDependenciesReader = {
+    extract: async (_sources, options) => (extracted.push(options?.files), { files: [], unread: [], dependencies: [{ file: "src/a.ts", line: 1, endLine: 1, specifier: "./b", kind: "import", typeOnly: false, target: { kind: "repository", file: "src/b.ts" }, bindings: [{ local: "helper", imported: "helper", line: 1, column: 10, typeOnly: false, exportedAs: "helper" }] }] }),
+  };
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, importOrigins: origins, modules });
+  const [run] = store.symbolsByIds(["run" as GraphNodeId]);
+  const [edge] = store.outgoingEdges([run!.id], ["calls"]);
+  const files = [{ path: "src/a.ts", content: "a" }, { path: "src/b.ts", content: "b" }];
+  const verdict = async ({ prepared, hold, sources }: Awaited<ReturnType<typeof queryRead>>, signal?: AbortSignal) => {
+    const reading = readings.of({ tree: { export: { files: [], skipped: [] }, sources }, prepared, hold, store, snapshot: SHA, request: { repo: "/work/shop", ...(signal && { signal }) } });
+    const [answer] = await reading.edgeTargets()!.verdictsOf([{ edge: edge!, source: run!, target: store.symbolsByIds([edge!.target])[0]! }]);
+    hold.release();
+    return answer?.kind === "redirect" ? answer.to.file : answer?.kind;
+  };
+  const cache = createSnapshotDataCache("working-set");
+
+  assert.equal(await verdict(await queryRead(cache, files)), "src/b.ts");
+  assert.equal(await verdict(await queryRead(cache, files)), "src/b.ts");
+  assert.deepEqual(extracted, [["src/a.ts"]], "the second query reads no statement");
+  await verdict(await queryRead(cache, files.map((file) => ({ ...file, content: `${file.content}\n` }))));
+  assert.equal(extracted.length, 2, "an edit is another content");
+  const aborted = new AbortController();
+  aborted.abort();
+  const edited = files.map((file) => ({ ...file, content: `${file.content}!` }));
+  await verdict(await queryRead(cache, edited), aborted.signal);
+  await verdict(await queryRead(cache, edited));
+  assert.equal(extracted.length, 4, "an aborted query keeps nothing");
+});
