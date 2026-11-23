@@ -127,7 +127,7 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<"served" | "a
     }
   };
 
-  const server: Server = createServer({ pauseOnConnect: false }, (socket) => {
+  const server: Server = createServer((socket) => {
     pending += 1;
     clearTimeout(idle);
     void attach(socket).finally(() => {

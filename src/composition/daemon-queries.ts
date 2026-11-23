@@ -1,4 +1,3 @@
-import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 import type { WarmingFault } from "../core/application/live/live-warming.ts";
 import type { DaemonLink } from "../daemon/daemon-link.ts";
@@ -71,8 +70,7 @@ export function daemonBackedQueries(local: ComposedQueries, options: DaemonClien
   let mismatchSaid = false;
 
   const clientFor = async (repo: string, starting: boolean): Promise<DaemonDialectClient | undefined> => {
-    const key = canonicalJson(repo);
-    const known = clients.get(key);
+    const known = clients.get(repo);
     if (known !== undefined && !known.closed) return known;
     const configuration = { ...options.configuration() };
     const attachment = starting ? await options.link.attachStarting(repo, configuration, START_WAIT_MS) : await options.link.attach(repo, configuration);
@@ -83,7 +81,7 @@ export function daemonBackedQueries(local: ComposedQueries, options: DaemonClien
     }
     if (attachment.kind !== "attached") return undefined;
     const client = daemonDialectClient({ input: attachment.socket, output: attachment.socket }, (kind, line) => (kind === "measure" ? options.measure?.(line) : options.report(line)));
-    clients.set(key, client);
+    clients.set(repo, client);
     return client;
   };
 

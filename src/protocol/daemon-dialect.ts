@@ -136,7 +136,7 @@ export async function serveDaemonDialect(families: DaemonFamilies, streams: Dial
   });
   streams.input.resume();
   await reader.done;
-  for (const aborter of inFlight.values()) if (!streams.output.writable) aborter.abort();
+  if (!streams.output.writable) for (const aborter of inFlight.values()) aborter.abort();
   await Promise.all(running);
   unlisten();
 }

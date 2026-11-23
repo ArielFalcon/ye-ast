@@ -63,7 +63,7 @@ export function processHost(options: { signal: AbortSignal; indexCache?: string;
       if (!throughDaemon || options.daemon === undefined) return local;
       const launch = (): { repo: string; outputs: readonly DeclaredBuildOutput[] } | undefined => {
         const repo = launchOutputs?.root();
-        return repo === undefined ? undefined : { repo, outputs: launchOutputs!.outputs };
+        return launchOutputs === undefined || repo === undefined ? undefined : { repo, outputs: launchOutputs.outputs };
       };
       return daemonBackedQueries(local, { link: options.daemon, startsDaemon: true, measure: err, report: err, configuration: () => mcpConfiguration({ indexCache: options.indexCache, trustDirectory, launch: launch() }) });
     },

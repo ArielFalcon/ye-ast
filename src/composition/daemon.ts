@@ -60,7 +60,7 @@ export function processDaemonLink(directory: string, ownerUid: number): DaemonLi
 
 /** `ye-ast daemon`: the supervisor in the foreground until it is stopped, retires or stays idle. */
 export async function runDaemon(environment: DaemonEnvironment, signal: AbortSignal, err: (line: string) => void): Promise<number> {
-  const directory = environment.uid === undefined ? null : runtimeDirectory({ ...environment, tmpdir: tmpdir() });
+  const directory = runtimeDirectory({ ...environment, tmpdir: tmpdir() });
   if (directory === null || environment.uid === undefined) {
     err("ye-ast: the daemon needs Unix sockets and account ids; clients answer in process here");
     return EXIT_CODE.usage;

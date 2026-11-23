@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Socket } from "node:net";
 import type { WarmingFault } from "../core/application/live/live-warming.ts";
-import type { DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 import type { WorkerConfiguration } from "../daemon/handshake.ts";
 import { runWorkerHost, type ServeConnection } from "../daemon/worker-host.ts";
 import { serveDaemonDialect, type CallLines, type LineKind } from "../protocol/daemon-dialect.ts";
@@ -19,22 +18,16 @@ function servedByDaemon(line: string): string {
   }
 }
 
-function strings(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 /** The composition options a client's configuration names, read back from the wire. */
 export function compositionOf(configuration: WorkerConfiguration): Pick<CompositionOptions, "indexCache" | "cacheDirectory" | "trustDirectory" | "buildOutputs"> {
-  const { indexCache, cacheDirectory, trustDirectory, buildOutputs } = configuration as QueryConfiguration;
-  const declared = buildOutputs as { repo?: unknown; outputs?: unknown } | undefined;
-  const outputs = Array.isArray(declared?.outputs) ? (declared.outputs as DeclaredBuildOutput[]) : undefined;
-  const launch = strings(declared?.repo);
-  return {
-    ...(strings(indexCache) !== undefined && { indexCache: indexCache! }),
-    ...(strings(cacheDirectory) !== undefined && { cacheDirectory: cacheDirectory! }),
-    ...(strings(trustDirectory) !== undefined && { trustDirectory: trustDirectory! }),
-    ...(launch !== undefined && outputs !== undefined && { buildOutputs: (repo: string) => (repo === launch ? outputs : undefined) }),
-  };
+  const options: Pick<CompositionOptions, "indexCache" | "cacheDirectory" | "trustDirectory" | "buildOutputs"> = {};
+  for (const key of ["indexCache", "cacheDirectory", "trustDirectory"] as const) {
+    const value = configuration[key];
+    if (typeof value === "string") options[key] = value;
+  }
+  const declared = configuration.buildOutputs as QueryConfiguration["buildOutputs"];
+  if (typeof declared?.repo === "string" && Array.isArray(declared.outputs)) options.buildOutputs = (repo) => (repo === declared.repo ? declared.outputs : undefined);
+  return options;
 }
 
 /**
