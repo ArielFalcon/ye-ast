@@ -5,11 +5,9 @@ import { hasTyping } from "../../domain/languages/profiles.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames } from "../../ports/declared-member-names.port.ts";
-import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
-import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createGraphNavigation, isInside, placedBetween, placedMember } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
@@ -69,10 +67,10 @@ export interface EdgeTargetsDeps {
   origins: ImportOrigins;
   store: CodeGraphReader;
   /**
-   * The module statements that bind a root to a declaration: already read, or a reader asked file by file. Without them no
-   * edge is redirected.
+   * The module statements that bind a root to a declaration: already read, or one file's asked when it is first needed.
+   * Without them no edge is redirected.
    */
-  modules?: ModuleDependencies | { reader: ModuleDependenciesReader; sources: readonly SourceFile[] } | undefined;
+  modules?: ModuleDependencies | { statementsIn(file: string): Promise<readonly ModuleDependency[]> } | undefined;
   /** What a source's syntax states, read once per file; without it no kept edge names a receiver. */
   syntaxOf?: ((file: string) => Promise<DeclaredMemberNames>) | undefined;
   /**
@@ -202,7 +200,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   async function bindingsOf(file: string): Promise<ReadonlyMap<string, GraphSymbol>> {
     let held = bound.get(file);
     if (held === undefined) {
-      const dependencies = modules === undefined ? [] : "dependencies" in modules ? (extracted ??= Map.groupBy(modules.dependencies, (dependency) => dependency.file)).get(file) ?? [] : (await modules.reader.extract(modules.sources, { files: [file] })).dependencies.filter((dependency) => dependency.file === file);
+      const dependencies = modules === undefined ? [] : "dependencies" in modules ? (extracted ??= Map.groupBy(modules.dependencies, (dependency) => dependency.file)).get(file) ?? [] : await modules.statementsIn(file);
       const byLocal = new Map<string, GraphSymbol[]>();
       for (const [binding, declaration] of await importBindings(store, file, dependencies, declarations)) {
         if (binding.local !== undefined) byLocal.set(binding.local, [...(byLocal.get(binding.local) ?? []), declaration]);

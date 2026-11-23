@@ -10,6 +10,7 @@
   should be below 1 s", "without sacrificing functionality and quality", and "caches with robust stale policies".
 - Amends: [ADR-0045](0045-one-assembly-line-for-the-snapshot-reading.md) decision 2 (the retention of B6) and decision 3
   (a stage runs once per read)
+- Amended by: [ADR-0147](0147-the-snapshot-cache-floor-is-what-each-repositorys-recent-contents-used-charged-as-decoded-heap.md) (decision 6: B8's module statements are kept per file)
 - Related: [RFC-0040](../rfc/0040-resident-generations-and-answer-latency.md) §3.2, L16;
   [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md),
   [ADR-0063](0063-a-jdk-the-host-declares-is-the-library-signature-source.md),

@@ -2097,7 +2097,7 @@ test("a live callers query over an unchanged capture reads sources and relations
 
 test("a live callers query over an unchanged capture reads nothing again when the working set exceeds the floor budget", async () => {
   const live = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
-  const snapshotCache = createSnapshotDataCache(1, undefined, { floor: true });
+  const snapshotCache = createSnapshotDataCache("working-set");
   const counter = { calls: 0 };
   const run = () => liveRun(live, snapshotCache, { relationReader: relationsCounted(counter) });
 

@@ -32,7 +32,7 @@ export interface LiveSnapshotReaders {
  */
 export async function pinLiveSnapshot(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "derivedFactDisk" | "digest">, capture: LiveCapture, hold?: ParseHold, signal?: AbortSignal): Promise<Result<LiveSnapshotReaders, VcsFault>> {
   const keep: ReadScope["keep"] = hold === undefined ? (sources) => [...sources] : (sources) => hold.keep(sources);
-  const retention = snapshotRetention(deps, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export, capture.trust);
+  const retention = snapshotRetention(deps, { repository: capture.repo, snapshot: "live" }, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export, capture.trust);
   let retainedReading: Pick<CommitExtraction, "findings" | "readingCuts"> | undefined;
   /** The sources as read, the only ones retention stores; readers take the capture's own copies of them. */
   let read: readonly SourceFile[];

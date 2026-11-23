@@ -106,14 +106,15 @@ cache is.
 
 [ADR-0020](../adr/0020-host-budgeted-snapshot-memory-cache.md) permits an optional in-memory cache for completed SHA
 source reads and entrypoint extraction; [ADR-0026](../adr/0026-snapshot-data-may-retain-reader-outputs.md) adds the
-serialized relations and whole-universe module-dependency outputs, each as its own entry. [ADR-0021](../adr/0021-enable-snapshot-memory-cache-by-default.md) enables it by default with a floor, 128 MiB since [ADR-0127](../adr/0127-the-default-snapshot-cache-floor-is-the-working-set-the-corpus-measures.md) (32 MiB before), that [ADR-0112](../adr/0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) lets the entries of the latest reads exceed. A host overrides
+serialized relations and whole-universe module-dependency outputs, each as its own entry. [ADR-0021](../adr/0021-enable-snapshot-memory-cache-by-default.md) enables it by default with a floor that [ADR-0112](../adr/0112-the-default-snapshot-data-budget-never-evicts-what-the-latest-reads-used.md) lets the entries of the latest reads exceed. Since [ADR-0147](../adr/0147-the-snapshot-cache-floor-is-what-each-repositorys-recent-contents-used-charged-as-decoded-heap.md) the floor is not configured: it is the most that one repository's three latest contents of its live tree and of its revisions used (32 MiB before ADR-0127, 128 MiB before ADR-0147). A host overrides
 the budget with `composeQueries({ snapshotCacheBytes })` (also accepted by `composeCli`), which is then a hard cap; an explicit zero disables it. It is a composition setting, never a repository setting
 or an agent tool argument. Zero or an invalid byte budget disables retention.
 
-The budget counts UTF-8 bytes of retained keys and serialized data, including metadata. Admission evicts the
-least-recently-used entries until they fit; an entry larger than the whole budget is not admitted. The count excludes
-Node's heap bookkeeping, in-flight query data and transient serialization buffers. The cache stores serialized bytes,
-so it holds no source objects, ASTs, temporary-directory paths, open stores or final facts.
+The budget counts the heap of the retained entries: the UTF-8 bytes of each key and serialized value times the measured
+heap factor of a decoded, frozen value (ADR-0147). Admission evicts the least-recently-used entries until they fit; an
+entry larger than the whole budget is not admitted. The count excludes the cache's own bookkeeping, in-flight query data
+and transient serialization buffers. The cache holds plain values after their serialization round trip, so it holds no
+source objects, ASTs, temporary-directory paths, open stores or final facts.
 
 Every query still resolves its revision, reads current trust and lists the commit afresh; it writes the listed files
 into a fresh temporary directory only when a reader needs them ([ADR-0028](../adr/0028-lazy-export-materialization.md)):

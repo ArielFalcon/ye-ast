@@ -10,6 +10,8 @@
   default budget is a floor that the entries of the latest reads may exceed)
 - Amended by: [ADR-0127](0127-the-default-snapshot-cache-floor-is-the-working-set-the-corpus-measures.md) (decision 1: the
   default floor is 128 MiB)
+- Amended by: [ADR-0147](0147-the-snapshot-cache-floor-is-what-each-repositorys-recent-contents-used-charged-as-decoded-heap.md) (decision 1: the default floor is measured from use,
+  and every byte count is the decoded heap)
 - Related: [RFC-0006](../rfc/0006-configuration.md)
 
 ## Context
