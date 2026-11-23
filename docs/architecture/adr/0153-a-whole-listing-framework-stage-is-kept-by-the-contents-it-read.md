@@ -61,7 +61,14 @@ template parsing (~15 %) and resolution and merging (~40 %).
 
 - After an edit of a Java source in a mixed repository, both stages answer their kept outputs; the Java half of
   `relations` and the Spring entrypoints keep their own per-file recorded reads (RFC-0039).
+- Measured with the quick bench (`callers` and `outline`, `edit-now`, five calls, `main` `0261d1f5e` against this
+  decision, Apple M1 Max) on jhipster-monolith/application with the edit on a Java source: `relations` 188 → 21 ms and
+  `entrypoints` 86 → 36 ms per query, `callers` p50/p75 790/794 → 585/622 ms; `outline` and the unchanged cells moved
+  within noise.
 - An edit of a TypeScript source or a named template still derives the stage in full: no gain on a frontend-only edit.
+  With the bench's default edit (a TypeScript file) the stage lines stayed within noise: jhipster `relations` 169 → 172
+  ms, realworld-nx/frontend 51 → 52 ms, petclinic/frontend-angular 64 → 67 ms (the recorded reads and the serialization
+  of the kept output cost 1-3 ms on a miss).
 - The kept outputs are proven equal to a whole-listing run on petclinic/frontend-angular, realworld-nx/frontend,
   jhipster-monolith/application and shopizer/admin: cold, kept, and after modifying, adding, deleting and renaming
   TypeScript and Java files and editing a template (digest of the JSON output, all steps equal).
