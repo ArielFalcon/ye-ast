@@ -1,6 +1,6 @@
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import { exportSelection } from "../../domain/shared/scope.ts";
-import { canMoveLiveListing, liveScope } from "../../domain/snapshot/live-export.ts";
+import { canMoveLiveListing, liveScope, nothingUnderMovesLiveListing } from "../../domain/snapshot/live-export.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { Redaction } from "../../ports/redaction.port.ts";
 import { isEngineEntry } from "../../ports/staging-rules.ts";
@@ -42,10 +42,13 @@ export async function warmLive(deps: LiveWarmingDeps, repo: string, signal?: Abo
     if (!(await trusted())) return null;
     const scope = liveScope();
     const selected = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
+    const ignored = await deps.live.workingTree.ignoredDirectories(repo, signal);
+    const ignoredDirectories = new Set(ignored.ok ? ignored.value : []);
     watching = watchLive(repo, {
       treeWatch: deps.treeWatch,
       turns: deps.turns,
       relevant: (path) => canMoveLiveListing(path, selected, isEngineEntry),
+      skipped: (path) => nothingUnderMovesLiveListing(path, ignoredDirectories, isEngineEntry),
       trusted,
       refresh: (stopped) => deps.prime(repo, repoId, "watch", stopped),
       report: deps.reportWatch,

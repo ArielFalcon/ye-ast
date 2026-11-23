@@ -46,7 +46,16 @@ yields to the queries of its process before it takes the lock and between steps.
    (the selection the mirror's listing applies). The mirror itself lives under `<repo>/.ye-ast-graph/live/`, so without
    the engine-entry rule every refresh would write events that start the next one. An event without a path is kept.
    Paths git ignores are not filtered: git decides them at the listing, and such an event costs one refresh that proves
-   the tree unchanged.
+   the tree unchanged. The watcher does not descend where no change can move the listing (amended 2026-11-23 after the
+   phase-3 review, measured on Linux): an engine entry other than `.git` itself and its `HEAD` and `index`, and a
+   directory an ignore pattern excludes whole, which git names when the watcher opens (`git ls-files --others --ignored
+   --exclude-standard --directory`, kept to what `git check-ignore` matches, so a directory holding a tracked file or
+   only ignored files is still watched). On Linux the platform opens one inotify watch per directory and walks the tree
+   synchronously when it opens: on an Angular workspace with its `node_modules` (7,481 directories) that walk blocked the
+   event loop 213-284 ms, opened 7,591 watches and added ~80-110 MB of RSS; skipping what git ignores left 123 watches
+   and 6.9 ms. A directory ignored after the watcher opened is watched until the next launch, and one un-ignored after it
+   opened is not: either costs only the refresh ahead of the next query, never an answer, since each query proves
+   freshness itself. When git cannot name them, only engine entries are skipped.
 3. **Dirty flag, no timer.** A kept event sets the repository dirty and, when no refresh of the watcher runs, starts
    one: it waits until no query of the process is in flight (the turns priming already takes), clears the flag and runs
    launch priming. When priming ends and the flag is set again, it runs once more; otherwise it reports `settled`. Events

@@ -9,6 +9,8 @@ export interface LiveWatchDeps {
   turns: PrimingTurns;
   /** Whether a changed path can move the listing (`canMoveLiveListing` over the declared scope). */
   relevant(path: string): boolean;
+  /** Whether no change under a path can move the listing, so the watcher need not descend into it (`nothingUnderMovesLiveListing`). */
+  skipped(path: string): boolean;
   /** Read before each refresh: a repository no longer `trusted` closes the watcher before anything is read. */
   trusted(): Promise<boolean>;
   /** Launch priming of the repository; never rejects. */
@@ -63,7 +65,7 @@ export function watchLive(root: string, deps: LiveWatchDeps, signals: readonly (
       if (!running) void drain();
     },
     failed: (fault) => close(`${fault.code}: ${fault.detail}`),
-  });
+  }, deps.skipped);
   if ("fault" in opened) {
     deps.report({ outcome: "off", reason: `${opened.fault.code}: ${opened.fault.detail}` });
     return undefined;

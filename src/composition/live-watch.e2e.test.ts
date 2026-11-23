@@ -94,13 +94,13 @@ const isOff = (line: Line): boolean => line.event === "watch" && line.outcome ==
 const watchRefreshes = (lines: readonly Line[]): Line[] => lines.filter((line) => line.event === "prime" && line.trigger === "watch");
 
 /** A watcher the test drives: it records each watch and close, and the test fires its events. */
-function drivenWatch(): { treeWatch: TreeWatch; opened: { root: string; listener: TreeWatchListener; closed: boolean }[] } {
-  const opened: { root: string; listener: TreeWatchListener; closed: boolean }[] = [];
+function drivenWatch(): { treeWatch: TreeWatch; opened: { root: string; listener: TreeWatchListener; skipped: ((path: string) => boolean) | undefined; closed: boolean }[] } {
+  const opened: { root: string; listener: TreeWatchListener; skipped: ((path: string) => boolean) | undefined; closed: boolean }[] = [];
   return {
     opened,
     treeWatch: {
-      watch(root, listener) {
-        const watched = { root, listener, closed: false };
+      watch(root, listener, skipped) {
+        const watched = { root, listener, skipped, closed: false };
         opened.push(watched);
         return { close: () => void (watched.closed = true) };
       },
@@ -277,4 +277,20 @@ test("a query that arrives once the watcher's refresh began writing the store ta
   assert.equal(queryMaterialized(afterArrival), false);
   assert.deepEqual(refreshes.map(({ outcome }) => outcome), ["primed"]);
   assert.equal(answer, await freshCallers());
+});
+
+test("the watcher does not descend under a directory the repository's git ignores, nor under git's objects, and watches the sources and git's HEAD", { timeout: 120_000 }, async () => {
+  writeFileSync(join(repo, ".gitignore"), "build/\n");
+  mkdirSync(join(repo, "build", "classes"), { recursive: true });
+  writeFileSync(join(repo, "build", "classes", "Util.class"), "x");
+  const stop = new AbortController();
+  const driven = drivenWatch();
+  const { queries } = measured({ signal: stop.signal, treeWatch: driven.treeWatch });
+  try {
+    assert.equal(await queries.warmLive(repo, stop.signal, REPO_ID), null);
+    const skipped = driven.opened[0]?.skipped ?? (() => false);
+    assert.deepEqual(["build", "build/classes", DIR, ".git", ".git/HEAD", ".git/objects"].map(skipped), [true, true, false, false, false, true]);
+  } finally {
+    stop.abort();
+  }
 });

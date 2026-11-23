@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { contentFingerprint } from "../map/entrypoint-map.ts";
-import { canMoveLiveListing, changedPaths, liveExport, liveScope } from "./live-export.ts";
+import { canMoveLiveListing, changedPaths, liveExport, liveScope, nothingUnderMovesLiveListing } from "./live-export.ts";
 
 test("a live export reads as a commit export: a mirrored Java file is written, a README is listed only", () => {
   const exported = liveExport([{ path: "README.md", blob: "1" }, { path: "src/A.java", blob: "2" }], [{ path: "link", reason: "symlink" }]);
@@ -34,5 +34,14 @@ test("a change moves the live listing only at git's HEAD or index, or at a selec
   assert.deepEqual(
     [".git/HEAD", ".git/index", "src/App.java", ".git/objects/ab/cd", ".git/refs/heads/main", ".ye-ast-graph/live/s/src/App.java", "web/.codegraph/db", ".ye-ast/entrypoints.json", "excluded/App.java", "src/.git-notes"].map(moves),
     [true, true, true, false, false, false, false, false, false, true],
+  );
+});
+
+test("a watcher need not descend under a directory git ignores whole, an engine entry, or git's own directory past its HEAD and index", () => {
+  const engineEntry = (path: string): boolean => path.split("/").some((segment) => [".git", ".ye-ast-graph"].includes(segment));
+  const skipped = (path: string): boolean => nothingUnderMovesLiveListing(path, new Set(["node_modules", "web/dist"]), engineEntry);
+  assert.deepEqual(
+    ["node_modules", "node_modules/pkg/index.ts", "web/dist", "web/dist/main.js", "web", "web/distribution", "src", ".git", ".git/HEAD", ".git/index", ".git/objects", "web/.git", ".ye-ast-graph"].map(skipped),
+    [true, true, true, true, false, false, false, false, false, false, true, true, true],
   );
 });
