@@ -1,4 +1,4 @@
-# ADR-0156: Background priming passes its turn to a query between bounded units, and a query cuts priming's refresh under the lock
+# ADR-0156: Background priming passes its turn to a query between bounded units, and gives the mirror lock up wherever that costs nothing
 
 - Status: Accepted, 2026-11-23, owner
 - Decision source: Owner, 2026-11-17 (translated): "I approve the decisions", over RFC-0040 L21: "The next generation is
@@ -16,10 +16,11 @@
 **In short:** the long whole-snapshot readings priming runs (the Java call sites and data effects) are split into
 bounded units: one source parsed, one type's calls read, one file a reader walks. Between two units priming lets the
 process's waiting events run and, when a query of its process is in flight, waits until none is; a step that waited
-runs again on a new capture, where what it kept for an unmoved state is found kept. A query that starts while priming
-holds the mirror lock for its refresh and pin cuts them through priming's signal: the lock is released at the refresh's
-next abort check, the query refreshes the tree itself, and priming pins again after it. No timer, no threshold, no
-second lock; a query never waits for a background step or a background refresh to end.
+runs again on a new capture, where what it kept for an unmoved state is found kept. Under the mirror lock priming asks
+for the queries of its process at every point where giving the capture up costs nothing: once the listing is compared
+with the mirror (before the store is opened or written), and once a store write it began commits (before the pin). A
+query therefore waits for at most a listing or a store write priming began, and takes that write over instead of
+writing it again. No timer, no threshold, no second lock, no new signal: the decline of L32, asked at more points.
 
 ## Context
 
@@ -42,7 +43,8 @@ measured in ADR-0152:
 | Abort a step when a query arrives and start it again | Rejected for steps: an edit-idle query that does not move the tree would throw away up to a whole step; pausing keeps it |
 | Split the readings into units and pass the turn between them; a step that waited runs again on a new capture | Chosen for steps |
 | Let the query wait for priming's refresh under the lock and take its result | Rejected: the query waits for the rest of a refresh that is usually redundant, then proves the tree anyway (measured below) |
-| Cut priming's refresh and pin when a query starts while priming holds the lock | Chosen for the lock: a cut refresh is the deadline path every refresh already has (`pending` paths, nothing committed half) |
+| Cut priming's refresh and pin through an abort signal when a query starts | Measured and rejected: the lock wait goes (873 → 2 ms), but a cut that lands in the store sync retires the mirror's sync worker (ADR-0125 decision 4), so the query starts a new one (petclinic/backend-rest `workspace` sync 117 → 175 ms) |
+| Give the capture up at the points where it costs nothing: after the listing is compared, and after a store write commits | Chosen for the lock: a query waits for at most a listing or a write it then reuses; nothing is aborted |
 
 ## Decision
 
@@ -60,22 +62,23 @@ measured in ADR-0152:
 3. **A step that waited runs again.** A step during which the turn waited ends priming's capture once it completes,
    and priming pins a new one when the queries are done: it primes the state they left. What the completed step kept
    for an unmoved state is found kept on the new capture; for a moved state the step derives again.
-4. **The cut under the lock.** Priming passes the mirror capture a signal of its own that a query of the process
-   starting aborts, from the capture's start until the capture is pinned; then it is withdrawn and decision 2 applies.
-   A cut before the lock is the decline of L32; a cut while priming lists, reconciles, syncs or pins aborts them at
-   their next abort check, which releases the lock, and the query, next in the in-process line (ADR-0148), refreshes
-   the tree itself. Priming waits for the queries and pins again. A cut refresh is the refresh a deadline cuts: what it
-   wrote is recorded as `pending`, nothing is committed half, and the next refresh resumes it.
+4. **The lock given up where it costs nothing.** `OpenLive.declined`, which priming answers with whether a query of its
+   process is in flight (ADR-0144 decision 7, L32), is asked before the lock, once it is held, and now also once the
+   listing is compared with the mirror (before the serving store is opened or any write begins), once a store write
+   commits (before the pin opens the store) and once the refresh returns (before the pin reads the sources). A decline
+   releases the lock; the query, next in the in-process line (ADR-0148), refreshes the tree itself, or finds the write
+   priming committed and writes nothing again. A store write that began always finishes: it is the write the query would
+   make, and cutting it would retire the sync worker.
 5. **Observable.** The data effects write their own stage line (`data-effects`, RFC-0012), so the second half of the
-   call-sites step and its derivation after a cut are visible. `prime` keeps its `yields` count, which now counts a
-   turn inside a step and a cut refresh too.
+   call-sites step and its derivation after an abort are visible. `prime` keeps its `yields` count, which now counts a
+   turn inside a step too.
 
 ## Consequences
 
 - A query that arrives during priming waits for at most one unit of priming's work, not a step or a refresh.
 - A paused step holds its capture (the pinned store reader, its parse hold and its trees) while the query runs.
-- A cut refresh repeats under the query what priming had listed and reconciled; when priming's refresh was the full
-  build of a missing store, the query builds it again from the start.
+- A declined refresh repeats under the query what priming had listed and reconciled (tens of ms); a query that arrives
+  during a store write priming began waits for that write and does not repeat it.
 - The sync path for queries is unchanged: every unit runs at once, in the same order.
 
 ## Measured
