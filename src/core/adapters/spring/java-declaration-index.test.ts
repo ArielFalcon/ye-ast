@@ -242,6 +242,7 @@ test("every question whose answer an edit changes is told changed, whatever the 
     { name: "a package moved", after: [replaced(BASE, "package app;", "package app.inner;"), IMPL] },
     { name: "a platform package claimed", after: [replaced(BASE, "package app;", "package org.springframework.boot.custom;"), IMPL] },
     { name: "an annotation, a constant and a marker", after: [replaced(BASE, "public class Base { static final String KEY", "@Aspect public class Base { static final String OTHER"), IMPL] },
+    { name: "an introduction", after: [replaced(BASE, "void run() {}", "@DeclareParents(\"app.*\") Object mixin; void run() {}"), IMPL] },
     { name: "a method reference and an anonymous class", after: [BASE, replaced(IMPL, "Impl::name; Object o = new Base() {};", "Impl::other; Object o = new Runnable() {};")] },
     { name: "a file that appears", after: [...base, UNPARSED, { path: "other/Late.java", content: "package other; class Late extends Base { static final int KEY = 1; }" }] },
     { name: "a file that disappears", after: [IMPL] },

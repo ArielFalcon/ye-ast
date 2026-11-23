@@ -3,7 +3,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { constantNamesOf } from "./java-ambiguous-names.ts";
 import type { JavaMarker } from "./java-declaration-questions.ts";
-import { CALL_REWRITING_ANNOTATIONS, DYNAMIC_IMPLEMENTATIONS, FUNCTION_VALUES, isAnonymous, isAspect, supertypesOf } from "./java-declared-types.ts";
+import { CALL_REWRITING_ANNOTATIONS, DYNAMIC_IMPLEMENTATIONS, FUNCTION_VALUES, isAnonymous, isAspect, isIntroduction, supertypesOf } from "./java-declared-types.ts";
 import { withJavaSources } from "./java-project.ts";
 import { createJavaProject, isTypeDeclaration, modifierWords, supertypeClauses, typeNodeName, writtenSimpleName, type JavaFile, type TypeDecl, type TypeKind } from "./java-symbols.ts";
 
@@ -128,6 +128,7 @@ export function bodyOf(file: JavaFile, types: readonly TypeDecl[]): BodySummary 
     if ((isTypeDeclaration(node) && !placed.has(node.id)) || isAnonymous(node)) for (const supertype of supertypesOf(node)) unplaced.add(writtenSimpleName(typeNodeName(supertype)));
     if ((node.type === "marker_annotation" || node.type === "annotation") && CALL_REWRITING_ANNOTATIONS.has(writtenSimpleName(node.childForFieldName("name")?.text ?? ""))) markers.add("call-rewriting");
     if (isAspect(node)) markers.add("aspect");
+    if (isIntroduction(node)) markers.add("introduction");
     if ((node.type === "identifier" || node.type === "type_identifier") && DYNAMIC_IMPLEMENTATIONS.has(node.text)) markers.add("dynamic-implementation");
     for (const child of node.namedChildren) if (child !== null) pending.push(child);
   }

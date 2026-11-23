@@ -9,10 +9,10 @@ import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { questions } from "./java-declaration-questions.ts";
-import type { KeptReads } from "./java-kept-reads.ts";
+import { keptByFile, type KeptReads } from "./java-kept-reads.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
-import { methodsByPlace, provesBinding } from "./java-receiver-methods.ts";
-import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
+import { methodsByPlace, placeOf, provesBinding, provesFromIndex } from "./java-receiver-methods.ts";
+import { FUNCTION_VALUES, INTRODUCTIONS, isAnonymous, isAspect, isIntroduction, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
 import { awaitsDeclaredJdk, targetsOfFunctionValue, type FunctionTargets, type FunctionValue, type FunctionValueSources } from "./java-function-values.ts";
 import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
@@ -24,8 +24,6 @@ const ROOT_TYPE = "java.lang.Object";
 const ASPECT_REASON = "aspect may replace the body" satisfies DispatchUnknownReason;
 /** The one advice kind that receives the join point and decides whether the body runs; the other kinds run beside it (ADR-0091). */
 const BODY_REPLACING_ADVICE = "Around";
-/** Aspect members that make a type implement more than its declarations state. */
-const INTRODUCTIONS: ReadonlySet<string> = new Set(["DeclareParents", "DeclareMixin"]);
 const PARAMETERS: ReadonlySet<string> = new Set(["formal_parameter", "spread_parameter"]);
 /** Annotations the language itself defines, which no generator or proxy reads to implement a type. */
 const LANGUAGE_ANNOTATIONS: ReadonlySet<string> = new Set(["Override", "Deprecated", "SuppressWarnings", "FunctionalInterface"]);
@@ -222,6 +220,9 @@ function vetoOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): Veto
  * time fails), a build file declares a source generator, an aspect introduces a supertype (`INTRODUCTIONS`), or the
  * method is not placed. An annotation and an aspect's advice leave the answer as read: a proxy or a generated subclass
  * of a type adds no supertype the type's own methods run under (ADR-0079 decision 5).
+ * With `reads`, the sites of each file are one derivation kept by the questions it asked (ADR-0146): the part of the
+ * hierarchy each method's closure reads (`closureHierarchy`), and the listing only when that closure holds a functional
+ * interface.
  */
 export function createJavaOutsideSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}, reads?: KeptReads): NonNullable<ImportOrigins["outsideSupertypes"]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
@@ -239,23 +240,35 @@ export function createJavaOutsideSupertypes(parser: () => Promise<JavaParser>, s
   const analyze = (sites: readonly ImplementingSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly OutsideSupertypes[] => {
     const reading = readingOf(files, unparsed, project);
     if (reading === "unknown") return sites.map(() => UNKNOWN_OUTSIDE);
-    return sites.map((site) => {
-      const named = reading.methods.get(`${site.file}:${site.start}:${site.name}`) ?? [];
-      const method = named.length === 1 ? named[0] : undefined;
-      if (method === undefined) return UNKNOWN_OUTSIDE;
-      if (method.modifiers.includes("static")) return { kind: "types", types: [], root: ROOT_TYPE, static: true };
-      const types = outsideSupertypesOf(method, reading.hierarchy);
-      return types === undefined ? UNKNOWN_OUTSIDE : { kind: "types", types, root: ROOT_TYPE };
-    });
+    return sites.map((site) => outsideOf(reading.methods.get(`${site.file}:${site.start}:${site.name}`) ?? [], () => reading.hierarchy));
   };
+  /** Every hierarchy read over a whole project, for the function values a closure with a functional interface reads. */
+  const wholeHierarchies = new WeakMap<JavaProject, Hierarchy>();
   return async (sites) => {
     if (sites.length === 0) return [];
     if (reads !== undefined) {
-      const index = await reads.index();
-      return reads.facts.ofReads(OUTSIDE_SUPERTYPES_SLOT, { sites, generatesInterfaces: build.generatesInterfaces === true }, index, async (record) => {
-        for (const question of [questions.listing(), questions.unread()]) record(question, index.answer(question));
-        const held = await heldJavaProject(reads.hold, parser, sources, [], build);
-        return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
+      return keptByFile(reads, { slot: OUTSIDE_SUPERTYPES_SLOT, parser, sources, build, over: "sources" }, sites, ({ start, name }) => `${start}:${name}`, UNKNOWN_OUTSIDE, ({ project, files, everyFile, asked }, places) => {
+        const file = files.get(places[0]!.file);
+        const proves = () => build.generatesInterfaces !== true && provesFromIndex(project, asked, (at) => files.get(at)) && (JSON.parse(asked(questions.marked("introduction"))) as string[]).length === 0;
+        if (file === undefined || !proves()) return places.map(() => UNKNOWN_OUTSIDE);
+        const whole = (): Hierarchy => {
+          let hierarchy = wholeHierarchies.get(project);
+          if (hierarchy === undefined) {
+            hierarchy = readHierarchy(everyFile(), project);
+            wholeHierarchies.set(project, hierarchy);
+          }
+          return hierarchy;
+        };
+        const methods = project.typesOf(file).flatMap((type) => type.methods);
+        const closures = new Map<TypeDecl, Hierarchy>();
+        return places.map((site) => outsideOf(methods.filter((method) => placeOf(method).start === site.start && method.name === site.name), (owner) => {
+          let hierarchy = closures.get(owner);
+          if (hierarchy === undefined) {
+            hierarchy = closureHierarchy(owner, project, { files, asked }, () => (asked(questions.listing()), whole().functionValues()));
+            closures.set(owner, hierarchy);
+          }
+          return hierarchy;
+        }));
       });
     }
     const read = await parser();
@@ -268,12 +281,67 @@ export function createJavaOutsideSupertypes(parser: () => Promise<JavaParser>, s
   };
 }
 
+/** The answer for the methods at one place, over the hierarchy `hierarchyOf` reads for the method's owner: `unknown` unless exactly one method stands there. */
+function outsideOf(named: readonly MethodDecl[], hierarchyOf: (owner: TypeDecl) => Hierarchy): OutsideSupertypes {
+  const method = named.length === 1 ? named[0] : undefined;
+  if (method === undefined) return UNKNOWN_OUTSIDE;
+  if (method.modifiers.includes("static")) return { kind: "types", types: [], root: ROOT_TYPE, static: true };
+  const types = outsideSupertypesOf(method, hierarchyOf(method.owner));
+  return types === undefined ? UNKNOWN_OUTSIDE : { kind: "types", types, root: ROOT_TYPE };
+}
+
+/**
+ * The part of the hierarchy `outsideSupertypesOf` reads for `owner`, through recorded reads (ADR-0146): the owner and the
+ * types below it, found by asking which files write each one's name as a supertype; every repository type above those;
+ * and the anonymous and local classes of the files that write one of their names. A placed type whose declaration is read
+ * asks its file's content. Every entry is the one `readHierarchy` reads for the same declaration, and the entries the
+ * answer depends on are all read, since a type below a type or a clause under its name writes that name. The function
+ * values, which a lambda anywhere may add, are read by `functionValues`.
+ */
+function closureHierarchy(owner: TypeDecl, project: JavaProject, reading: { files: { get(path: string): JavaFile | undefined }; asked(question: string): string }, functionValues: () => readonly ReadFunctionValue[]): Hierarchy {
+  const { files, asked } = reading;
+  const parts = noParts();
+  const read = new Set<TypeDecl>();
+  const readType = (type: TypeDecl): void => {
+    if (read.has(type)) return;
+    read.add(type);
+    asked(questions.file(type.file.path));
+    readDeclaration(parts, type.node, type.file, project, type);
+  };
+  const writing = (kind: "supertype" | "unplaced-supertype", name: string): JavaFile[] => (JSON.parse(asked(questions.naming(kind, name))) as string[]).flatMap((path) => files.get(path) ?? []);
+  readType(owner);
+  const names = [owner.name];
+  for (const name of names) {
+    for (const file of writing("supertype", name)) for (const type of project.typesOf(file)) readType(type);
+    for (const type of belowOf(owner, parts)) if (!names.includes(type.name)) names.push(type.name);
+  }
+  const above = new Set([owner, ...belowOf(owner, parts)]);
+  for (const type of above) {
+    readType(type);
+    for (const supertype of parts.supertypes.get(type) ?? []) above.add(supertype);
+  }
+  const unplacedRead = new Set<JavaFile>();
+  for (const name of names) {
+    for (const file of writing("unplaced-supertype", name)) {
+      if (unplacedRead.has(file)) continue;
+      unplacedRead.add(file);
+      const placed = new Set(project.typesOf(file).map((type) => type.node.id));
+      const pending: Node[] = [file.root];
+      for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+        if ((isTypeDeclaration(node) || isAnonymous(node)) && !placed.has(node.id)) readDeclaration(parts, node, file, project, undefined);
+        for (const child of node.namedChildren) if (child !== null) pending.push(child);
+      }
+    }
+  }
+  return completedHierarchy(parts, project, functionValues);
+}
+
 /** Whether an annotation of the sources makes a type implement more than its declarations state (`INTRODUCTIONS`). */
 function introducesSupertypes(files: readonly JavaFile[]): boolean {
   for (const file of files) {
     const pending: Node[] = [file.root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-      if ((node.type === "marker_annotation" || node.type === "annotation") && INTRODUCTIONS.has(simpleName(node.childForFieldName("name") ?? node))) return true;
+      if (isIntroduction(node)) return true;
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
     }
   }
@@ -454,14 +522,14 @@ function overrides(declared: MethodDecl, method: MethodDecl, hierarchy: Hierarch
 }
 
 /** The type and every repository type above it. */
-export function ancestorsOf(type: TypeDecl, hierarchy: Hierarchy): TypeDecl[] {
+export function ancestorsOf(type: TypeDecl, hierarchy: Pick<Hierarchy, "supertypes">): TypeDecl[] {
   const above = new Set<TypeDecl>([type]);
   for (const current of above) for (const parent of hierarchy.supertypes.get(current) ?? []) above.add(parent);
   return [...above];
 }
 
 /** Every repository type below `type`, through any number of supertypes. */
-function belowOf(type: TypeDecl, hierarchy: Hierarchy): ReadonlySet<TypeDecl> {
+function belowOf(type: TypeDecl, hierarchy: Pick<Hierarchy, "subtypes">): ReadonlySet<TypeDecl> {
   const below = new Set<TypeDecl>();
   for (let frontier = [type]; frontier.length > 0; ) {
     frontier = frontier.flatMap((current) => hierarchy.subtypes.get(current) ?? []).filter((next) => next !== type && !below.has(next));
@@ -491,57 +559,58 @@ export function supertypeClausesOf(declaration: Node, file: JavaFile, project: J
   });
 }
 
-export function readHierarchy(files: readonly JavaFile[], project: JavaProject, libraries?: LibraryReading): Hierarchy {
-  const placed = new Map(project.types.map((type) => [type.node.id, type]));
-  const subtypes = new Map<TypeDecl, TypeDecl[]>();
-  const supertypes = new Map<TypeDecl, TypeDecl[]>();
-  const superclasses = new Map<TypeDecl, Superclass>();
-  const outside = new Set<TypeDecl>();
-  const unsettled = new Map<string, string[]>();
-  const unplaced: { file: JavaFile; node: Node; types: TypeDecl[]; names: string[]; fqns: string[] }[] = [];
-  const invokedSupertypes = new Map<string, TypeDecl[]>();
-  const unsettledSupertypes = new Map<TypeDecl, string[]>();
-  const values: FunctionValue[] = [];
-  for (const file of files) {
-    const pending: Node[] = [file.root];
-    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-      if (FUNCTION_VALUES.has(node.type)) values.push({ file, node });
-      if (isTypeDeclaration(node) || isAnonymous(node)) {
-        const declared = placed.get(node.id);
-        const superclass = node.type === "class_declaration" ? node.childForFieldName("superclass")?.namedChildren[0] : undefined;
-        const types: TypeDecl[] = [];
-        const names: string[] = [];
-        const clauses: { name: string; place: string }[] = [];
-        const fqns: string[] = [];
-        const unresolved: string[] = [];
-        for (const { node: supertype, name, resolved, type } of supertypeClausesOf(node, file, project)) {
-          if (type !== undefined) types.push(type);
-          else if (resolved?.kind !== "platform") {
-            names.push(name);
-            clauses.push({ name, place: causeAt(file.path, supertype, "unsettled-supertype") });
-          }
-          if (resolved?.kind === "platform" || resolved?.kind === "library") fqns.push(resolved.fqn);
-          else if (resolved === undefined || (resolved.kind === "repository" && type === undefined)) unresolved.push(name);
-          if (declared !== undefined && supertype.id === superclass?.id) superclasses.set(declared, type ?? "outside");
-          if (declared !== undefined && type === undefined) outside.add(declared);
-        }
-        if (declared === undefined) unplaced.push({ file, node, types, names, fqns });
-        else {
-          for (const fqn of fqns) {
-            const holders = invokedSupertypes.get(fqn) ?? [];
-            holders.push(declared);
-            invokedSupertypes.set(fqn, holders);
-          }
-          if (unresolved.length > 0) unsettledSupertypes.set(declared, unresolved);
-          if (!superclasses.has(declared)) superclasses.set(declared, "none");
-          for (const type of types) subtypes.set(type, [...(subtypes.get(type) ?? []), declared]);
-          supertypes.set(declared, types);
-          for (const { name, place } of clauses) unsettled.set(name, [...(unsettled.get(name) ?? []), place]);
-        }
-      }
-      for (const child of node.namedChildren) if (child !== null) pending.push(child);
+/** What the declarations and anonymous classes read so far state of a hierarchy, before its function values. */
+interface HierarchyParts {
+  subtypes: Map<TypeDecl, TypeDecl[]>;
+  supertypes: Map<TypeDecl, TypeDecl[]>;
+  superclasses: Map<TypeDecl, Superclass>;
+  outside: Set<TypeDecl>;
+  unsettled: Map<string, string[]>;
+  unplaced: { file: JavaFile; node: Node; types: TypeDecl[]; names: string[]; fqns: string[] }[];
+  invokedSupertypes: Map<string, TypeDecl[]>;
+  unsettledSupertypes: Map<TypeDecl, string[]>;
+}
+
+const noParts = (): HierarchyParts => ({ subtypes: new Map(), supertypes: new Map(), superclasses: new Map(), outside: new Set(), unsettled: new Map(), unplaced: [], invokedSupertypes: new Map(), unsettledSupertypes: new Map() });
+
+/** Adds what one type declaration or anonymous class states to `parts`: `declared` is its placed type, absent for an anonymous or a local class. */
+function readDeclaration(parts: HierarchyParts, node: Node, file: JavaFile, project: JavaProject, declared: TypeDecl | undefined): void {
+  const superclass = node.type === "class_declaration" ? node.childForFieldName("superclass")?.namedChildren[0] : undefined;
+  const types: TypeDecl[] = [];
+  const names: string[] = [];
+  const clauses: { name: string; place: string }[] = [];
+  const fqns: string[] = [];
+  const unresolved: string[] = [];
+  for (const { node: supertype, name, resolved, type } of supertypeClausesOf(node, file, project)) {
+    if (type !== undefined) types.push(type);
+    else if (resolved?.kind !== "platform") {
+      names.push(name);
+      clauses.push({ name, place: causeAt(file.path, supertype, "unsettled-supertype") });
     }
+    if (resolved?.kind === "platform" || resolved?.kind === "library") fqns.push(resolved.fqn);
+    else if (resolved === undefined || (resolved.kind === "repository" && type === undefined)) unresolved.push(name);
+    if (declared !== undefined && supertype.id === superclass?.id) parts.superclasses.set(declared, type ?? "outside");
+    if (declared !== undefined && type === undefined) parts.outside.add(declared);
   }
+  if (declared === undefined) {
+    parts.unplaced.push({ file, node, types, names, fqns });
+    return;
+  }
+  for (const fqn of fqns) {
+    const holders = parts.invokedSupertypes.get(fqn) ?? [];
+    holders.push(declared);
+    parts.invokedSupertypes.set(fqn, holders);
+  }
+  if (unresolved.length > 0) parts.unsettledSupertypes.set(declared, unresolved);
+  if (!parts.superclasses.has(declared)) parts.superclasses.set(declared, "none");
+  for (const type of types) parts.subtypes.set(type, [...(parts.subtypes.get(type) ?? []), declared]);
+  parts.supertypes.set(declared, types);
+  for (const { name, place } of clauses) parts.unsettled.set(name, [...(parts.unsettled.get(name) ?? []), place]);
+}
+
+/** The hierarchy `parts` state, each supertype outside the repository held by every type below the one that writes it; `functionValues` reads the function values over it. */
+function completedHierarchy(parts: HierarchyParts, project: JavaProject, functionValues: (hierarchy: Hierarchy) => readonly ReadFunctionValue[]): Hierarchy {
+  const { subtypes, invokedSupertypes } = parts;
   for (const [fqn, types] of invokedSupertypes) {
     const all = new Set(types);
     for (const type of all) for (const below of subtypes.get(type) ?? []) all.add(below);
@@ -552,22 +621,36 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject, 
     if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
     return signatures.get(method);
   };
-  let read: ReadFunctionValue[] | undefined;
-  const hierarchy: Hierarchy = {
-    subtypes, supertypes, superclasses, outside, unsettled, unplaced, invokedSupertypes, unsettledSupertypes, signatureOf,
-    functionValues: () => (read ??= values.map((value) => {
+  let read: readonly ReadFunctionValue[] | undefined;
+  const hierarchy: Hierarchy = { ...parts, signatureOf, functionValues: () => (read ??= functionValues(hierarchy)) };
+  return hierarchy;
+}
+
+export function readHierarchy(files: readonly JavaFile[], project: JavaProject, libraries?: LibraryReading): Hierarchy {
+  const placed = new Map(project.types.map((type) => [type.node.id, type]));
+  const parts = noParts();
+  const values: FunctionValue[] = [];
+  for (const file of files) {
+    const pending: Node[] = [file.root];
+    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+      if (FUNCTION_VALUES.has(node.type)) values.push({ file, node });
+      if (isTypeDeclaration(node) || isAnonymous(node)) readDeclaration(parts, node, file, project, placed.get(node.id));
+      for (const child of node.namedChildren) if (child !== null) pending.push(child);
+    }
+  }
+  return completedHierarchy(parts, project, (hierarchy) => {
+    const sources: FunctionValueSources = {
+      project,
+      ...(libraries === undefined ? {} : { libraries }),
+      above: (type) => ancestorsOf(type, hierarchy),
+      ancestors: (type) => { const above = ancestorsOf(type, hierarchy); return above.some((ancestor) => hierarchy.outside.has(ancestor)) ? undefined : above; },
+      functionalMethod: (type) => functionalMethodOf(type, hierarchy),
+    };
+    return values.map((value) => {
       const targets = targetsOfFunctionValue(value, sources);
       return { targets, file: value.file.path, line: value.node.startPosition.row + 1, awaitsJdk: targets === "unsettled" && awaitsDeclaredJdk(value, sources) };
-    })),
-  };
-  const sources: FunctionValueSources = {
-    project,
-    ...(libraries === undefined ? {} : { libraries }),
-    above: (type) => ancestorsOf(type, hierarchy),
-    ancestors: (type) => { const above = ancestorsOf(type, hierarchy); return above.some((ancestor) => outside.has(ancestor)) ? undefined : above; },
-    functionalMethod: (type) => functionalMethodOf(type, hierarchy),
-  };
-  return hierarchy;
+    });
+  });
 }
 
 /** The annotations of a declaration other than the language's own, which a generator or a proxy may read to implement it. */
