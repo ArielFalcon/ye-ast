@@ -7,6 +7,14 @@ import type { PrimingTurns } from "../core/application/live/live-priming.ts";
 export function queriesFirst(): { counted<T extends object>(family: T): T; turns: PrimingTurns } {
   let active = 0;
   let waiting: (() => void)[] = [];
+  const arrivals = new Set<() => void>();
+  const queriesDone = (signal?: AbortSignal): Promise<void> => {
+    if (active === 0 || signal?.aborted) return Promise.resolve();
+    return new Promise<void>((resume) => {
+      waiting.push(resume);
+      signal?.addEventListener("abort", () => resume(), { once: true });
+    });
+  };
   const finished = (): void => {
     active -= 1;
     if (active > 0) return;
@@ -23,6 +31,7 @@ export function queriesFirst(): { counted<T extends object>(family: T): T; turns
         Object.defineProperty(wrapped, method, {
           value: async (...args: unknown[]) => {
             active += 1;
+            for (const arrived of [...arrivals]) arrived();
             try {
               return await call.apply(family, args);
             } finally {
@@ -35,12 +44,17 @@ export function queriesFirst(): { counted<T extends object>(family: T): T; turns
     },
     turns: {
       queryWaiting: () => active > 0,
-      queriesDone: (signal) => {
-        if (active === 0 || signal?.aborted) return Promise.resolve();
-        return new Promise<void>((resume) => {
-          waiting.push(resume);
-          signal?.addEventListener("abort", () => resume(), { once: true });
-        });
+      queriesDone,
+      passTurn: async (signal) => {
+        await new Promise<void>((ran) => setImmediate(ran));
+        if (active === 0 || signal?.aborted) return false;
+        await queriesDone(signal);
+        return true;
+      },
+      onQuery: (arrived) => {
+        const listener = (): void => arrived();
+        arrivals.add(listener);
+        return () => void arrivals.delete(listener);
       },
     },
   };

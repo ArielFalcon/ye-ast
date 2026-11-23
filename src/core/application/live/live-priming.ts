@@ -6,6 +6,7 @@ import { createBaseReadings, type BaseReading } from "../snapshot/base-reading.t
 import { createHeadReader, preparedLive, withLiveCapture } from "../snapshot/head-reading.ts";
 import type { CommitExtraction, PreparedCommit } from "../snapshot/read-snapshot.ts";
 import { effectSites, type TraceQueriesDeps } from "../trace/trace-queries.ts";
+import type { Between } from "../../domain/shared/work-units.ts";
 
 /** When priming lets the queries of its process run first. */
 export interface PrimingTurns {
@@ -13,6 +14,14 @@ export interface PrimingTurns {
   queryWaiting(): boolean;
   /** Settles once no query of the process is in flight, or once `signal` is aborted. */
   queriesDone(signal?: AbortSignal): Promise<void>;
+  /**
+   * The turn priming passes between two units of a step (ADR-0156): lets the events the process has waiting run (a
+   * query's request among them), then, when a query of the process is in flight, settles once none is or once `signal`
+   * is aborted. Answers whether it waited for queries.
+   */
+  passTurn(signal?: AbortSignal): Promise<boolean>;
+  /** Calls `arrived` each time a query of the process starts, until the returned function is called. */
+  onQuery(arrived: () => void): () => void;
 }
 
 export interface PrimingRequest {
@@ -36,8 +45,11 @@ interface PrimingRead {
   reading(): Promise<BaseReading | undefined>;
 }
 
-/** One priming step: `false` when what it needs cannot be read, which ends priming. */
-type Step = (read: PrimingRead) => Promise<boolean>;
+/**
+ * One priming step: `false` when what it needs cannot be read, which ends priming. A long step awaits `between` among
+ * its units, which waits for the queries of the process and rejects once priming is aborted.
+ */
+type Step = (read: PrimingRead, between: Between) => Promise<boolean>;
 
 /**
  * Derives, ahead of any query, the snapshot facts of the live tree that no target narrows: the sources and the
@@ -47,10 +59,12 @@ type Step = (read: PrimingRead) => Promise<boolean>;
  *
  * Priming pins a capture of the mirror as a query does, under its lock, and runs its steps outside the lock on the pinned
  * capture (ADR-0144). Before each step it ends the capture when a query of its process is in flight, and pins a new one
- * once those queries are done, so it primes the state they left and a query shares the process with at most the step
- * that runs. It asks for the queries again right before it takes the lock and once it holds it, so a query that arrived
- * meanwhile finds neither the lock nor a refresh ahead of its own. A value the signal cut is never kept: the derivations
- * a step calls admit nothing an abort cut.
+ * once those queries are done, so it primes the state they left. Inside a long step it passes its turn between bounded
+ * units of work and, when it waited for a query there, runs the step again on a new capture (ADR-0156), so a query
+ * shares the process with at most one unit. It asks for the queries again right before it takes the lock and once it
+ * holds it, and a query that starts while priming holds the lock cuts priming's refresh and pin, so a query never waits
+ * for a refresh of priming ahead of its own. A value the signal cut is never kept: the derivations a step calls admit
+ * nothing an abort cut.
  */
 export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest, turns: PrimingTurns): Promise<PrimingOutcome> {
   const { signal } = request;
@@ -68,13 +82,20 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
     }
     if (signal?.aborted) return { kind: "aborted", yields };
     let declined = false;
-    const captured = await withLiveCapture<"finished" | "yielded" | "unreadable", never>(deps, { repo: request.repo, repoId: request.repoId, live: true, ...signalled }, {
+    // A query that arrives while priming holds the mirror lock cuts priming's refresh and pin (ADR-0156): the lock is
+    // released at the refresh's next abort check, the query refreshes itself, and priming pins again after it. Once the
+    // capture is pinned the cut is withdrawn, and the steps pass their turn instead.
+    const cut = new AbortController();
+    const withdraw = turns.onQuery(() => cut.abort());
+    const captureSignal = signal === undefined ? cut.signal : AbortSignal.any([signal, cut.signal]);
+    const captured = await withLiveCapture<"finished" | "yielded" | "unreadable", never>(deps, { repo: request.repo, repoId: request.repoId, live: true, signal: captureSignal }, {
       declined: () => {
         declined = turns.queryWaiting();
         return declined;
       },
       unavailable: async () => ({ ok: true, value: declined ? "yielded" : "unreadable" }),
       use: async (held) => {
+        withdraw();
         const prepared = preparedLive(held);
         const loaded = await prepared.sources(signal);
         if (!loaded.ok) return { ok: true, value: "unreadable" };
@@ -92,11 +113,26 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
         };
         const read: PrimingRead = { prepared, tree, reading: () => (opened ??= open()) };
         const steps = primingSteps(deps, read, request);
+        let waited = false;
+        const between: Between = async () => {
+          if (await turns.passTurn(signal)) waited = true;
+          if (signal?.aborted) throw new Error("priming aborted");
+        };
         try {
           while (done < steps.length) {
             if (signal?.aborted) return { ok: true, value: "unreadable" };
             if (turns.queryWaiting()) return { ok: true, value: "yielded" };
-            if (!(await steps[done]!(read))) return { ok: true, value: "unreadable" };
+            const derived = await steps[done]!(read, between).catch((error: unknown) => {
+              if (signal?.aborted) return false;
+              throw error;
+            });
+            if (!derived) return { ok: true, value: "unreadable" };
+            // A step that waited for queries ran on a capture they may have moved past: it runs again on a new one, where
+            // what it kept for an unmoved state is found kept.
+            if (waited) {
+              yields += 1;
+              return { ok: true, value: "yielded" };
+            }
             done += 1;
           }
           return { ok: true, value: "finished" };
@@ -105,7 +141,13 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
         }
       },
     });
+    withdraw();
     if (signal?.aborted) return { kind: "aborted", yields };
+    if (cut.signal.aborted && !(captured.ok && captured.value === "finished")) {
+      yields += 1;
+      await turns.queriesDone(signal);
+      continue;
+    }
     if (!captured.ok || captured.value === "unreadable") return { kind: "unavailable", yields };
     if (captured.value === "finished") return { kind: "primed", yields };
   }
@@ -115,10 +157,10 @@ export async function primeLive(deps: TraceQueriesDeps, request: PrimingRequest,
 function primingSteps(deps: TraceQueriesDeps, read: PrimingRead, request: PrimingRequest): Step[] {
   const { signal } = request;
   const { prepared, tree } = read;
-  const withReading = (use: (reading: BaseReading) => Promise<unknown>): Step => async () => {
+  const withReading = (use: (reading: BaseReading, between: Between) => Promise<unknown>): Step => async (_read, between) => {
     const reading = await read.reading();
     if (reading === undefined) return false;
-    await use(reading);
+    await use(reading, between);
     return true;
   };
   const files = tree.sources.map(({ path }) => path).filter(isReadSource);
@@ -133,10 +175,10 @@ function primingSteps(deps: TraceQueriesDeps, read: PrimingRead, request: Primin
       await reading.syntaxOf?.(file);
       await reading.declarations.list(file);
     })),
-    withReading(async (reading) => {
+    withReading(async (reading, between) => {
       const typed = await reading.typed();
       if (typed === "aborted") return;
-      const sites = effectSites(deps, { tree, prepared }, { repoId: request.repoId }, typed);
+      const sites = effectSites(deps, { tree, prepared }, { repoId: request.repoId }, typed, between);
       await sites.callSites();
       await sites.dataSites();
     }),

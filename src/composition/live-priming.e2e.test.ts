@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { composeCli, composeQueries, type ComposedQueries } from "./compose.ts";
+import { composeCli, composeQueries, type ComposedQueries, type CompositionOptions } from "./compose.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -114,9 +114,9 @@ const asks = {
 const PRIMED_STAGES = ["entrypoints", "relations", "call-sites"];
 
 /** A composition whose measurement lines are kept in `lines`; `onLine` sees each one as it is written. */
-function measured(onLine: (line: Line) => void = () => undefined): { queries: ComposedQueries; lines: Line[] } {
+function measured(onLine: (line: Line) => void = () => undefined, options: Partial<CompositionOptions> = {}): { queries: ComposedQueries; lines: Line[] } {
   const lines: Line[] = [];
-  return { queries: composeQueries({ scratchRoot, trustDirectory, measure: (text) => {
+  return { queries: composeQueries({ scratchRoot, trustDirectory, ...options, measure: (text) => {
     const line = JSON.parse(text).ye_ast as Line;
     lines.push(line);
     onLine(line);
@@ -201,4 +201,61 @@ test("a query that arrives as the previous one settles meets no capture of primi
   lines.length = 0;
   assert.ok((await asks.trace(queries)).ok);
   assert.deepEqual(derivedStages(lines), []);
+});
+
+const isPrimingCallSites = ({ event, stage }: Line): boolean => event === "stage" && stage === "call-sites";
+
+test("a query that arrives while priming derives the step of call sites and data effects is answered before that step ends, and priming then finishes it", async () => {
+  let asked: Promise<unknown> | undefined;
+  const order: string[] = [];
+  const { queries, lines } = measured((line) => {
+    if (line.event === "stage" && line.stage === "data-effects") order.push("data-effects");
+    if (asked !== undefined || !isPrimingCallSites(line)) return;
+    asked = asks.outline(queries).then((answer) => {
+      order.push("answered");
+      return answer;
+    });
+  });
+  assert.equal(await queries.warmLive(repo, undefined, REPO_ID), null);
+  const answer = await asked;
+  assert.deepEqual(order.slice(0, 2), ["answered", "data-effects"]);
+  assert.equal(lines.find(({ event }) => event === "prime")?.outcome, "primed");
+  assert.equal(canonicalJson(answer), canonicalJson(await asks.outline(composeQueries({ scratchRoot, trustDirectory }))));
+  lines.length = 0;
+  assert.ok((await asks.trace(queries)).ok);
+  assert.deepEqual(derivedStages(lines), []);
+});
+
+test("priming aborted while a query holds its turn inside a step keeps nothing that step cut: the next query derives the data effects again and answers what a fresh composition answers", async () => {
+  const stop = new AbortController();
+  let asked: Promise<unknown> | undefined;
+  const { queries, lines } = measured((line) => {
+    if (asked !== undefined || !isPrimingCallSites(line)) return;
+    asked = asks.outline(queries);
+    stop.abort();
+  });
+  assert.equal(await queries.warmLive(repo, stop.signal, REPO_ID), null);
+  await asked;
+  assert.equal(lines.find(({ event }) => event === "prime")?.outcome, "aborted");
+  lines.length = 0;
+  const answer = await asks.trace(queries);
+  assert.ok(lines.some(({ event, stage }) => event === "stage" && stage === "data-effects"));
+  assert.equal(canonicalJson(answer), canonicalJson(await asks.trace(composeQueries({ scratchRoot, trustDirectory }))));
+});
+
+test("a step that waited for a query which moved the tree runs again on the state the query left: the next query derives no call sites", async () => {
+  let asked: Promise<unknown> | undefined;
+  const silent = { watch: () => ({ close: () => undefined }) };
+  const { queries, lines } = measured((line) => {
+    if (asked !== undefined || !isPrimingCallSites(line)) return;
+    writeFileSync(join(repo, `${DIR}Helper0.java`), helper(1000));
+    asked = asks.outline(queries);
+  }, { treeWatch: silent });
+  assert.equal(await queries.warmLive(repo, undefined, REPO_ID), null);
+  await asked;
+  assert.equal(lines.find(({ event }) => event === "prime")?.outcome, "primed");
+  lines.length = 0;
+  const answer = await asks.trace(queries);
+  assert.equal(countStage(lines, "call-sites"), 0);
+  assert.equal(canonicalJson(answer), canonicalJson(await asks.trace(composeQueries({ scratchRoot, trustDirectory }))));
 });

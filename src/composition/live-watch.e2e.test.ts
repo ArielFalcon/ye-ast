@@ -228,3 +228,33 @@ test("the watcher closes when the server stops, through the warming's signal or 
     assert.equal(driven.opened[0]!.closed, true, through);
   }
 });
+
+test("a query that arrives while the watcher's refresh holds the mirror lock cuts that refresh and refreshes the edit itself, instead of waiting for it", { timeout: 120_000 }, async () => {
+  const stop = new AbortController();
+  const driven = drivenWatch();
+  let watching = false;
+  let asked: Promise<unknown> | undefined;
+  let mark = -1;
+  const { queries, lines, next } = measured({ treeWatch: driven.treeWatch }, (line) => {
+    if (!watching || asked !== undefined || line.event !== "stage" || line.stage !== "live-list") return;
+    mark = lines.length;
+    asked = callersOfFmt(queries);
+  });
+  try {
+    assert.equal(await queries.warmLive(repo, stop.signal, REPO_ID), null);
+    const settled = next(isSettled);
+    edit();
+    watching = true;
+    driven.opened[0]!.listener.changed(`${DIR}First.java`);
+    await settled;
+    const answer = canonicalJson(await asked);
+    const afterArrival = lines.slice(mark);
+    const queryLock = afterArrival.findIndex(({ event, stage }) => event === "stage" && stage === "live-lock");
+    assert.ok(queryLock >= 0);
+    assert.ok(afterArrival.slice(queryLock).some(({ event, stage, outcome }) => event === "stage" && stage === "live-materialize" && outcome === "ok"));
+    assert.deepEqual(watchRefreshes(lines).map(({ outcome }) => outcome), ["primed"]);
+    assert.equal(answer, await freshCallers());
+  } finally {
+    stop.abort();
+  }
+});
