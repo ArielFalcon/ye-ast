@@ -555,10 +555,137 @@ test("release removes the lock file only while it still holds our pid", async ()
 
   await mine.release();
   assert.equal(await readFile(file, "utf8"), "51");
+});
 
-  await writeFile(file, "50");
-  await mine.release();
-  await assert.rejects(lstat(file));
+const mustNotPoll = (): LiveMirrorDeps => ({ ...defaultLiveMirrorDeps, sleep: async () => { throw new Error("an in-process waiter must not poll"); } });
+/** Turns of the event loop enough for a waiter that polls to have read the holder and slept. */
+const settle = async (): Promise<void> => { for (let i = 0; i < 200; i++) await new Promise((resolve) => setImmediate(resolve)); };
+
+/** Deps that count each acquisition reaching the point where it waits: the pid is read once per acquisition, after the directories are ready. */
+function counting(): { deps: LiveMirrorDeps; reached: () => number } {
+  let count = 0;
+  return { deps: { ...mustNotPoll(), pid: () => { count += 1; return process.pid; } }, reached: () => count };
+}
+
+async function until(condition: () => boolean): Promise<void> {
+  while (!condition()) await new Promise((resolve) => setImmediate(resolve));
+}
+
+test("a waiter of the same process, through another mirror of it, takes the lock at the holder's release without polling", async () => {
+  const { location } = await fresh();
+  const holder = ok(await createLiveMirror(mustNotPoll()).lock(location));
+  const waiter = counting();
+  let taken = false;
+  const waiting = createLiveMirror(waiter.deps).lock(location).then((result) => { taken = true; return result; });
+  await until(() => waiter.reached() === 1);
+  await settle();
+  assert.equal(taken, false);
+
+  await holder.release();
+  const held = ok(await waiting);
+
+  await held.release();
+});
+
+test("waiters of one process take the lock in the order they asked", async () => {
+  const { location } = await fresh();
+  const counted = counting();
+  const mirror = createLiveMirror(counted.deps);
+  const holder = ok(await mirror.lock(location));
+  const order: string[] = [];
+  const waiters: Promise<void>[] = [];
+  for (const name of ["first", "second", "third"]) {
+    waiters.push(mirror.lock(location).then(async (result) => {
+      order.push(name);
+      await settle();
+      await ok(result).release();
+    }));
+    await until(() => counted.reached() === waiters.length + 1);
+  }
+  await settle();
+
+  await holder.release();
+  await Promise.all(waiters);
+
+  assert.deepEqual(order, ["first", "second", "third"]);
+});
+
+test("a holder in another process is still polled and excludes, and the waiter then reads the state that process committed", async () => {
+  const { repo, location } = await fresh();
+  const file = join(repo, ".ye-ast-graph", "live", "default.lock");
+  let polls = 0;
+  const foreign = createLiveMirror(pids([60, 61], () => 61));
+  const mirror = createLiveMirror({ ...pids([60, 61], () => 60), sleep: async () => {
+    polls += 1;
+    if (polls < 3) return;
+    ok(await foreign.writeState(location, state()));
+    await rm(file);
+  } });
+  ok(await mirror.reconcile(location, [], []));
+  await writeFile(file, "61");
+
+  const held = ok(await mirror.lock(location));
+
+  assert.equal(polls, 3);
+  assert.equal(await readFile(file, "utf8"), "60");
+  assert.deepEqual(ok(await mirror.readState(location)), state());
+  await held.release();
+});
+
+test("a second release of a handle never removes the lock the next holder of the process took", { timeout: 10_000 }, async () => {
+  const { repo, location } = await fresh();
+  const file = join(repo, ".ye-ast-graph", "live", "default.lock");
+  const counted = counting();
+  const mirror = createLiveMirror(counted.deps);
+  const first = ok(await mirror.lock(location));
+  await first.release();
+  const second = ok(await mirror.lock(location));
+  let third = false;
+  const waiting = mirror.lock(location).then((result) => { third = true; return result; });
+  await until(() => counted.reached() === 3);
+  await settle();
+
+  await first.release();
+  await settle();
+
+  assert.equal(await readFile(file, "utf8"), String(process.pid));
+  assert.equal(third, false);
+  await second.release();
+  await ok(await waiting).release();
+});
+
+test("a waiter of the process that aborts leaves the line, and the next one takes the lock at the release", { timeout: 10_000 }, async () => {
+  const { location } = await fresh();
+  const counted = counting();
+  const mirror = createLiveMirror(counted.deps);
+  const holder = ok(await mirror.lock(location));
+  const controller = new AbortController();
+  const aborted = mirror.lock(location, controller.signal);
+  const next = mirror.lock(location);
+  await until(() => counted.reached() === 3);
+  await settle();
+
+  controller.abort();
+  assert.equal(faultKind(await aborted), "aborted");
+  await holder.release();
+
+  await ok(await next).release();
+});
+
+test("an acquisition that throws while it waits for another process hands the line on", { timeout: 10_000 }, async () => {
+  const { repo, location } = await fresh();
+  const file = join(repo, ".ye-ast-graph", "live", "default.lock");
+  const failing = createLiveMirror({ ...pids([70, 71], () => 70), sleep: async () => { throw new Error("sleep failed"); } });
+  ok(await failing.reconcile(location, [], []));
+  await writeFile(file, "71");
+  const queued = createLiveMirror({ ...pids([70, 71], () => 70), sleep: () => new Promise((resolve) => setImmediate(resolve)) });
+
+  const thrown = failing.lock(location);
+  const next = queued.lock(location);
+  await assert.rejects(thrown, /sleep failed/);
+  await rm(file);
+
+  await ok(await next).release();
 });
 
 test("concurrent lock calls never hold the lock at once", async () => {
