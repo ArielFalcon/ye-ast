@@ -43,7 +43,8 @@ export function liveScope(request?: ScopeRequest): DeclaredScope {
   return { ...declaredScope(request), ignored: "git" };
 }
 
-const GIT_STATE = new Set([".git/HEAD", ".git/index"]);
+const GIT_DIRECTORY = ".git";
+const GIT_STATE = new Set([`${GIT_DIRECTORY}/HEAD`, `${GIT_DIRECTORY}/index`]);
 
 /**
  * Whether a change at `path`, relative to a working tree's root, can move the tree's live listing (ADR-0152): git's HEAD
@@ -52,4 +53,16 @@ const GIT_STATE = new Set([".git/HEAD", ".git/index"]);
  */
 export function canMoveLiveListing(path: string, selected: PathSelection, isEngineEntry: (path: string) => boolean): boolean {
   return GIT_STATE.has(path) || (!isEngineEntry(path) && selected(path));
+}
+
+/**
+ * Whether no change at or under `path` can move the live listing, so a watcher need not descend into it (ADR-0152): an
+ * engine entry other than git's HEAD and index and the directory that holds them, or a path under a directory git ignores
+ * whole (`ignoredDirectories`), since git never lists a file under an excluded directory.
+ */
+export function nothingUnderMovesLiveListing(path: string, ignoredDirectories: ReadonlySet<string>, isEngineEntry: (path: string) => boolean): boolean {
+  if (path === GIT_DIRECTORY || GIT_STATE.has(path)) return false;
+  if (isEngineEntry(path)) return true;
+  const segments = path.split("/");
+  return segments.some((_, last) => ignoredDirectories.has(segments.slice(0, last + 1).join("/")));
 }

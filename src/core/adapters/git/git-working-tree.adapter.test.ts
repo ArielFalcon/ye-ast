@@ -225,3 +225,24 @@ test("a repository created again at the same path with another object format is 
 
   assert.equal(valueOf(await tree.list(repo)).objectFormat, "sha256");
 });
+
+test("the directories git ignores whole are those a pattern excludes, never one that holds a tracked file or only ignored files", async () => {
+  write(".gitignore", "build/\n*.log\nvendor/\n");
+  write("src/keep.ts");
+  write("vendor/kept.ts");
+  git("add", ".gitignore", "src/keep.ts");
+  git("add", "-f", "vendor/kept.ts");
+  git("commit", "-q", "-m", "base");
+  write("build/sub/out.js");
+  write("logs/a.log");
+  write("vendor/other.js");
+  write("src/x.log");
+
+  assert.deepEqual(valueOf(await createGitWorkingTree().ignoredDirectories(repo)), ["build"]);
+});
+
+test("a repository that ignores no directory has none", async () => {
+  write("src/keep.ts");
+
+  assert.deepEqual(valueOf(await createGitWorkingTree().ignoredDirectories(repo)), []);
+});

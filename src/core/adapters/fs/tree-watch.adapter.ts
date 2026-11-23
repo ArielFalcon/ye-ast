@@ -16,10 +16,12 @@ function faultOf(error: unknown): TreeWatchFault {
 /** The platform's recursive watcher (`fs.watch`), never persistent, so that no watcher it opens holds the process open. */
 export function createTreeWatch(deps: TreeWatchDeps = defaultTreeWatchDeps): TreeWatch {
   return {
-    watch(root, listener) {
+    watch(root, listener, skipped) {
       try {
-        const watcher = deps.watch(root, { recursive: true, persistent: false, encoding: "utf8" }, (_event, filename) => {
-          listener.changed(filename === null ? undefined : filename.split(sep).join("/"));
+        const relative = (filename: string): string => filename.split(sep).join("/");
+        const ignore = skipped === undefined ? undefined : (filename: string) => skipped(relative(filename));
+        const watcher = deps.watch(root, { recursive: true, persistent: false, encoding: "utf8", ...(ignore === undefined ? {} : { ignore }) }, (_event, filename) => {
+          listener.changed(filename === null ? undefined : relative(filename));
         });
         watcher.on("error", (error) => {
           watcher.close();

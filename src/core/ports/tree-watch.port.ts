@@ -21,5 +21,6 @@ export interface TreeWatcher {
  * file, and it never keeps the process alive by itself.
  */
 export interface TreeWatch {
-  watch(root: string, listener: TreeWatchListener): TreeWatcher | { fault: TreeWatchFault };
+  /** Never descends into a path, relative to the root with `/` separators, that `skipped` names, nor reports one under it. */
+  watch(root: string, listener: TreeWatchListener, skipped?: (path: string) => boolean): TreeWatcher | { fault: TreeWatchFault };
 }

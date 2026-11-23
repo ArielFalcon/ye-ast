@@ -123,6 +123,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.calls.push("list");
       return { ok: true, value: { paths: [...fake.tree.keys()].sort().map((path) => ({ path, submodule: false })), objectFormat: fake.objectFormat.value } };
     },
+    ignoredDirectories: async () => ({ ok: true, value: [] }),
   };
   const mirror: LiveMirror = {
     root: () => "/mirror",

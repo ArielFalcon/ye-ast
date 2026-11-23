@@ -22,4 +22,9 @@ export interface WorkingTree {
    * A subdirectory answers `not-repository-root`; an aborted `signal` answers `aborted`.
    */
   list(repo: string, signal?: AbortSignal): Promise<Result<WorkingTreeListing, VcsFault>>;
+  /**
+   * The directories of `repo` an ignore pattern excludes whole, untracked and relative to the root, under the same
+   * configuration rules as `list`: git lists nothing under them.
+   */
+  ignoredDirectories(repo: string, signal?: AbortSignal): Promise<Result<readonly string[], VcsFault>>;
 }
