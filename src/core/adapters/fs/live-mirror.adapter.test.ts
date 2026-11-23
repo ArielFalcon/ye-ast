@@ -696,12 +696,20 @@ test("a waiter of the process that aborts leaves the line, and the next one take
 test("an acquisition that throws while it waits for another process hands the line on", { timeout: 10_000 }, async () => {
   const { repo, location } = await fresh();
   const file = join(repo, ".ye-ast-graph", "live", "default.lock");
-  const failing = createLiveMirror({ ...pids([70, 71], () => 70), sleep: async () => { throw new Error("sleep failed"); } });
+  let queuedReached = 0;
+  let failingPolls = false;
+  const failing = createLiveMirror({ ...pids([70, 71], () => 70), sleep: async () => {
+    failingPolls = true;
+    await until(() => queuedReached > 0);
+    await settle();
+    throw new Error("sleep failed");
+  } });
   ok(await failing.reconcile(location, [], []));
   await writeFile(file, "71");
-  const queued = createLiveMirror({ ...pids([70, 71], () => 70), sleep: () => new Promise((resolve) => setImmediate(resolve)) });
+  const queued = createLiveMirror({ ...pids([70, 71], () => { queuedReached += 1; return 70; }), sleep: () => new Promise((resolve) => setImmediate(resolve)) });
 
   const thrown = failing.lock(location);
+  await until(() => failingPolls);
   const next = queued.lock(location);
   await assert.rejects(thrown, /sleep failed/);
   await rm(file);
