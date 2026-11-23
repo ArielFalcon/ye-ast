@@ -320,6 +320,7 @@ async function runQueries(context: Context, side: Revision, sideDirectory: strin
   const temporary = join(sideDirectory, "tmp");
   for (const directory of [home, temporary]) mkdirSync(directory, { recursive: true });
   const environment = {
+    YE_AST_DAEMON: "off",
     PATH: process.env.PATH ?? "",
     HOME: home,
     XDG_CACHE_HOME: join(home, "cache"),
