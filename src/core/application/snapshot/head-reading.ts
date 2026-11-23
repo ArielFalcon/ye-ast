@@ -79,6 +79,7 @@ export interface LiveCaptureSelection {
   scope: DeclaredScope;
   trust: "trusted";
   synthesized?: OpenLive["synthesized"];
+  declined?: OpenLive["declined"];
   onStale?: OpenLive["onStale"];
   onStalenessUnavailable?: OpenLive["onStalenessUnavailable"];
 }
@@ -107,7 +108,7 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
       if (index === ordered.length) return { ok: true, value: await use(captures) };
       const selection = ordered[index]!;
       const selected = exportSelection(selection.scope, deps.matcher.matches, isExtractorConfiguration);
-      const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, synthesized: selection.synthesized, signal,
+      const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, synthesized: selection.synthesized, declined: selection.declined, signal,
         ...(selection.onStale === undefined ? {} : { onStale: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStale!(notice) }); } }),
         ...(selection.onStalenessUnavailable === undefined ? {} : { onStalenessUnavailable: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStalenessUnavailable!(notice) }); } }),
       }, async (_tree, pinned: Result<HeldLive, LiveFailure>): Promise<Result<T, { repoId: string; cause: LiveFailure }>> => {
@@ -144,6 +145,8 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
   unavailable(context: { head: string; scope: DeclaredScope }): Promise<Result<T, E>>;
   beforeHead?(): Promise<Result<void, VcsFault>>;
   beforeOpen?(head: string): Promise<Result<void, VcsFault>>;
+  /** Gives the capture up as `unavailable` before it takes the mirror lock or refreshes (`OpenLive.declined`). */
+  declined?: OpenLive["declined"];
 }): Promise<Result<T, E | VcsFault | LiveFault | ScopeFault>> {
   const { repo, repoId, signal } = request;
   const scope = liveScope(request.scope);
@@ -176,7 +179,7 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
   const prepared = await options.beforeOpen?.(head.value);
   if (signal?.aborted) return ABORTED;
   if (prepared !== undefined && !prepared.ok) return prepared;
-  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, head: head.value, trust: "trusted", synthesized: request.synthesized, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
+  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, head: head.value, trust: "trusted", synthesized: request.synthesized, declined: options.declined, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
   if (opened.ok) return opened.value;
   if (opened.fault.cause.kind === "unavailable") {
     const answer = await options.unavailable({ head: head.value, scope });
@@ -189,9 +192,9 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
  * A live capture with nothing to do between HEAD and the open reads HEAD once, under the lock and after the refresh. A
  * failed open answers as it did when HEAD was read before the lock: an unreadable HEAD's fault comes first.
  */
-async function captureWithHeadInside<T, E>(deps: HeadReaderDeps, request: Extract<Revisioned, { live: true }>, scope: DeclaredScope, options: Pick<Parameters<typeof withLiveCapture<T, E>>[2], "use" | "unavailable">): Promise<Result<T, E | VcsFault | LiveFault | ScopeFault>> {
+async function captureWithHeadInside<T, E>(deps: HeadReaderDeps, request: Extract<Revisioned, { live: true }>, scope: DeclaredScope, options: Pick<Parameters<typeof withLiveCapture<T, E>>[2], "use" | "unavailable" | "declined">): Promise<Result<T, E | VcsFault | LiveFault | ScopeFault>> {
   const { repo, repoId, signal } = request;
-  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, trust: "trusted", synthesized: request.synthesized, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
+  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, trust: "trusted", synthesized: request.synthesized, declined: options.declined, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
   if (opened.ok) return opened.value;
   const { cause } = opened.fault;
   if (signal?.aborted) return cause.kind === "unavailable" ? ABORTED : { ok: false, fault: cause };
