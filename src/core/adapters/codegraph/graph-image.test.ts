@@ -36,8 +36,8 @@ function counting(): { deps: CodeGraphDeps; loads: () => number } {
   return { deps: { ...defaultCodeGraphDeps, loadSdk: () => sdk }, loads: () => loads };
 }
 
-function opened(graph: ReturnType<typeof createCodeGraph>, store: string): CodeGraphReader {
-  const reader = graph.open(store);
+function opened(graph: ReturnType<typeof createCodeGraph>, store: string, generation?: string): CodeGraphReader {
+  const reader = graph.open(store, generation);
   assert.ok(reader.ok, JSON.stringify(reader));
   return reader.value;
 }
@@ -142,4 +142,31 @@ test("a mirror's store is read once per committed generation: an edit synced und
   at("rebuilt");
   at("synced");
   assert.equal(reads, 4, "the image of the generation a rebuild replaced is not kept");
+});
+
+test("a mirror's image after chained syncs answers every method as the store's own reader does over the synced rows", async () => {
+  const shutdown = new AbortController();
+  after(() => shutdown.abort());
+  const graph = createCodeGraph(defaultCodeGraphDeps, { shutdown: shutdown.signal });
+  const mirror = mirrorOf(MIXED);
+  assert.ok((await graph.buildMirror(mirror)).ok);
+  const edits: readonly (readonly [string, string | null])[] = [
+    ["src/extra.ts", "import { loadOrder } from './orders';\nexport function extra(): string {\n  return loadOrder('e') + missingToo();\n}\n"],
+    ["src/orders.ts", "export function loadOrder(id: string): string {\n  return id + LoadOrder();\n}\nexport function LoadOrder(): string {\n  return 'x';\n}\n"],
+    ["java/Fmt.java", null],
+    ["java/Helper.java", "package app;\npublic class Helper {\n    static String help() { return new Fmt().format(2); }\n}\n"],
+  ];
+  let held = "built";
+  for (const [index, [path, content]] of edits.entries()) {
+    if (content === null) rmSync(join(mirror, path));
+    else writeFileSync(join(mirror, path), content);
+    const next = `synced-${index}`;
+    assert.ok((await graph.syncMirror(mirror, [path], undefined, { held, next })).ok);
+    held = next;
+  }
+  const synced = opened(graph, mirror, held);
+  assert.deepEqual([synced.symbolsInFiles(["java/Fmt.java"]), synced.declarationsNamed(["help", "extra"]).map(({ file }) => file)], [[], ["java/Helper.java", "src/extra.ts"]]);
+  const { checks, differences } = imageConformance(mirror, held);
+  assert.ok(checks > 100);
+  assert.deepEqual(differences, []);
 });

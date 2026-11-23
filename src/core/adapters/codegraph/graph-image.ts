@@ -1,43 +1,10 @@
+import { DatabaseSync } from "node:sqlite";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference, StoreVersions } from "../../ports/code-graph.port.ts";
 
-/** What a bulk read needs of a SQLite connection: the SDK's read-only connection answers it. */
-export interface StoreRows {
-  exec(sql: string): void;
-  prepare(sql: string): { all(): unknown[] };
-}
-
-interface NodeRow {
-  id: string;
-  kind: string;
-  name: string;
-  qualified_name: string;
-  file_path: string;
-  language: string;
-  start_line: number;
-  end_line: number;
-  start_column: number;
-  end_column: number;
-}
-
-interface EdgeRow {
-  source: string;
-  target: string;
-  kind: string;
-  metadata: string | null;
-  line: number | null;
-  col: number | null;
-  provenance: GraphEdge["provenance"];
-}
-
-interface ReferenceRow {
-  from_node_id: string;
-  reference_name: string;
-  reference_kind: string;
-  file_path: string | null;
-  line: number;
-  col: number;
-  candidates: string | null;
-}
+/** The columns of each query below, in order: rows are read as arrays, the cheapest shape `node:sqlite` hands over. */
+type NodeRow = [id: string, kind: string, name: string, qualifiedName: string, file: string, language: string, startLine: number, endLine: number, startColumn: number, endColumn: number];
+type EdgeRow = [source: string, target: string, kind: string, metadata: string | null, line: number | null, column: number | null, provenance: GraphEdge["provenance"]];
+type ReferenceRow = [from: string, name: string, kind: string, file: string | null, line: number, column: number, candidates: string | null];
 
 /**
  * The raw-SQL remainder (RFC-0003, ADR-0124): one read transaction over the three tables the reader answers from, in
@@ -47,6 +14,9 @@ const NODES = "SELECT id, kind, name, qualified_name, file_path, language, start
 const EDGES = "SELECT source, target, kind, metadata, line, col, provenance FROM edges ORDER BY id";
 const REFERENCES = "SELECT from_node_id, reference_name, reference_kind, file_path, line, col, candidates FROM unresolved_refs ORDER BY id";
 
+/** How long a read waits out another connection's lock: the wait the SDK's own connections set. */
+const BUSY_TIMEOUT_MS = 5000;
+
 /** A store's graph read once and kept frozen: every list is already in the order the port promises. */
 export interface GraphImage {
   readonly versions: StoreVersions;
@@ -55,13 +25,20 @@ export interface GraphImage {
   reader(): CodeGraphReader;
 }
 
-export function readGraphImage(store: StoreRows, versions: StoreVersions): GraphImage {
-  store.exec("BEGIN");
+/** Reads the image of the store whose database file is `database`, opened read-only; the caller has checked its `versions`. */
+export function readGraphImage(database: string, versions: StoreVersions): GraphImage {
+  const store = new DatabaseSync(database, { readOnly: true, timeout: BUSY_TIMEOUT_MS, returnArrays: true });
   let rows: { nodes: NodeRow[]; edges: EdgeRow[]; references: ReferenceRow[] };
   try {
-    rows = { nodes: store.prepare(NODES).all() as NodeRow[], edges: store.prepare(EDGES).all() as EdgeRow[], references: store.prepare(REFERENCES).all() as ReferenceRow[] };
+    store.exec("BEGIN");
+    try {
+      const all = <Row>(sql: string): Row[] => store.prepare(sql).all() as unknown as Row[];
+      rows = { nodes: all(NODES), edges: all(EDGES), references: all(REFERENCES) };
+    } finally {
+      store.exec("COMMIT");
+    }
   } finally {
-    store.exec("COMMIT");
+    store.close();
   }
   return imageOf(rows.nodes, rows.edges, rows.references, versions);
 }
@@ -89,7 +66,7 @@ function imageOf(nodeRows: readonly NodeRow[], edgeRows: readonly EdgeRow[], ref
   const references = new Map<string, GraphUnresolvedReference[]>();
   for (const row of referenceRows) {
     const reference = referenceOf(row);
-    bytes += textBytes(reference.from, reference.name, reference.kind, reference.file, row.candidates ?? "") + 2 * NUMBER_BYTES;
+    bytes += textBytes(reference.from, reference.name, reference.kind, reference.file, row[6] ?? "") + 2 * NUMBER_BYTES;
     group(references, reference.file, reference);
   }
   const files = sortedGroups(byFile, compareSymbols);
@@ -182,47 +159,18 @@ function inKeyOrder<T>(groups: ReadonlyMap<string, readonly T[]>, keys: readonly
     .flatMap((key) => groups.get(key) ?? []);
 }
 
-function symbolOf(row: NodeRow): GraphSymbol {
-  return {
-    id: row.id as GraphNodeId,
-    kind: row.kind,
-    name: row.name,
-    qualifiedName: row.qualified_name,
-    file: row.file_path,
-    language: row.language,
-    startLine: row.start_line,
-    endLine: row.end_line,
-    startColumn: row.start_column,
-    endColumn: row.end_column,
-  };
+function symbolOf([id, kind, name, qualifiedName, file, language, startLine, endLine, startColumn, endColumn]: NodeRow): GraphSymbol {
+  return { id: id as GraphNodeId, kind, name, qualifiedName, file, language, startLine, endLine, startColumn, endColumn };
 }
 
 /** The SDK's own reading of an edge row: metadata that is not JSON reads as none, and a missing position as `null`. */
-function edgeOf(row: EdgeRow): GraphEdge {
-  return Object.freeze(
-    edgeFrom({
-      source: row.source,
-      target: row.target,
-      kind: row.kind,
-      metadata: row.metadata ? parsedOr(row.metadata, undefined) : undefined,
-      line: row.line ?? undefined,
-      column: row.col ?? undefined,
-      provenance: row.provenance,
-    }),
-  );
+function edgeOf([source, target, kind, metadata, line, column, provenance]: EdgeRow): GraphEdge {
+  return Object.freeze(edgeFrom({ source, target, kind, metadata: metadata ? parsedOr(metadata, undefined) : undefined, line: line ?? undefined, column: column ?? undefined, provenance }));
 }
 
-function referenceOf(row: ReferenceRow): GraphUnresolvedReference {
-  const candidates = row.candidates ? parsedOr<string[] | undefined>(row.candidates, undefined) : undefined;
-  return Object.freeze({
-    from: row.from_node_id as GraphNodeId,
-    name: row.reference_name,
-    kind: row.reference_kind,
-    file: row.file_path ?? "",
-    line: row.line,
-    column: row.col,
-    candidates: Object.freeze(candidates ?? []),
-  });
+function referenceOf([from, name, kind, file, line, column, candidates]: ReferenceRow): GraphUnresolvedReference {
+  const parsed = candidates ? parsedOr<string[] | undefined>(candidates, undefined) : undefined;
+  return Object.freeze({ from: from as GraphNodeId, name, kind, file: file ?? "", line, column, candidates: Object.freeze(parsed ?? []) });
 }
 
 function parsedOr<T>(text: string, fallback: T): T {
