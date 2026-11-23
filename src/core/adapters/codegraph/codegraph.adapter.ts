@@ -282,7 +282,7 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps, opti
     }
   }
 
-  return { index, buildMirror, adoptMirror, syncMirror, open };
+  return { index, buildMirror, adoptMirror, syncMirror, retireMirror: (mirror) => workers.end(resolve(mirror)), open };
 }
 
 function fromWorker(answer: SyncAnswer): Result<MirrorSyncSummary, CodeGraphFault> {

@@ -414,7 +414,7 @@ function impactQueriesFor(deps: SnapshotReaderDeps) {
   return createImpactQueries({
       ...deps, matcher: { matches: () => true }, engines: {},
       vcs: Object.assign(deps.vcs, { mergeBase: async () => ({ ok: true as const, value: SHA }), diffCommits: async () => ({ ok: true as const, value: [] }), diffDirectories: async () => ({ ok: true as const, value: [] }) }),
-      graph: { index: async () => unavailable, open: () => unavailable, buildMirror: async () => unavailable, adoptMirror: async () => unavailable, syncMirror: async () => unavailable },
+      graph: { index: async () => unavailable, open: () => unavailable, buildMirror: async () => unavailable, adoptMirror: async () => unavailable, syncMirror: async () => unavailable, retireMirror: () => undefined },
       angular: { read: async () => [] }, relations: { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: [], fields: [], locals: [] }) }, dynamicLoads: { extract: async () => [] }, contracts: { operations: () => [] }, angularEngines: {},
     });
 }

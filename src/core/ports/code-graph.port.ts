@@ -137,6 +137,8 @@ export interface CodeGraph {
    * process; an aborted `signal` stops it.
    */
   syncMirror(mirror: string, paths: readonly string[], signal?: AbortSignal, generations?: SyncGenerations): Promise<Result<MirrorSyncSummary, CodeGraphFault>>;
+  /** Ends what `syncMirror` keeps running for `mirror` once the mirror is discarded; a mirror with nothing running is left alone. */
+  retireMirror(mirror: string): void;
   /**
    * Opens a store this adapter built, read-only, after checking it against the supported versions. `generation` is the
    * committed store generation of a mirror (`MirrorState.storeGeneration`), given only while no build or sync is under

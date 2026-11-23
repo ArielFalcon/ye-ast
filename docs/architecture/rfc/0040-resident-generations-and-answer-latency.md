@@ -1,7 +1,7 @@
 # RFC-0040: Resident snapshot generations, so an answer costs what depends on its question
 
 - Status: Draft, 2026-11-17; decisions D1 to D5 approved by the owner on 2026-11-17 (translated): "I approve the
-  decisions"; D6 to D8 open
+  decisions"; D6 to D8 decided by the lead on 2026-11-23 under the owner's delegation (§8), pending the Fable review
 - Related: ADR-0003, ADR-0005, ADR-0011, ADR-0015, ADR-0020, ADR-0021, ADR-0026, ADR-0028, ADR-0035, ADR-0040,
   ADR-0045, ADR-0077, ADR-0112, ADR-0121, RFC-0003, RFC-0005, RFC-0006, RFC-0010, RFC-0012, RFC-0037, RFC-0039
 
@@ -194,7 +194,7 @@ phase 0 replaces them with measurements.
 | 1 | Floor, sync worker, graph image (kept and live), alignment repairs, Java whole-project readers by recorded reads (`keptByFile` already exists, `java-kept-reads.ts:60-91`), default budget sized from the measured working set, launch priming, one index per content | 1.4-1.8 s | 4.0-4.3 s | about 0.9 / 1.6 / 4.0 s |
 | 2 | Decoded tier, working-set floor, red-green verification, resident stage outputs, answer memo, lock scope | 0.4-0.7 s | 2.5-3.5 s | about 0.4 / 0.8 / 3.0 s |
 | 3 | Refresh ahead of the query, per-file TypeScript and Angular splits, demand-driven reads, resident trees (D6) | 0.25-0.4 s | 0.3-0.6 s | about 0.2 / 0.4 / 1.0-1.5 s |
-| 4 | Daemon started by `init` and packed derived store (D7, D8) | same | same | first call of a session 0.3-0.6 s with the daemon up |
+| 4 | Daemon for the CLI and the MCP server, started on first use and by `init` (D7); packed store only if its signal appears (D8) | same | same | first call of a session 0.3-0.6 s with the daemon up |
 
 The p95 stays near the after-edit cost until phase 3 moves the sync and the re-derivation off the query path. Before
 phase 3, the after-edit call is the critical case that the owner allows 3-5 s.
@@ -216,14 +216,87 @@ What remains in the steady state:
 | D3 | An answer is kept in memory for its generation | Approved 2026-11-17 | ADR-0020 d2; ADR-0077 "Not decided here" |
 | D4 | The mirror lock covers the refresh only; a query computes on a pinned generation | Approved 2026-11-17 | RFC-0010 "Live head", RFC-0005 "Live freshness" |
 | D5 | Demand-driven reads through inverted indexes, under the superset rule and its property test | Approved 2026-11-17 | ADR-0045 |
-| D6 | Trees and TypeScript source files owned by the generation | Open. It is decided at the close of phase 2 with RSS data, or earlier if a stage output of L16 cannot be made plain data without trees | ADR-0040 d1 |
-| D7 | The daemon slice starts, and `ye-ast init` starts the daemon that indexes in the background | Open: decided at the close of phase 2 | ADR-0011 d5, ADR-0005 d5 |
-| D8 | A packed derived store read in one piece | Open: with D7 | ADR-0077 d4, RFC-0037 |
+| D6 | Trees and TypeScript source files owned by the generation | Decided 2026-11-23 by the lead under the owner's delegation (§8): yes, scoped and gated by an RSS ceiling | ADR-0040 d1 |
+| D7 | The daemon slice starts, and `ye-ast init` starts the daemon that indexes in the background | Decided 2026-11-23 by the lead under the owner's delegation (§8): yes, a minimal per-user daemon behind the existing query protocol | ADR-0011 d5, ADR-0005 d5 |
+| D8 | A packed derived store read in one piece | Decided 2026-11-23 by the lead under the owner's delegation (§8): not now; reopened only by a measured signal | ADR-0077 d4, RFC-0037 |
 
 Launch priming is not part of D8. The launch already runs `warmLive` (`compose.ts:279-289`), which builds the index
 and primes nothing; priming the snapshot-only derivations there is phase 1 work.
 
 Each approved decision lands as an ADR written by the first unit that needs it, citing this RFC and the owner's words.
+
+## 8. Decisions D6-D8 and late units (2026-11-23)
+
+Owner, 2026-11-23 (translated): "apply all of this when the time comes; resolve the open decisions as you best
+understand them, and pass the decisions and the new plans for those units to the Fable reviewer". The lead decided
+D6-D8 below; they stay subject to that review and to the evidence each unit gathers.
+
+Measured since §2, on `main` after phases 0-1 (jhipster-monolith, shopizer/backend; machine under load, figures
+indicative): warm live `callers` 0.14-0.24 s on jhipster; shopizer/backend warm `trace` 0.17 s, `callers` 1.5 s; right
+after an edit on shopizer/backend `trace` ~4.4 s and `callers` ~3.4 s, of which call sites ~0.9 s, entrypoints ~0.7 s,
+lock 0.6-0.75 s, the retained Java project ~0.47 s (every source parsed again) and the live image re-read ~0.23 s;
+`live-lock` ~54 ms twice per query with a single server.
+
+### D6: resident Java trees (decided: yes, Java only, gated)
+
+- **What.** Parsed Java trees stay resident, owned per tree by its identity (path and content, ADR-0040 decision 2) with
+  a count of the generations that reference it. An edit parses only the changed files, **fresh** (no `tree.edit`
+  incremental reparse: at ~0.37 ms per file it saves under 1 ms and risks a tree that differs from the cold oracle's in
+  error recovery). A tree is freed exactly once, when the last generation that references it is retired.
+- **Why.** After an edit, any derivation that misses calls `heldJavaProject`, which keeps, parses and builds the whole
+  project (`java-kept-reads.ts:72-77`, `java-project.ts:99-108`): ~0.47 s on shopizer/backend whatever the edit's size.
+- **First step.** Measure how much of the 0.47 s is parsing and how much is `createJavaProject`, whose key changes with
+  any edit; if the build dominates, the unit also keeps the project's per-file parts and rebuilds only the changed
+  files' parts, or reports that it cannot.
+- **Gate.** The byte charge counts the WASM tree and the JS-side `Node` wrappers (ADR-0040 measured 66.5 MB of WASM
+  against ~300 MB of RSS); an RSS ceiling test and the 200-edit leak test of §4 on the Java backend; a cancellation
+  test; a query pinned at generation N reads an unchanged file after N+1 is published, and N+1 reads it after N is
+  retired; trees never reachable from a kept value. Fallback if the ceiling cannot hold: no resident trees, today's
+  behaviour (a project without trees is not possible: `JavaFile.root`, `TypeDecl.node` and `MethodDecl.node` are tree
+  nodes, `java-symbols.ts:15-17,87-107`).
+- **TypeScript is out** until a stage line shows a measured cost there; `createProgram` runs per file or group today
+  (`lexical-bindings.ts:42`, `receiver-types.ts:30`, `type-bindings.adapter.ts:203`).
+- **Order.** After L16 and L9b (unit L24, phase 3).
+
+### D7: a minimal daemon for the CLI and the MCP server (decided: yes)
+
+- **What.** One per-user daemon process hosts the composed read query families and serves the existing query protocol
+  (ADR-0011) on a Unix domain socket in a short per-user runtime directory with owner-only permissions (the RFC-0005
+  socket-path length rule; a cache directory under `os.tmpdir()` on macOS exceeds it). **Clients: the CLI and the MCP
+  server only.** `ye-ast serve` stays in process: ADR-0006 rejects a process that outlives a run under the sandbox's uid,
+  and `SnapshotAdmin` must stay with the host (ADR-0011 decision 2).
+- **Start and version.** The MCP server and `ye-ast init` start the daemon when it is absent ("started on first use by
+  any client", RFC-0005); every answer states whether the daemon or the process answered (ADR-0011 decision 2), so the
+  bench and the differential can tell. A daemon that receives a handshake of another version finishes its requests in
+  flight and exits; the client answers in process meanwhile. The daemon exits after a configured idle period (RFC-0006),
+  never by a size rule.
+- **Isolation.** CPU-bound work must not serialize across repositories on one event loop: the daemon is a supervisor
+  with one worker process per repository (RFC-0005 "Daemon" already requires child processes and per-project
+  isolation). Gate: three clients through the daemon against three in-process servers, on one repository and on three,
+  must not be slower at p75.
+- **What does not change.** The mirror lives in the repository, so two daemons with different `--cache`, or a client in
+  fallback, may still write the same mirror: the file lock stays. Read-only toward agents, trust declared outside the
+  repository and carried per request with the launch flags (`--jdk`, `--node-modules`), untrusted rules, no network
+  beyond ADR-0016, no repository code. `src/daemon/` is a driving adapter; the core does not know it exists.
+- **First slice.** Socket server, handshake with version, lifecycle (start on first use, idle exit, stale socket
+  recovery, one instance per user via an exclusive lock), per-repository workers, MCP and CLI clients with in-process
+  fallback. Deferred, named against ADR-0005 decision 5: hooks, multi-user hosts, remote transport.
+- **Order.** Phase 4 (unit L25), after phase 3's single-flight refresh (L19), which the workers reuse.
+
+### D8: packed derived store (decided: not now)
+
+- qayaba, the first consumer, never runs a daemon (ADR-0006), so "the process stays up" does not settle D8 for it.
+- Reopening signal, measurable today: the bench's "new process with a warm disk" cell on the untrusted sha path. If
+  derived-store reads rank among the top stages of that first call, D8 reopens. Until then ADR-0077's per-entry layout
+  stays. (§6's phase-4 row and unit L26 follow this decision.)
+
+### Late units
+
+| Unit | Content | Proof |
+|---|---|---|
+| L29 | Lock acquisition without a poll for in-process waiters. A query waits ~54 ms on `live-lock` even with one server; `live-lock` measures acquisition only, so a holder is alive. First identify it (another pid such as the sync worker, priming, a concurrent refresh): if it is another process, an in-process queue does not help and the cause is fixed where it lives. Otherwise: an in-process queue per lock file in front of the file lock, woken on release; the woken waiter still goes through `tryCreateLock`, so cross-process exclusion and stale-holder recovery are unchanged. The queue is the piece L19's single flight reuses | RED: two sequential acquisitions in one process wait 0 polls; a cross-process holder still excludes; abort while waiting; bench `live-lock` p50 with one server and p95 with three servers (no process starves the others) |
+| L30 | Cheaper live image load after a sync. Never patch the image (ADR-0125: a sync changes synthesized edges across files). Profile the 0.15-0.5 s read and cut its cost (statement shape, allocation, grouping in arrays). To keep cancellation prompt, chunk the read inside the current transaction (`graph-image.ts:59-62`) knowing it lengthens the time under the lock, or move it to a worker only with a transferable representation (a structured clone deserializes on the main thread anyway) | L4's conformance test on every corpus store **and on a mirror store after the differential's chained edits** (synced rows); stage `store-open` after an edit before/after; a cancellation test during the read |
+| L31 | The warm differential measures the warm process alone and keeps the cross-process case explicit. Run every warm query of a step first, then start the oracle; record the oracle's launch apart. Add an explicit "foreign sync" step: after an edit, start the oracle and wait for its first live answer (it syncs the mirror), then run the warm queries (the warm process must detect a foreign store generation, reload the image and reopen its worker), then another edit synced by the warm process; outside the timing figures | Re-run L1's seeded bug (a key without the store generation) and see the differential fail; verdicts unchanged on main; warm wall times without the oracle's launch |
 
 ## Open questions
 
