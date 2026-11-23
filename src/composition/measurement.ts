@@ -17,6 +17,7 @@ import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { IndexDiscard } from "../core/ports/index-cache.port.ts";
 import type { LiveMirror } from "../core/ports/live-mirror.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
+import type { WatchReport } from "./live-watch.ts";
 
 /** Receives one measurement line, already redacted, one per call. */
 export type MeasurementSink = (line: string) => void;
@@ -129,10 +130,17 @@ export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): L
 /**
  * Runs launch priming and writes one `prime` line: how it ended, how many times it waited for queries, and its time. It never rejects: what priming could not derive, the query that needs it derives, and that query answers its fault.
  */
-export async function measuredPriming(prime: () => Promise<PrimingOutcome>, deps: MeasurementDeps | undefined): Promise<void> {
+export async function measuredPriming(prime: () => Promise<PrimingOutcome>, trigger: "launch" | "watch", deps: MeasurementDeps | undefined): Promise<void> {
   const started = performance.now();
   const ended = await prime().then(({ kind, yields }) => ({ outcome: kind, yields }), () => ({ outcome: "threw" }));
-  if (deps !== undefined) reportBestEffort({ event: "prime", ...ended, duration_ms: elapsed(started) }, deps);
+  if (deps !== undefined) reportBestEffort({ event: "prime", trigger, ...ended, duration_ms: elapsed(started) }, deps);
+}
+
+/** What the watcher of a live tree did (ADR-0152), one `watch` line each: its refreshes drained, or it turned off and why. */
+export function measuredWatch(deps: MeasurementDeps | undefined): (report: WatchReport) => void {
+  return (report) => {
+    if (deps !== undefined) reportBestEffort({ event: "watch", ...report, start_ms: Math.round(performance.now()) }, deps);
+  };
 }
 
 /** The snapshot data cache's decisions, one `cache` line each; the key never leaves the cache. */
