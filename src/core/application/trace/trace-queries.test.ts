@@ -16,7 +16,8 @@ import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresol
 import type { DeclaredDeclaration, DeclaredCallable, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import type { TypeBindingsAnswer, TypeTarget } from "../../ports/type-bindings.port.ts";
-import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import { createTraceQueries, effectSites, type TraceQueriesDeps } from "./trace-queries.ts";
 
 const SHA = "a".repeat(40);
 const SUMMARY = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "fake", schema: 0, extraction: 0 } };
@@ -1796,4 +1797,15 @@ test("a dispatch cut carries the places the port named as its cause, sorted, and
   const unnamed = dispatchCuts(await factOf({ ...base, dispatch: { send: { kind: "unknown", reason: "dispatch not proven" } } }));
   assert.equal(unnamed.length, 1);
   assert.equal("cause" in unnamed[0]!, false);
+});
+
+test("the data effects of a snapshot read are read over that read's derived facts", async () => {
+  const facts = { ofInputs: (_slot: string, _inputs: object, derive: () => Promise<unknown>) => derive() } as unknown as DerivedFacts;
+  const given: unknown[] = [];
+  const deps = { callSites: { placed: async () => [] }, dataEffects: { placed: async (_files: unknown, options?: { facts?: DerivedFacts }) => (given.push(options?.facts), []) } };
+  const tree = { export: { files: [], skipped: [] }, sources: [{ path: A, content: "" }] } as unknown as Parameters<typeof effectSites>[1]["tree"];
+
+  await effectSites(deps as unknown as TraceQueriesDeps, { tree, prepared: { facts } }, { repoId: "shop" }, {}).dataSites();
+
+  assert.deepEqual(given, [facts]);
 });

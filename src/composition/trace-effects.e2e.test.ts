@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import type { Cut } from "../core/domain/shared/fact.ts";
 import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
+import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { composeQueries, composeCli } from "./compose.ts";
 
 const GIT_ENV = {
@@ -366,6 +367,30 @@ class Store {
   const dead = await trace("src/main/java/shop/Store.java:Store.dead");
   assert.deepEqual(effectsOf(dead.value), []);
   assert.ok(dead.cuts?.some((cut) => cut.at[0]?.includes("data effect")));
+});
+
+test("after a commit changes one file's receiver binding, a warm composition's data effects move as a cold composition's do", async () => {
+  const store = (field: string) => `package shop;
+import org.springframework.data.jpa.repository.JpaRepository;
+class Order {}
+interface Orders extends JpaRepository<Order, Long> {}
+class Store {
+ ${field} Orders orders;
+ void save(Order o) { orders.save(o); }
+}
+`;
+  commit({ "src/main/java/shop/Store.java": store("private"), "src/main/java/shop/Report.java": "package shop;\nimport org.springframework.jdbc.core.JdbcTemplate;\nclass Report { private JdbcTemplate jdbc; void run() { jdbc.update(\"x\"); } }\n" });
+  commit({ "src/main/java/shop/Store.java": store("protected") });
+  const walk = (queries: ReturnType<typeof composeQueries>, revision: string) => queries.trace.walk({ repo, repoId: "fixture", revision, targets: [{ file: "src/main/java/shop/Store.java", symbol: "Store.save" }] });
+  const warm = composeQueries({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") });
+  const before = await walk(warm, "HEAD~1");
+
+  const after = await walk(warm, "HEAD");
+
+  assert.ok(before.ok && after.ok);
+  const dataOf = (fact: typeof after) => (fact.ok && fact.value.status !== "unknown" ? fact.value.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data") : []);
+  assert.deepEqual([dataOf(before).length, dataOf(after).length], [1, 0]);
+  assert.equal(canonicalJson(after), canonicalJson(await walk(composeQueries({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cold-cache") }), "HEAD")));
 });
 
 test("compiled review counterexamples cannot invent framework identity, entity identity or overload access", async () => {

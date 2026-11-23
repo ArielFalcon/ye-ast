@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaDataEffects } from "./data-effects.adapter.ts";
+import { createJavaReceiverMethods } from "./java-receiver-methods.ts";
+import { edited, java, rememberingFacts } from "./remembering-facts.testing.ts";
 
 const source = (name: string) => readFileSync(new URL(`./fixtures/data-effects/${name}.java`, import.meta.url), "utf8");
 
@@ -339,4 +341,33 @@ test("a reading given a turn awaits it between the sources it reads and answers 
   assert.deepEqual(turned, without);
   assert.ok(turns >= files.length, `${turns} turns over ${files.length} sources`);
   await assert.rejects(reader.placed(files, { between: async () => { throw new Error("cut"); } }), /cut/);
+});
+
+const STORE = java("Store", ["package app;", "import org.springframework.data.jpa.repository.JpaRepository;", "class Order {}", "interface Orders extends JpaRepository<Order, Long> {}", "class Store { private Orders orders; void save(Order o) { orders.save(o); } }"]);
+const REPORT = java("Report", ["package app;", "import org.springframework.jdbc.core.JdbcTemplate;", "class Report { private JdbcTemplate jdbc; void run() { jdbc.update(\"x\"); } }"]);
+/** The store's field no longer private: its receiver binding turns unproven, so the save is no proven write. */
+const OPEN_STORE = edited(STORE, ["private Orders", "Orders"]);
+const pathsOf = (derived: readonly string[]) => derived.map((entry) => entry.slice(entry.lastIndexOf(" ") + 1));
+
+test("after one file changes, a reading over kept facts derives the receiver bindings of that file alone and answers as a reading without them", async () => {
+  const reader = createJavaDataEffects(await createJavaParser());
+  const facts = rememberingFacts();
+  const before = await reader.placed([STORE, REPORT], { facts });
+  assert.deepEqual(pathsOf(facts.derived), [STORE.path, REPORT.path]);
+  facts.derived.length = 0;
+
+  const after = await reader.placed([OPEN_STORE, REPORT], { facts });
+
+  assert.deepEqual(pathsOf(facts.derived), [OPEN_STORE.path]);
+  assert.deepEqual(after, await reader.placed([OPEN_STORE, REPORT]));
+  assert.notDeepEqual(after, before);
+});
+
+test("the data reading keeps a file's receiver bindings apart from the declared-fields reading of the same file", async () => {
+  const facts = rememberingFacts();
+  const line = OPEN_STORE.content.split("\n")[4]!;
+  await createJavaReceiverMethods(createJavaParser, [OPEN_STORE], [OPEN_STORE.path], facts)([{ file: OPEN_STORE.path, line: 5, column: line.indexOf("orders.save") + 1, member: "save" }]);
+  const reader = createJavaDataEffects(await createJavaParser());
+
+  assert.deepEqual(await reader.placed([OPEN_STORE, REPORT], { facts }), await reader.placed([OPEN_STORE, REPORT]));
 });

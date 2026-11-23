@@ -40,7 +40,8 @@ import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading 
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 import { placeEffects } from "./trace-effects.ts";
-import { comparePlacement, type DataEffectReader } from "../../domain/trace/data-effect-site.ts";
+import { comparePlacement } from "../../domain/trace/data-effect-site.ts";
+import type { DataEffectReader } from "../../ports/data-effect-reader.port.ts";
 import type { DeferredValueReader } from "../../ports/framework-deferrals.port.ts";
 import type { LibraryPlacedCallSiteReader } from "../../ports/library-signatures.port.ts";
 import { pagePlans } from "./page-plans.ts";
@@ -242,7 +243,7 @@ export function effectSites(
   const { sources } = head.tree;
   const facts = head.prepared?.facts;
   const passing = between === undefined ? {} : { between };
-  const dataEffects = () => deps.dataEffects?.placed(sources, passing) ?? Promise.resolve([]);
+  const dataEffects = () => deps.dataEffects?.placed(sources, { ...passing, ...(facts === undefined ? {} : { facts }) }) ?? Promise.resolve([]);
   const completeSource = completeSourceRead(head.tree.export, new Set(sources.map(({ path }) => path)), {
     include: request.scope?.include ?? [], exclude: request.scope?.exclude ?? [],
   }) && (deps.librarySources?.length ?? 0) === 0;

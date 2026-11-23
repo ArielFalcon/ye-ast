@@ -21,7 +21,15 @@ import { questions } from "./java-declaration-questions.ts";
 import { heldProjectOnce, keptByFile, keptReads, type KeptReads, type ReadOver } from "./java-kept-reads.ts";
 
 const SLOT = "java-receiver-methods";
-const BINDINGS_SLOT = "java-receiver-bindings";
+/**
+ * The readings of `javaReceiverBindings` the Java readers ask, each kept in its own slot: `declared-fields` admits every
+ * declared field for nominal repository-member selection; `unproven` keeps the annotation candidates a data effect marks
+ * unproven.
+ */
+const BINDING_READINGS = {
+  "declared-fields": { slot: "java-receiver-bindings", options: { declaredFields: true } },
+  unproven: { slot: "java-unproven-receiver-bindings", options: { includeUnproven: true } },
+} as const;
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
 /** What every call reads where the strict binding proves nothing over the sources (`provesBinding`). */
@@ -1440,9 +1448,10 @@ function sameReading(first: ReceiverMethod, second: ReceiverMethod): boolean {
  * The member calls of a file whose receiver one declaration types, by the call's place and member. They read the file's
  * own syntax tree alone, so a derived fact keeps them by the file's content.
  */
-export function receiverBindingsOf(file: JavaFile, source: SourceFile | undefined, facts?: DerivedFacts): ReadonlyMap<string, ReceiverBinding> {
-  const derive = (): ReceiverBinding[] => javaReceiverBindings(file.root, { declaredFields: true });
-  const bindings = facts === undefined || source === undefined ? derive() : facts.ofFile(BINDINGS_SLOT, source, derive);
+export function receiverBindingsOf(file: JavaFile, source: SourceFile | undefined, facts?: DerivedFacts, reading: keyof typeof BINDING_READINGS = "declared-fields"): ReadonlyMap<string, ReceiverBinding> {
+  const { slot, options } = BINDING_READINGS[reading];
+  const derive = (): ReceiverBinding[] => javaReceiverBindings(file.root, options);
+  const bindings = facts === undefined || source === undefined ? derive() : facts.ofFile(slot, source, derive);
   return new Map(bindings.map((binding) => [callKey(binding.line, binding.column, binding.member), binding]));
 }
 
