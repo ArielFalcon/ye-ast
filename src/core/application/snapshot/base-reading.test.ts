@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SnapshotRef } from "../../domain/shared/fact.ts";
+import type { LibrarySignatureSource } from "../../ports/library-signatures.port.ts";
 import type { CodeGraphReader, GraphNodeId } from "../../ports/code-graph.port.ts";
 import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
@@ -13,6 +14,13 @@ import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
 import type { WorkspaceFault } from "../../ports/workspace-repos.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { createBaseReadings } from "./base-reading.ts";
+import { prepareCommit } from "./prepared-snapshot.ts";
+import { declaredScope } from "../../domain/map/entrypoint-map.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
+import type { PreparedCommit, SnapshotDataCache, SnapshotReaderDeps } from "./read-snapshot.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
+import type { TrustMode } from "../../domain/shared/fact.ts";
 import type { EdgeTargets } from "../navigation/edge-targets.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { SourceReading } from "../../domain/change/source-tokens.ts";
@@ -301,3 +309,106 @@ test("each structural overload set of one owner reads its one implementation, pa
 function callable(name: string, start: number, body: boolean): DeclaredCallable {
   return { name, start, nameLine: start, body, overridable: true };
 }
+
+/**
+ * One query's read of a commit through the snapshot cache (ADR-0143), prepared as a family prepares it: its own
+ * retention over the shared cache, its own sources, and its own parse hold, released once the query answered.
+ */
+async function queryRead(cache: SnapshotDataCache, files: readonly { path: string; content: string }[], trust: TrustMode = "untrusted"): Promise<{ prepared: PreparedCommit; hold: ParseHold; sources: readonly SourceFile[] }> {
+  let open = true;
+  const hold: ParseHold = { keep: (sources) => sources.map((file) => ({ ...file })), open: () => open, release: () => void (open = false) };
+  const deps = {
+    vcs: { exportCommit: async (_repo: string, _sha: string, _root: string, plan: { write(path: string): boolean }) => ({ ok: true, value: { files: files.map(({ path, content }) => ({ path, blob: content, written: plan.write(path) })), skipped: [] } }) },
+    reader: { read: async () => files.map((file) => ({ ...file })) },
+    snapshotCache: cache,
+    digest: { of: (text: string) => text },
+  } as unknown as SnapshotReaderDeps;
+  const prepared = await prepareCommit(deps, "/work/shop", "a".repeat(40), { directory: async () => "/scratch", keep: hold.keep, hold }, () => true, { scope: declaredScope(undefined), trust });
+  assert.ok(prepared.ok);
+  const read = await prepared.value.sources();
+  assert.ok(read.ok);
+  return { prepared: prepared.value, hold, sources: read.value.sources };
+}
+
+const READ_FILES = [{ path: "src/Svc.java", content: "class Svc extends Base {}" }, { path: "src/Base.java", content: "class Base {}" }];
+
+const JDK = { kind: "jdk" as const, at: "", path: "/host/jdk" };
+
+function indexLine() {
+  const file = "src/Svc.java";
+  const store = fakeCodeGraph(
+    [fakeNode("Base", "class", "src/Base.java", 1, 9), fakeNode("Svc", "class", file, 1, 20), fakeNode("run", "method", file, 3, 5)],
+    [{ from: "Svc", to: "run", kind: "contains" }, { from: "Svc", to: "Base", kind: "extends", line: 1, column: 20 }],
+    [{ from: "run", name: "List", kind: "references", file, line: 4, column: 8 }],
+  );
+  let asked = 0;
+  const origins = () => ({
+    origins: async (sites: readonly unknown[]) => (asked++, sites.map(() => ({ status: "complete", occurrence: true, value: { kind: "external", module: "java.util" }, evidence: [] }))),
+    implementedDeclarations: async (sites: readonly unknown[]) => (asked++, sites.map(() => ({ kind: "declarations", declarations: [{ file: "src/Base.java", start: 2, name: "run" }] }))),
+  }) as unknown as ImportOrigins;
+  const jdk = { digest: "ct-1" };
+  const libraries = { open: () => ({ kind: "used", signatures: { basis: { version: "21", feature: 21, basis: "declared-jdk", digest: jdk.digest }, typeOf: () => undefined } }) } as unknown as LibrarySignatureSource;
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, importOrigins: origins, libraries, declaredOutputs: () => [JDK] });
+  const read = async ({ prepared, hold, sources }: { prepared: PreparedCommit; hold: ParseHold; sources: readonly SourceFile[] }, options: { digest?: string; signal?: AbortSignal; originPaths?: readonly string[]; open?: true } = {}) => {
+    const source = { tree: { export: { files: [], skipped: [] }, sources }, prepared, hold, store, digest: options.digest ?? "index-1", snapshot: SHA, request: { repo: "/work/shop", ...(options.signal && { signal: options.signal }) } };
+    const narrowing = options.originPaths === undefined ? {} : { originPaths: options.originPaths };
+    const reading = options.open ? await readings.open(source, narrowing) : readings.of(source, narrowing);
+    const proofs = await reading.referenceProofs();
+    return { external: [...proofs.external], implemented: [...(await reading.implementedContracts())].map(([id, answer]) => [id, answer]) };
+  };
+  return { read, asked: () => asked, jdk };
+}
+
+test("B6 and the implemented contracts are asked once across two queries of one kept index, a second query after the first released its hold answers as a cold read, and another index asks again", async () => {
+  const line = indexLine();
+  const cache = createSnapshotDataCache(1 << 20);
+
+  const firstRead = await queryRead(cache, READ_FILES);
+  const first = await line.read(firstRead);
+  firstRead.hold.release();
+  const second = await line.read(await queryRead(cache, READ_FILES));
+
+  assert.equal(line.asked(), 2, "one question per stage over both queries");
+  assert.deepEqual(second, first);
+  assert.deepEqual(second, await indexLine().read(await queryRead(createSnapshotDataCache(1 << 20), READ_FILES)));
+  await line.read(await queryRead(cache, READ_FILES), { digest: "index-2" });
+  assert.equal(line.asked(), 4);
+});
+
+test("another trust, another content, another narrowing of the origins, or a hierarchy completed before the stages misses the kept index stages", async () => {
+  const line = indexLine();
+  const cache = createSnapshotDataCache(1 << 20);
+
+  await line.read(await queryRead(cache, READ_FILES));
+  await line.read(await queryRead(cache, READ_FILES), { originPaths: ["src/Svc.java"] });
+  assert.equal(line.asked(), 4, "the origin paths are in the key");
+  await line.read(await queryRead(cache, READ_FILES), { open: true });
+  assert.equal(line.asked(), 6, "the completed hierarchy is in the key");
+  await line.read(await queryRead(cache, READ_FILES, "trusted"));
+  assert.equal(line.asked(), 8, "the trust is in the key");
+  await line.read(await queryRead(cache, READ_FILES.map((file) => ({ ...file, content: `${file.content}\n` }))));
+  assert.equal(line.asked(), 10, "an edit is another content");
+});
+
+test("a declared JDK whose content changed at the same path misses the kept reference proofs", async () => {
+  const line = indexLine();
+  const cache = createSnapshotDataCache(1 << 20);
+
+  await line.read(await queryRead(cache, READ_FILES));
+  line.jdk.digest = "ct-2";
+  await line.read(await queryRead(cache, READ_FILES));
+
+  assert.equal(line.asked(), 4);
+});
+
+test("a stage whose query was aborted is never kept for the next query", async () => {
+  const line = indexLine();
+  const cache = createSnapshotDataCache(1 << 20);
+  const aborted = new AbortController();
+  aborted.abort();
+
+  await line.read(await queryRead(cache, READ_FILES), { signal: aborted.signal });
+  await line.read(await queryRead(cache, READ_FILES));
+
+  assert.equal(line.asked(), 4);
+});

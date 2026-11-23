@@ -50,6 +50,28 @@ export interface TypedReading {
 const NOT_TYPED: TypedReading = { inputsLeftOut: [] };
 const CONTRADICTED_CALLS = "contradicted-calls";
 
+/** B6 as plain data, for the snapshot cache (ADR-0143 decision 1). */
+interface PlainReferenceProofs {
+  external: readonly string[];
+  bound: readonly (readonly [string, string])[];
+  localParameters: readonly string[];
+  validOccurrences: readonly string[];
+  thisMemberCalls: readonly string[];
+}
+
+function plainProofs({ external, bound, localParameters, validOccurrences, thisMemberCalls }: ReferenceProofs): PlainReferenceProofs {
+  return { external: [...external], bound: [...bound], localParameters: [...localParameters], validOccurrences: [...validOccurrences], thisMemberCalls: [...thisMemberCalls] };
+}
+
+function revivedProofs({ external, bound, localParameters, validOccurrences, thisMemberCalls }: PlainReferenceProofs): ReferenceProofs {
+  return { external: new Set(external), bound: new Map(bound), localParameters: new Set(localParameters), validOccurrences: new Set(validOccurrences), thisMemberCalls: new Set(thisMemberCalls) };
+}
+
+/** What a declared JDK gave the origins, as its validated identity: each used one's signature digest and release, each unused one's reason (ADR-0143 decision 3). */
+function jdkIdentity(jdks: LibrariesRead | undefined): object | null {
+  return jdks === undefined ? null : { outputs: jdks.outputs, evidence: jdks.evidence };
+}
+
 /** A fact base that records the declared build outputs its answer read, if any. */
 export function withOutputs(base: FactBase, outputs: readonly BuildOutputInput[] | undefined): FactBase {
   return outputs === undefined ? base : { ...base, inputs: { ...base.inputs, buildOutputs: outputs } };
@@ -249,18 +271,28 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
     tokensOf: (file, prepared) => tokensOfSource(deps, file, prepared),
     of(source, narrowing = {}) {
       const jdks = once(() => jdksOf(source));
-      return readingOf(source, narrowing, asIndexed(source), jdks, originsOf(source, narrowing, jdks));
+      return readingOf(source, narrowing, asIndexed(source), jdks, originsOf(source, narrowing, jdks), false);
     },
     async open(source, narrowing = {}) {
       const jdks = once(() => jdksOf(source));
       const origins = originsOf(source, narrowing, jdks);
       const files = source.tree.sources.map(({ path }) => path).filter((path) => isReadSource(path) && !(deps.absentCapabilities?.(path) ?? NO_ABSENT).has("declaredSupertypes"));
-      return readingOf(source, narrowing, await completedHierarchy(source.store, files, origins(), source.request.signal), jdks, origins);
+      return readingOf(source, narrowing, await completedHierarchy(source.store, files, origins(), source.request.signal), jdks, origins, true);
     },
   };
 
-  function readingOf(source: ReadingSource, narrowing: ReadingNarrowing, hierarchy: CompletedHierarchy, jdks: () => LibrariesRead | undefined, origins: () => ImportOrigins | undefined): BaseReading {
+  function readingOf(source: ReadingSource, narrowing: ReadingNarrowing, hierarchy: CompletedHierarchy, jdks: () => LibrariesRead | undefined, origins: () => ImportOrigins | undefined, completed: boolean): BaseReading {
     const { tree, prepared, request } = source;
+    const kept = prepared?.retained;
+    /**
+     * A stage that reads the index, kept under the index's digest and every other input of the origins it asks: whether
+     * the hierarchy was completed first, the narrowing's origin paths and the validated JDK identities (ADR-0143 decision 3).
+     */
+    const keptOverIndex = <T, P>(output: string, produce: () => Promise<T>, plain: (value: T) => P, revive: (value: P) => T): Promise<T> => {
+      if (kept === undefined || source.digest === undefined) return produce();
+      const slot = canonicalJson({ output, index: source.digest, completed, originPaths: narrowing.originPaths ?? null, jdks: jdkIdentity(jdks()) });
+      return kept(slot, async () => plain(await produce()), request.signal).then(revive);
+    };
     const store = hierarchy.reader;
     const facts = prepared?.facts;
     const sources = new Map(tree.sources.map((file) => [file.path, file]));
@@ -297,7 +329,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
     };
     const unresolvedIn = unresolvedOncePerFile(store);
     const navigation = once(() => createGraphNavigation(store, () => false));
-    const implementedContracts = once(() => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()));
+    const implementedContracts = once(() => keptOverIndex("implemented-contracts", () => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()), (contracts) => [...contracts], (entries) => new Map(entries)));
     const overloadImplementations = once(async (): Promise<ReadonlyMap<GraphNodeId, GraphNodeId>> => (syntaxOf === undefined ? new Map() : overloadImplementationsOf(store, tree.sources.map(({ path }) => path), navigation(), async (file) => (await syntaxOf(file)).callables)));
     const unresolved = once(() => unresolvedOf(store, tree));
     const relations = once(() => retainedRelations(deps.relations, prepared, tree, request, source.hold, facts));
@@ -329,7 +361,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       unresolved,
       origins,
       relations,
-      referenceProofs: once(() => referenceProofsOf(origins(), store, tree, request.signal, unresolved())),
+      referenceProofs: once(() => keptOverIndex("reference-proofs", () => referenceProofsOf(origins(), store, tree, request.signal, unresolved()), plainProofs, revivedProofs)),
       typed: once(() => typedReading(source, jdks())),
       edgeTargets(typed) {
         const read = origins();
