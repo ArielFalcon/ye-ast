@@ -48,14 +48,18 @@ function spawnDaemon(): void {
   child.unref();
 }
 
-/** The link of this process to the daemon of `directory`: attaching through a directory that is not private answers in process. */
-export function processDaemonLink(directory: string, ownerUid: number): DaemonLink {
+/**
+ * The link of this process to the daemon of `directory`: attaching through a directory that is not private answers in
+ * process. `spawn` starts the daemon this environment's runtime directory names, so a link to any other directory
+ * replaces it.
+ */
+export function processDaemonLink(directory: string, ownerUid: number, spawn: () => void = spawnDaemon): DaemonLink {
   return daemonLink({
     directory,
     installation: DAEMON_INSTALLATION,
     version: daemonProducer(),
     connect: (path) => createConnection(path),
-    spawnDaemon,
+    spawnDaemon: spawn,
     now: () => Date.now(),
     verify: async () => (await runtimeDirectoryRefusal(directory, ownerUid).catch(() => "unusable")) === null,
   });

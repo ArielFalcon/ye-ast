@@ -89,7 +89,7 @@ before(async () => {
       return child;
     },
   });
-  link = processDaemonLink(runtime, process.getuid!());
+  link = processDaemonLink(runtime, process.getuid!(), () => undefined);
   const installed = await composeCli({ indexCache, cacheDirectory: indexCache, trustDirectory })(["init", "--trust", "trusted", repo], { out: () => undefined, err: () => undefined });
   assert.equal(installed, EXIT_CODE.ok);
 });
