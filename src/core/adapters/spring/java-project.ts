@@ -4,6 +4,7 @@
  * into the read's own sources and the declarations a host declared (V4.2).
  */
 import { sourceKey } from "../../domain/shared/source-identity.ts";
+import { allUnits, type Units } from "../../domain/shared/work-units.ts";
 import { libraryPath, type LibrarySource } from "../../domain/topology/library-source.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
@@ -110,8 +111,15 @@ async function buildHeldJavaProject(hold: ParseHold, parser: () => Promise<JavaP
 
 /** Runs `use` with a reader of Java sources and frees every syntax tree it parsed once `use` returns or throws. */
 export function withJavaSources<T>(parser: JavaParser, use: (parse: ParseJava) => T): T {
+  return allUnits(withJavaSourceUnits(parser, function* (parse) {
+    return use((sources) => allUnits(parse(sources)));
+  }));
+}
+
+/** `withJavaSources` in units (ADR-0156): `parse` ends one unit after each source it reads, and the trees are freed once the units end or are closed. */
+export function* withJavaSourceUnits<T>(parser: JavaParser, use: (parse: (sources: readonly (SourceFile | LibrarySource)[]) => Units<ParsedJava>) => Units<T>): Units<T> {
   const trees: JavaSyntaxTree[] = [];
-  const parse: ParseJava = (sources) => {
+  function* parse(sources: readonly (SourceFile | LibrarySource)[]): Units<ParsedJava> {
     const parsed: ParsedJava = { files: [], unparsed: [], declared: [] };
     for (const source of sources) {
       const read = readSource(parser, source, trees);
@@ -120,11 +128,12 @@ export function withJavaSources<T>(parser: JavaParser, use: (parse: ParseJava) =
         parsed.unparsed.push(read.unparsed);
         if (read.declared !== undefined) parsed.declared.push(read.declared);
       }
+      yield;
     }
     return parsed;
-  };
+  }
   try {
-    return use(parse);
+    return yield* use(parse);
   } finally {
     for (const tree of trees) tree.dispose();
   }

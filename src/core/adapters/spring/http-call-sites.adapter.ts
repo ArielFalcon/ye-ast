@@ -27,6 +27,7 @@ import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { callUrl, joinedCallUrl, RUN_TIME_HOLE, urlText } from "../../domain/topology/path-template.ts";
 import { undecided, undecidedTarget, type Evaluated, type Undecided } from "../../domain/topology/evaluated.ts";
 import { NO_PROOF, type CallSiteProof } from "./java-call-site-owner.ts";
+import { allUnits, type Units } from "../../domain/shared/work-units.ts";
 
 /** The base URL a client declares: undefined when it declares none. */
 type Declared = Evaluated<string> | undefined;
@@ -60,9 +61,17 @@ export class JavaHttpReader {
   }
 
   sites(repo: string, includeNested = false): CallSite[] {
+    return allUnits(this.siteUnits(repo, includeNested));
+  }
+
+  /** `sites` in units (ADR-0156): one unit per file of the invocations it reads. */
+  *siteUnits(repo: string, includeNested = false): Units<CallSite[]> {
     const found: CallSite[] = [];
+    let file: JavaFile | undefined;
     const flow = new JavaMethodFlow<Request>(this.project, this.text, (call) => this.requestOf(call), this.proof, this.calls);
     for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
+      if (file !== undefined && invocation.type.file !== file) yield;
+      file = invocation.type.file;
       if (!includeNested && flow.nested(invocation)) continue;
       const scope = this.scopeOf(invocation, new Map());
       const direct = this.requestOf(invocation);
@@ -83,7 +92,10 @@ export class JavaHttpReader {
         if (library !== undefined) found.push(this.siteOf(repo, invocation, { target: unknown("unresolved", [{ ...spanOf(invocation.type.file.path, invocation.node), via: library.via }, ...library.evidence]), diagnostic: { cause: library.source === "read" ? "request-not-found" : "source-not-read", source: library.source } }));
       }
     }
-    for (const type of this.project.types.filter((candidate) => this.owned.has(candidate.file))) found.push(...this.declarations(repo, type));
+    for (const type of this.project.types.filter((candidate) => this.owned.has(candidate.file))) {
+      yield;
+      found.push(...this.declarations(repo, type));
+    }
     return found.sort(compareCallSites);
   }
 

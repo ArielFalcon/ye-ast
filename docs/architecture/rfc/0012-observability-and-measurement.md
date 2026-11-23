@@ -206,7 +206,7 @@ kept store into the mirror ([ADR-0129](../adr/0129-a-full-live-build-goes-throug
 
 A **stage line**, one per call of a reader a request runs over the whole snapshot (the export listing, writing its files,
 opening the store, entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java
-imports, call sites), and one per origin read of a reference proof (`import-origins` for the origins of imported names,
+imports, call sites, data effects), and one per origin read of a reference proof (`import-origins` for the origins of imported names,
 `root-origins` for the origins of resolved root names):
 
 ```json

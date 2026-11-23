@@ -10,6 +10,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import { reachedDiagnostic } from "../../domain/topology/evaluated.ts";
 import { spanOf, unknown } from "./findings.ts";
 import { stagedSelections, type CallSiteProof, NO_PROOF } from "./java-call-site-owner.ts";
+import { allUnits, type Units } from "../../domain/shared/work-units.ts";
 
 export interface MethodSelection {
   method: MethodDecl;
@@ -72,14 +73,24 @@ export interface JavaCalls {
 
 /** The calls of `project` read once, so every reader that walks the project shares them. */
 export function javaCallsOf(project: JavaProject, text: FieldLookup, proof: CallSiteProof = NO_PROOF): JavaCalls {
-  const invocations = project.types.flatMap(invocationsOf);
+  return allUnits(javaCallUnits(project, text, proof));
+}
+
+/** `javaCallsOf` in units (ADR-0156): one unit per type, its invocations and the methods each may select. */
+export function* javaCallUnits(project: JavaProject, text: FieldLookup, proof: CallSiteProof = NO_PROOF): Units<JavaCalls> {
+  const invocations: Invocation[] = [];
   const edges = new Map<number, { call: Invocation; selections: MethodSelection[] }[]>();
-  for (const call of invocations) {
-    if (call.member === undefined) continue;
-    const selections = methodsOf(call, project, text, call.type, proof);
-    const written = edges.get(call.member.id);
-    if (written === undefined) edges.set(call.member.id, [{ call, selections }]);
-    else written.push({ call, selections });
+  for (const type of project.types) {
+    const calls = invocationsOf(type);
+    invocations.push(...calls);
+    for (const call of calls) {
+      if (call.member === undefined) continue;
+      const selections = methodsOf(call, project, text, call.type, proof);
+      const written = edges.get(call.member.id);
+      if (written === undefined) edges.set(call.member.id, [{ call, selections }]);
+      else written.push({ call, selections });
+    }
+    yield;
   }
   return { invocations, edges };
 }

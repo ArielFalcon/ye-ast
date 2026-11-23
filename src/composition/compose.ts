@@ -75,6 +75,7 @@ import { createModuleDependenciesReader } from "../core/adapters/typescript/modu
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
 import type { LibraryPlacedCallSiteReader, LibraryReading } from "../core/ports/library-signatures.port.ts";
+import type { DataEffectReader } from "../core/domain/trace/data-effect-site.ts";
 import type { ParseHold } from "../core/ports/parse-holds.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
@@ -379,7 +380,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     memberNames,
     relations: impactDeps.relations,
     callSites: placedCallSites,
-    dataEffects: { placed: async (files) => createJavaDataEffects(await javaParser()).placed(files) },
+    dataEffects: staged<DataEffectReader>({ placed: async (files, options) => createJavaDataEffects(await javaParser()).placed(files, options) }, { placed: "data-effects" }),
     sourceSelection: isWritten,
     typeBindings: impactDeps.typeBindings,
     checkerInputs: createRevisionSources({ ...headDeps, sourceSelection: isTypeCheckerInput }),
