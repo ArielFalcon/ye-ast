@@ -3,11 +3,12 @@
  * and the warm differential. Each call returns its reply text, its wall time and the measurement lines the server wrote
  * to stderr while it ran (RFC-0012), plus the SQL counters of `latency-sql-counters.ts`, which is preloaded into it.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
+import { PID_FILE, runtimeDirectory } from "../src/daemon/runtime-directory.ts";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const SQL_COUNTERS = join(import.meta.dirname, "latency-sql-counters.ts");
@@ -47,9 +48,13 @@ export interface McpSession {
   close(): Promise<void>;
 }
 
-/** The environment of a run-owned user: its own home, cache and configuration, no telemetry, a stable locale. */
-export function isolatedEnvironment(home: string): NodeJS.ProcessEnv {
+/**
+ * The environment of a run-owned user: its own home, cache, configuration and temporary directory (so its own daemon
+ * runtime directory, ADR-0157), no telemetry, a stable locale. The daemon is off unless `daemon` is set.
+ */
+export function isolatedEnvironment(home: string, daemon = false): NodeJS.ProcessEnv {
   return {
+    ...(daemon ? {} : { YE_AST_DAEMON: "off" }),
     PATH: process.env.PATH ?? "",
     HOME: home,
     XDG_CACHE_HOME: join(home, "cache"),
@@ -64,6 +69,39 @@ export function isolatedEnvironment(home: string): NodeJS.ProcessEnv {
     GIT_COMMITTER_NAME: "bench",
     GIT_COMMITTER_EMAIL: "bench@localhost",
   };
+}
+
+/**
+ * Stops the daemon a run's processes started in the run's own runtime directory, once every session closed, and answers
+ * the resident set of its supervisor and workers just before; `null` when none runs there.
+ */
+export async function stopDaemon(env: NodeJS.ProcessEnv): Promise<number | null> {
+  const directory = runtimeDirectory({ env, platform: process.platform, uid: process.getuid?.(), tmpdir: env.TMPDIR ?? "" });
+  let pid: number;
+  try {
+    pid = (JSON.parse(readFileSync(join(directory!, PID_FILE), "utf8")) as { pid: number }).pid;
+  } catch {
+    return null;
+  }
+  const children = (): number[] => {
+    try {
+      return execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" }).trim().split("\n").filter(Boolean).map(Number);
+    } catch {
+      return [];
+    }
+  };
+  const processes = [pid, ...children()];
+  const rssKb = execFileSync("ps", ["-o", "rss=", "-p", processes.join(",")], { encoding: "utf8" }).trim().split("\n").reduce((sum, line) => sum + Number(line.trim() || 0), 0);
+  process.kill(pid, "SIGTERM");
+  for (let tries = 0; tries < 200; tries += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      break;
+    }
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  return rssKb * 1024;
 }
 
 /** The engine's own `cli` package script, so a run launches the engine the way that revision declares. */

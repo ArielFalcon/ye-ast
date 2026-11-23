@@ -5,8 +5,8 @@
  * edits. The repositories come from the corpus manifest of the gate; nothing is written to them.
  *
  *   node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir>
- *     [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>]
- *   node --import tsx scripts/latency-bench.ts --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]
+ *     [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>] [--daemon]
+ *   node --import tsx scripts/latency-bench.ts --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>] [--daemon]
  *
  * Scenarios: `unchanged` (interleaved rounds of every family on a warm live process), `edit-idle` (an edit, 2 s idle,
  * then the call), `edit-now` (an edit, then the call at once), `edit-settled` (an edit, then the call once the
@@ -26,10 +26,10 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { cloneAt, declareTrust, firstParentCommits, git, namedFiles, namedSourceFiles, privateDirectory } from "./latency-clones.ts";
 import { atSnapshot, corpusRepositories, toolCallOf, type CorpusRepository, type Snapshot, type ToolCall } from "./latency-queries.ts";
-import { isolatedEnvironment, startMcp, type McpSession } from "./latency-session.ts";
+import { isolatedEnvironment, startMcp, stopDaemon, type McpSession } from "./latency-session.ts";
 import { cellSummary, cellTable, sampleOf, slope, type CallSample, type CellSummary } from "./latency-stats.ts";
 
-const USAGE = "usage: node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>] | --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>]";
+const USAGE = "usage: node --import tsx scripts/latency-bench.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--scenarios <name>,...] [--repetitions <n>] [--edits <n>] [--revisions <n>] [--engine <checkout>] [--daemon] | --quick --corpus <manifest> --repo <group>/<repo> --out <dir> [--engine <checkout>] [--daemon]";
 const FAMILIES = ["callers", "trace", "impact", "outline", "importers", "entrypoints", "workspace"] as const;
 const QUICK = { families: ["callers", "outline"], scenarios: ["unchanged", "edit-now"], repetitions: 5 } as const;
 const SCENARIOS = ["unchanged", "edit-idle", "edit-now", "edit-settled", "idle", "new-process", "three-servers", "revision", "rss-slope"] as const;
@@ -51,6 +51,8 @@ interface Options {
   edits: number;
   revisions: number;
   engine: string;
+  /** Every MCP session answers through the run's own daemon (ADR-0157); in process otherwise. */
+  daemon: boolean;
 }
 
 function parseOptions(): Options {
@@ -65,6 +67,7 @@ function parseOptions(): Options {
       revisions: { type: "string", default: "3" },
       engine: { type: "string", default: resolve(import.meta.dirname, "..") },
       quick: { type: "boolean", default: false },
+      daemon: { type: "boolean", default: false },
     },
   });
   if (values.quick && (values.repo?.length !== 1 || process.argv.some((argument) => /^--(scenarios|repetitions|edits|revisions)\b/u.test(argument)))) {
@@ -77,7 +80,7 @@ function parseOptions(): Options {
     process.stderr.write(`${USAGE}\n`);
     process.exit(2);
   }
-  return { corpus: resolve(values.corpus), repos: values.repo, out: resolve(values.out), scenarios: new Set(scenarios as Scenario[]), families: values.quick ? QUICK.families : FAMILIES, repetitions: values.quick ? QUICK.repetitions : counts[0]!, edits: counts[1]!, revisions: counts[2]!, engine: resolve(values.engine) };
+  return { corpus: resolve(values.corpus), repos: values.repo, out: resolve(values.out), scenarios: new Set(scenarios as Scenario[]), families: values.quick ? QUICK.families : FAMILIES, repetitions: values.quick ? QUICK.repetitions : counts[0]!, edits: counts[1]!, revisions: counts[2]!, engine: resolve(values.engine), daemon: values.daemon };
 }
 
 /** The call of each bench family: the repository's first gate query of that family, or the family with no argument when it needs none. */
@@ -151,118 +154,121 @@ async function benchRepository(options: Options, repo: CorpusRepository, recorde
   const scratch = mkdtempSync(join(tmpdir(), "ye-ast-latency-bench-"));
   const home = join(scratch, "home");
   for (const directory of ["cache", "config", "tmp"]) mkdirSync(join(home, directory), { recursive: true });
-  const env = isolatedEnvironment(home);
+  const env = isolatedEnvironment(home, options.daemon);
   const cache = privateDirectory(join(scratch, "cache"));
   const calls = familyCalls(repo, options.families);
   const live: Snapshot = { kind: "live" };
   const log = (line: string) => process.stderr.write(`bench ${repo.name}: ${line}\n`);
   log(`scratch ${scratch}`);
   const wants = (scenario: Scenario) => options.scenarios.has(scenario);
-
-  const liveScenarios = SCENARIOS.filter((scenario) => scenario !== "revision" && wants(scenario));
-  if (liveScenarios.length > 0) {
-    const clone = cloneAt(repo.path, repo.sha, join(scratch, "trusted", "repo"), env);
-    declareTrust(options.engine, clone, "trusted", cache, env);
-    const file = editFile(clone, calls, env);
-    const original = readFileSync(join(clone, file), "utf8");
-    let edits = 0;
-    const edit = () => writeFileSync(join(clone, file), `${original}\n// ye-ast bench edit ${++edits}\n`);
-    const launch = { engine: options.engine, repo: clone, cache, env };
-    let session = await startMcp(launch);
-    const round = async (scenario: string, before?: () => Promise<void> | void) => {
-      for (const call of calls) {
-        await before?.();
-        recorder.add(repo.name, scenario, call.family, await measuredCall(session, call, live));
+  try {
+    const liveScenarios = SCENARIOS.filter((scenario) => scenario !== "revision" && wants(scenario));
+    if (liveScenarios.length > 0) {
+      const clone = cloneAt(repo.path, repo.sha, join(scratch, "trusted", "repo"), env);
+      declareTrust(options.engine, clone, "trusted", cache, env);
+      const file = editFile(clone, calls, env);
+      const original = readFileSync(join(clone, file), "utf8");
+      let edits = 0;
+      const edit = () => writeFileSync(join(clone, file), `${original}\n// ye-ast bench edit ${++edits}\n`);
+      const launch = { engine: options.engine, repo: clone, cache, env };
+      let session = await startMcp(launch);
+      const round = async (scenario: string, before?: () => Promise<void> | void) => {
+        for (const call of calls) {
+          await before?.();
+          recorder.add(repo.name, scenario, call.family, await measuredCall(session, call, live));
+        }
+      };
+      log("first-round");
+      await round("first-round");
+      if (wants("unchanged")) {
+        log("unchanged");
+        for (let r = 0; r < options.repetitions; r += 1) await round("unchanged");
       }
-    };
-    log("first-round");
-    await round("first-round");
-    if (wants("unchanged")) {
-      log("unchanged");
-      for (let r = 0; r < options.repetitions; r += 1) await round("unchanged");
-    }
-    if (wants("edit-idle")) {
-      log("edit-idle");
-      for (let r = 0; r < options.repetitions; r += 1) await round("edit-idle", async () => { edit(); await sleep(IDLE_MS); });
-    }
-    if (wants("edit-now")) {
-      log("edit-now");
-      for (let r = 0; r < options.repetitions; r += 1) await round("edit-now", edit);
-    }
-    if (wants("edit-settled")) {
-      log("edit-settled");
-      const settles: (number | null)[] = [];
-      for (let r = 0; r < options.repetitions; r += 1) {
-        await round("edit-settled", async () => {
-          const started = performance.now();
-          const settled = session.next((record) => record.event === "watch" && record.outcome === "settled", SETTLE_GUARD_MS);
+      if (wants("edit-idle")) {
+        log("edit-idle");
+        for (let r = 0; r < options.repetitions; r += 1) await round("edit-idle", async () => { edit(); await sleep(IDLE_MS); });
+      }
+      if (wants("edit-now")) {
+        log("edit-now");
+        for (let r = 0; r < options.repetitions; r += 1) await round("edit-now", edit);
+      }
+      if (wants("edit-settled")) {
+        log("edit-settled");
+        const settles: (number | null)[] = [];
+        for (let r = 0; r < options.repetitions; r += 1) {
+          await round("edit-settled", async () => {
+            const started = performance.now();
+            const settled = session.next((record) => record.event === "watch" && record.outcome === "settled", SETTLE_GUARD_MS);
+            edit();
+            settles.push((await settled) === undefined ? null : Math.round(performance.now() - started));
+          });
+        }
+        recorder.extras.push({ repo: repo.name, scenario: "edit-settled", settleMs: settles, unsettled: settles.filter((ms) => ms === null).length });
+      }
+      if (wants("idle")) {
+        log("idle");
+        const cpuBefore = cpuMsOf(session.pid);
+        await sleep(IDLE_WINDOW_MS);
+        recorder.extras.push({ repo: repo.name, scenario: "idle", windowMs: IDLE_WINDOW_MS, cpuMs: cpuMsOf(session.pid) - cpuBefore, openFiles: openFilesOf(session.pid) });
+      }
+      if (wants("new-process")) {
+        log("new-process");
+        for (let r = 0; r < options.repetitions; r += 1) {
+          for (const call of calls) {
+            await session.close();
+            session = await startMcp(launch);
+            recorder.add(repo.name, "new-process", call.family, await measuredCall(session, call, live));
+          }
+        }
+      }
+      if (wants("three-servers")) {
+        log("three-servers");
+        const others = [await startMcp(launch), await startMcp(launch)];
+        for (const other of others) for (const call of calls) await measuredCall(other, call, live);
+        const servers = [session, ...others];
+        for (let r = 0; r < options.repetitions; r += 1) {
+          for (const call of calls) {
+            const started = performance.now();
+            const samples = await Promise.all(servers.map((server) => measuredCall(server, call, live)));
+            const roundMs = Math.round(performance.now() - started);
+            for (const sample of samples) recorder.add(repo.name, "three-servers", call.family, sample);
+            recorder.extras.push({ repo: repo.name, scenario: "three-servers", family: call.family, roundMs, callsMs: samples.map((sample) => sample.wallMs) });
+          }
+        }
+        for (const other of others) await other.close();
+      }
+      if (wants("rss-slope")) {
+        log(`rss-slope over ${options.edits} edits`);
+        const rss: number[] = [];
+        for (let index = 0; index < options.edits; index += 1) {
           edit();
-          settles.push((await settled) === undefined ? null : Math.round(performance.now() - started));
-        });
-      }
-      recorder.extras.push({ repo: repo.name, scenario: "edit-settled", settleMs: settles, unsettled: settles.filter((ms) => ms === null).length });
-    }
-    if (wants("idle")) {
-      log("idle");
-      const cpuBefore = cpuMsOf(session.pid);
-      await sleep(IDLE_WINDOW_MS);
-      recorder.extras.push({ repo: repo.name, scenario: "idle", windowMs: IDLE_WINDOW_MS, cpuMs: cpuMsOf(session.pid) - cpuBefore, openFiles: openFilesOf(session.pid) });
-    }
-    if (wants("new-process")) {
-      log("new-process");
-      for (let r = 0; r < options.repetitions; r += 1) {
-        for (const call of calls) {
-          await session.close();
-          session = await startMcp(launch);
-          recorder.add(repo.name, "new-process", call.family, await measuredCall(session, call, live));
+          const call = calls[index % calls.length]!;
+          const sample = await measuredCall(session, call, live);
+          recorder.add(repo.name, "rss-slope", call.family, sample);
+          if (sample.rssBytes !== null) rss.push(sample.rssBytes);
         }
+        recorder.extras.push({ repo: repo.name, scenario: "rss-slope", edits: options.edits, rssFirstBytes: rss[0] ?? null, rssLastBytes: rss.at(-1) ?? null, rssMaxBytes: rss.length === 0 ? null : Math.max(...rss), slopeBytesPerEdit: slope(rss), rssBytes: rss });
       }
+      await session.close();
+      writeFileSync(join(clone, file), original);
     }
-    if (wants("three-servers")) {
-      log("three-servers");
-      const others = [await startMcp(launch), await startMcp(launch)];
-      for (const other of others) for (const call of calls) await measuredCall(other, call, live);
-      const servers = [session, ...others];
-      for (let r = 0; r < options.repetitions; r += 1) {
-        for (const call of calls) {
-          const started = performance.now();
-          const samples = await Promise.all(servers.map((server) => measuredCall(server, call, live)));
-          const roundMs = Math.round(performance.now() - started);
-          for (const sample of samples) recorder.add(repo.name, "three-servers", call.family, sample);
-          recorder.extras.push({ repo: repo.name, scenario: "three-servers", family: call.family, roundMs, callsMs: samples.map((sample) => sample.wallMs) });
-        }
-      }
-      for (const other of others) await other.close();
-    }
-    if (wants("rss-slope")) {
-      log(`rss-slope over ${options.edits} edits`);
-      const rss: number[] = [];
-      for (let index = 0; index < options.edits; index += 1) {
-        edit();
-        const call = calls[index % calls.length]!;
-        const sample = await measuredCall(session, call, live);
-        recorder.add(repo.name, "rss-slope", call.family, sample);
-        if (sample.rssBytes !== null) rss.push(sample.rssBytes);
-      }
-      recorder.extras.push({ repo: repo.name, scenario: "rss-slope", edits: options.edits, rssFirstBytes: rss[0] ?? null, rssLastBytes: rss.at(-1) ?? null, rssMaxBytes: rss.length === 0 ? null : Math.max(...rss), slopeBytesPerEdit: slope(rss), rssBytes: rss });
-    }
-    await session.close();
-    writeFileSync(join(clone, file), original);
-  }
 
-  if (wants("revision")) {
-    log("revision");
-    const clone = cloneAt(repo.path, repo.sha, join(scratch, "untrusted", "repo"), env);
-    const shas = firstParentCommits(clone, repo.sha, options.revisions + 1, namedFiles(calls), env);
-    const session = await startMcp({ engine: options.engine, repo: clone, cache, env });
-    for (const [index, sha] of shas.entries()) {
-      const base = index === 0 ? git(clone, ["rev-parse", `${sha}^`], env) : shas[index - 1]!;
-      for (const call of calls) {
-        recorder.add(repo.name, "revision-first", call.family, await measuredCall(session, call, { kind: "revision", sha, base }));
-        recorder.add(repo.name, "revision-repeat", call.family, await measuredCall(session, call, { kind: "revision", sha, base }));
+    if (wants("revision")) {
+      log("revision");
+      const clone = cloneAt(repo.path, repo.sha, join(scratch, "untrusted", "repo"), env);
+      const shas = firstParentCommits(clone, repo.sha, options.revisions + 1, namedFiles(calls), env);
+      const session = await startMcp({ engine: options.engine, repo: clone, cache, env });
+      for (const [index, sha] of shas.entries()) {
+        const base = index === 0 ? git(clone, ["rev-parse", `${sha}^`], env) : shas[index - 1]!;
+        for (const call of calls) {
+          recorder.add(repo.name, "revision-first", call.family, await measuredCall(session, call, { kind: "revision", sha, base }));
+          recorder.add(repo.name, "revision-repeat", call.family, await measuredCall(session, call, { kind: "revision", sha, base }));
+        }
       }
+      await session.close();
     }
-    await session.close();
+  } finally {
+    if (options.daemon) recorder.extras.push({ repo: repo.name, scenario: "daemon", rssBytes: await stopDaemon(env) });
   }
   log(`done; remove ${scratch} when the report is read`);
 }
@@ -283,7 +289,7 @@ function writeReport(options: Options, repos: readonly CorpusRepository[], recor
   writeFileSync(join(options.out, "latency-report.json"), `${JSON.stringify(report, null, 1)}\n`);
   const extras = recorder.extras.filter((extra) => extra.scenario === "rss-slope").map((extra) => `| ${extra.repo} | ${extra.edits} | ${Math.round(Number(extra.rssFirstBytes) / 1048576)} | ${Math.round(Number(extra.rssLastBytes) / 1048576)} | ${Math.round(Number(extra.rssMaxBytes) / 1048576)} | ${Math.round(Number(extra.slopeBytesPerEdit) / 1024)} |`);
   const markdown = [
-    `# Latency bench, engine ${engineCommit.slice(0, 12)}, ${started}`,
+    `# Latency bench, engine ${engineCommit.slice(0, 12)}, ${started}${options.daemon ? ", through the daemon" : ""}`,
     "",
     cellTable([...cells, ...mixes]),
     "",
@@ -291,6 +297,7 @@ function writeReport(options: Options, repos: readonly CorpusRepository[], recor
     "| --- | --- | --- | --- | --- | --- |",
     ...extras,
     "",
+    ...recorder.extras.filter((extra) => extra.scenario === "daemon").map((extra) => `daemon RSS before stop, ${extra.repo}: ${extra.rssBytes === null ? "none running" : `${Math.round(Number(extra.rssBytes) / 1048576)} MB`}`),
     `missing query lines: ${recorder.missingQueryLines}`,
     `load average (1, 5, 15 min): ${load.map((sample) => `${sample.at} ${sample.loadavg.map((value) => value.toFixed(1)).join(" ")}`).join("; ")}`,
     ...failures.map((failure) => `failed: ${failure}`),
