@@ -60,6 +60,11 @@ export interface CliDeps {
   readWorkspaceFile?: (path: string) => Promise<Result<{ path: string; text: string }, WorkspaceManifestFault>>;
   /** Aborted when the process is asked to stop. */
   signal: AbortSignal;
+  /**
+   * Asks the per-user daemon, started when absent, to prime the installed repository for the MCP registration `init`
+   * prints, without waiting for the priming (ADR-0157 decision 8); absent when the daemon is off.
+   */
+  warmInBackground?: (launch: { repo: string; buildOutputs: readonly DeclaredBuildOutput[] }) => Promise<void>;
 }
 
 const MEASURE_FLAG = "--measure";
@@ -81,6 +86,7 @@ const USAGE = [
   "       ye-ast init [--cache <dir>] --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
   "       ye-ast serve [--cache <dir>]   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<launch-root>] [--repo <id> <root>]... [outputs] [--jdk [<at>=]<path>]... [--cache <dir>]   (read-only stdio MCP server; the outputs are the launch repository's)",
+  "       ye-ast daemon   (the per-user daemon the MCP server and the query commands answer through when it runs; YE_AST_DAEMON=off keeps them in process)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers, how many of the file's declarations were left out, and what its own body uses outside itself (a declaration, a package or a global, with the lines of each use; an unproved use is a cut), without imports",
@@ -180,6 +186,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps, cache:
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
     for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], answerBytes, cache)) io.out(line);
+    await deps.warmInBackground?.({ repo: request.repo, buildOutputs: buildOutputs ?? [] });
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);

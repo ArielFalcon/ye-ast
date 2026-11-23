@@ -480,6 +480,11 @@ cannot. In Claude Code ([hooks](https://code.claude.com/docs/en/hooks)):
 
 ## Daemon (after the MVP, topology A1)
 
+Status: the first slice is decided and built for the CLI query commands and the MCP server
+([ADR-0157](../adr/0157-one-per-user-daemon-keeps-the-read-query-families-warm-for-the-cli-and-the-mcp-server.md)):
+`ye-ast daemon`, one worker process per repository and configuration, started by the MCP server and by `init`; hooks,
+Windows pipes, multi-user hosts and a remote transport stay deferred.
+
 The daemon is justified by sharing one graph between sessions and agents, the watcher and the single writer, not by hook
 latency ([ADR-0011](../adr/0011-query-protocol-in-the-mvp.md)).
 

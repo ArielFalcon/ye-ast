@@ -75,25 +75,21 @@ import type { LibraryPlacedCallSiteReader, LibraryReading } from "../core/ports/
 import type { DataEffectReader } from "../core/domain/trace/data-effect-site.ts";
 import type { ParseHold } from "../core/ports/parse-holds.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
-import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
-import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
-import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
-import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
-import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
-import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
-import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { RemoteRefresh } from "../core/ports/remote-refresh.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { TreeWatch } from "../core/ports/tree-watch.port.ts";
-import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
+import type { ExportBudget } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
 import { measuredAnswerMemo, measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredPriming, measuredSnapshotCache, measuredTrace, measuredWatch, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
 import { composeFrameworkPlugins } from "./framework-plugins.ts";
 import { frameworkEntrypoints } from "../core/application/entrypoints/framework-entrypoints.ts";
 import { queriesFirst } from "./priming-turns.ts";
-import { warmLive, type LiveWarmingDeps, type WarmingFault } from "../core/application/live/live-warming.ts";
+import { warmLive, type LiveWarmingDeps } from "../core/application/live/live-warming.ts";
+import type { ComposedQueries } from "./composed-queries.ts";
+import type { DaemonLink } from "../daemon/daemon-link.ts";
+import { daemonBackedQueries, mcpConfiguration, requestWarm } from "./daemon-queries.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -159,32 +155,7 @@ export interface CompositionOptions {
   treeWatch?: TreeWatch;
 }
 
-export interface ComposedQueries {
-  version: string;
-  entrypoints: EntrypointQueries;
-  impact: ImpactQueries;
-  outline: OutlineQueries;
-  trace: TraceQueries;
-  workspace: WorkspaceQueries;
-  workspaceImpact: WorkspaceImpactQueries;
-  /** What changing the contract of an operation, by hypothesis or between two revisions, does to the code that consumes it (RFC-0022, RFC-0023). */
-  contractConsequences: ContractConsequencesQueries;
-  decisions: DecisionQueries;
-  redaction: Redaction;
-  /** The name a repository answers to: the directory name of its main worktree, which every linked worktree shares. */
-  repositoryName: Vcs["repositoryName"];
-  /** Canonical filesystem root of the selected worktree. */
-  canonicalRepositoryRoot: Vcs["canonicalRoot"];
-  /**
-   * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, then primes the snapshot
-   * facts no target narrows, letting any query run first between steps, so the first live query finds both ready.
-   * `repoId` is the id the queries name the repository by; the repository's name when absent. Resolves once priming
-   * ended, to why the mirror could not be built, or `null`; it never rejects. A trusted
-   * repository is also watched until `signal` or the composition's signal is aborted, and each change primes it again
-   * ahead of the next query (ADR-0152).
-   */
-  warmLive(repo: string, signal?: AbortSignal, repoId?: string): Promise<WarmingFault | null>;
-}
+export type { ComposedQueries } from "./composed-queries.ts";
 
 export function composeQueries(options: CompositionOptions = {}): ComposedQueries {
   const version = ownVersion();
@@ -425,7 +396,13 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   return { version, entrypoints: counted(entrypoints), impact: counted(impact), outline: counted(outline), trace: counted(trace), workspace: counted(workspace), workspaceImpact: counted(workspaceImpact), contractConsequences: counted(contractConsequences), decisions: counted(decisions), redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive: (repo, signal, repoId) => warmLive(warming, repo, signal, repoId) };
 }
 
-export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {
+/** The CLI's composition: the library's options, the link to the per-user daemon when it is on, and where diagnostics go. */
+export interface CliOptions extends CompositionOptions {
+  daemon?: DaemonLink;
+  report?: (line: string) => void;
+}
+
+export function composeCli(options: CliOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {
   let standard: ReturnType<typeof cliOver> | undefined;
   return async (argv, io) => {
     const directory = takeCacheFlag(argv.slice(1))?.directory;
@@ -439,8 +416,16 @@ export function composeCli(options: CompositionOptions = {}): (argv: readonly st
   };
 }
 
-function cliOver(options: CompositionOptions): (argv: readonly string[], io: CliIo) => Promise<number> {
-  const queries = composeQueries(options);
+function cliOver(options: CliOptions): (argv: readonly string[], io: CliIo) => Promise<number> {
+  const local = composeQueries(options);
+  const { daemon } = options;
+  const queries = daemon === undefined ? local : daemonBackedQueries(local, {
+    link: daemon,
+    startsDaemon: false,
+    configuration: () => ({ ...(options.indexCache !== undefined && { indexCache: options.indexCache }), ...(options.cacheDirectory !== undefined && { cacheDirectory: options.cacheDirectory }), ...(options.trustDirectory !== undefined && { trustDirectory: options.trustDirectory }) }),
+    ...(options.measure !== undefined && { measure: options.measure }),
+    report: options.report ?? (() => undefined),
+  });
   const vcs = createGitVcs();
   const store = createFixedLayerStore();
   const install = createInstall({
@@ -449,9 +434,17 @@ function cliOver(options: CompositionOptions): (argv: readonly string[], io: Cli
     exclude: createGitLocalExclude(),
     store,
     defaults: createWorkspaceDefaults(store),
-    layer: createFixedLayerAdmin({ entrypoints: queries.entrypoints, store, redaction: queries.redaction }),
+    layer: createFixedLayerAdmin({ entrypoints: local.entrypoints, store, redaction: local.redaction }),
   });
-  return (argv, io) => run(argv, io, { ...queries, install, mcpCommand: mcpCommandFor(ownEntrypoint()), signal: options.signal ?? new AbortController().signal });
+  const signal = options.signal ?? new AbortController().signal;
+  const warmInBackground = daemon === undefined ? undefined : async ({ repo, buildOutputs }: { repo: string; buildOutputs: readonly DeclaredBuildOutput[] }): Promise<void> => {
+    const canonical = await local.canonicalRepositoryRoot(repo, signal);
+    const root = canonical.ok ? canonical.value : repo;
+    const named = await local.repositoryName(root, signal);
+    const configuration = mcpConfiguration({ indexCache: options.indexCache, trustDirectory: options.trustDirectory, launch: { repo: root, outputs: buildOutputs } });
+    await requestWarm(daemon, root, named.ok ? named.value : basename(root), configuration);
+  };
+  return (argv, io) => run(argv, io, { ...queries, install, mcpCommand: mcpCommandFor(ownEntrypoint()), signal, ...(warmInBackground !== undefined && { warmInBackground }) });
 }
 
 const MCP_PACKAGE = "ye-ast-mcp";

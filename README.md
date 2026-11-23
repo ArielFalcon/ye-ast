@@ -640,6 +640,7 @@ ye-ast contract-consequences --base main .      # what the branch's contract cha
 | `ye-ast init --trust trusted\|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]… <launch-repo>` | The batch form of step 2: one trust choice for several roots; prints a JSON report, then the MCP registration |
 | `ye-ast mcp [<launch-root>] [--repo <id> <root>]…` | Read-only stdio MCP server with a declared repository catalog |
 | `ye-ast serve` | The query protocol over stdio, one JSON-RPC 2.0 message per line |
+| `ye-ast daemon` | The per-user daemon in the foreground ([ADR-0157](docs/architecture/adr/0157-one-per-user-daemon-keeps-the-read-query-families-warm-for-the-cli-and-the-mcp-server.md)): `ye-ast mcp` and `ye-ast init` start it detached, and the query commands and the MCP server answer through it when it runs, in process otherwise, with the same bytes; it exits after 30 minutes without a client. `YE_AST_DAEMON=off` keeps every command in process |
 
 | Option group | Syntax |
 |---|---|

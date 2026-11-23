@@ -13,7 +13,7 @@ import type { MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { WarmingFault } from "../core/application/live/live-warming.ts";
 import type { ComposedQueries } from "./compose.ts";
 import { runMcp } from "./mcp.ts";
-import type { ProcessHost } from "./process-host.ts";
+import type { ProcessHost, QueryOptions } from "./process-host.ts";
 
 interface Harness {
   host: ProcessHost;
@@ -177,12 +177,12 @@ test("the server stops when the process is asked to stop and exits as interrupte
   assert.equal(await h.finished(), EXIT_CODE.interrupted);
 });
 
-test("the server composes its queries to read the user's trust record", async () => {
+test("the server composes its queries to read the user's trust record and to answer through the daemon", async () => {
   const h = harness();
   h.start([]);
   await open(h);
 
-  assert.deepEqual(h.composed.options, [{ trustRecord: true }]);
+  assert.deepEqual(h.composed.options, [{ trustRecord: true, throughDaemon: true }]);
   h.stdin.end();
   await h.finished();
 });
@@ -279,18 +279,23 @@ test("cancellation during canonicalization stops preflight", async () => {
   assert.deepEqual(h.warmed, []);
 });
 
+/** The build outputs a composition's options declare for a repository, as the in-process composition reads them. */
+function declaredOf(options: QueryOptions | undefined): (repo: string) => readonly unknown[] | undefined {
+  return (repo) => (options?.launchOutputs !== undefined && repo === options.launchOutputs.root() ? options.launchOutputs.outputs : undefined);
+}
+
 test("--node-modules declares a build output of the launch repository only, and one that declares nothing is a usage error", async () => {
   const h = harness();
   h.start(["shop", "--node-modules", "web=deps/node_modules"]);
   await open(h);
-  const declared = h.composed.options[0]?.buildOutputs;
+  const declared = declaredOf(h.composed.options[0]);
   assert.deepEqual([declared?.("/work/projects/shop"), declared?.("/work/projects/other")], [[{ kind: "node-modules", at: "web", path: "/work/projects/deps/node_modules" }], undefined]);
   h.stdin.end();
   await h.finished();
   const plain = harness();
   plain.start(["shop"]);
   await open(plain);
-  assert.equal(plain.composed.options[0]?.buildOutputs, undefined);
+  assert.equal(plain.composed.options[0]?.launchOutputs, undefined);
   plain.stdin.end();
   await plain.finished();
   for (const args of [["shop", "--node-modules"], ["shop", "--node-modules", "../up=/host/node_modules"]]) {
@@ -307,7 +312,7 @@ test("--jdk declares a JDK of the launch repository only, at the root or at <at>
   h.start(["shop", "--jdk", "/host/jdk", "--jdk", "svc=/host/svc-jdk"]);
   h.stdin.end();
   assert.equal(await h.finished(), EXIT_CODE.ok);
-  const declared = h.composed.options[0]?.buildOutputs;
+  const declared = declaredOf(h.composed.options[0]);
   assert.deepEqual(
     [declared?.("/work/projects/shop"), declared?.("/work/projects/other")],
     [[{ kind: "jdk", at: "", path: "/host/jdk" }, { kind: "jdk", at: "svc", path: "/host/svc-jdk" }], undefined],
@@ -326,7 +331,7 @@ test("--java-sources declares a generated source directory of the launch reposit
   h.start(["shop", "--java-sources", "target/generated-sources/openapi=deps/generated"]);
   h.stdin.end();
   assert.equal(await h.finished(), EXIT_CODE.ok);
-  const declared = h.composed.options[0]?.buildOutputs;
+  const declared = declaredOf(h.composed.options[0]);
   assert.deepEqual([declared?.("/work/projects/shop"), declared?.("/work/projects/other")], [[{ kind: "java-sources", at: "target/generated-sources/openapi", path: "/work/projects/deps/generated" }], undefined]);
   for (const args of [["shop", "--java-sources"], ["shop", "--java-sources", "deps/generated"], ["shop", "--java-sources", "=/host/generated"]]) {
     const refused = harness();

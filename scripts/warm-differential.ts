@@ -10,10 +10,11 @@
  * oracle's launch is never charged to a warm query. The long-lived process's RSS is recorded after each step.
  *
  *   node --import tsx scripts/warm-differential.ts --corpus <manifest> --repo <group>/<repo>... --out <dir>
- *     [--commits <n>] [--build-output <group>/<repo>=<flag>:<dir>]... [--fail-fast] [--engine <checkout>]
+ *     [--commits <n>] [--build-output <group>/<repo>=<flag>:<dir>]... [--fail-fast] [--engine <checkout>] [--daemon]
  *
  * `--build-output` declares `<flag>` (`--node-modules` or `--jdk`) at a path absent until the install step copies
- * `<dir>` there. Writes `<out>/differential-report.json` and `.md`; exits 1 on any difference.
+ * `<dir>` there. `--daemon` sends the long-lived processes through the run's own daemon (ADR-0157), stopped at the end;
+ * the oracles stay in process. Writes `<out>/differential-report.json` and `.md`; exits 1 on any difference.
  */
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,11 +22,11 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { cloneAt, declareTrust, firstParentCommits, git, namedSourceFiles, privateDirectory } from "./latency-clones.ts";
 import { atSnapshot, corpusRepositories, toolCallOf, type CorpusRepository, type Snapshot, type ToolCall } from "./latency-queries.ts";
-import { isolatedEnvironment, startMcp, type McpLaunch, type McpSession } from "./latency-session.ts";
+import { isolatedEnvironment, startMcp, stopDaemon, type McpLaunch, type McpSession } from "./latency-session.ts";
 import { slope } from "./latency-stats.ts";
 import { addedFile, bodyEdit, componentSelector, signatureEdit, templateEdit, unparsable } from "./warm-differential-edits.ts";
 
-const USAGE = "usage: node --import tsx scripts/warm-differential.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--commits <n>] [--build-output <group>/<repo>=<flag>:<dir>]... [--fail-fast] [--engine <checkout>]";
+const USAGE = "usage: node --import tsx scripts/warm-differential.ts --corpus <manifest> --repo <group>/<repo>... --out <dir> [--commits <n>] [--build-output <group>/<repo>=<flag>:<dir>]... [--fail-fast] [--engine <checkout>] [--daemon]";
 
 interface Options {
   corpus: string;
@@ -35,6 +36,8 @@ interface Options {
   buildOutputs: Map<string, { flag: string; source: string }>;
   failFast: boolean;
   engine: string;
+  /** The long-lived processes answer through the run's own daemon (ADR-0157); the oracles always in process. */
+  daemon: boolean;
 }
 
 /** One answer as both processes gave it, normalized: the reply text and the answer file, cache paths replaced. */
@@ -71,6 +74,7 @@ function parseOptions(): Options {
       commits: { type: "string", default: "3" },
       "build-output": { type: "string", multiple: true, default: [] },
       "fail-fast": { type: "boolean", default: false },
+      daemon: { type: "boolean", default: false },
       engine: { type: "string", default: resolve(import.meta.dirname, "..") },
     },
   });
@@ -82,7 +86,7 @@ function parseOptions(): Options {
     buildOutputs.set(match[1]!, { flag: match[2]!, source: resolve(match[3]!) });
   }
   if (values.corpus === undefined || values.repo === undefined || values.out === undefined || !Number.isInteger(commits) || commits < 1) usage();
-  return { corpus: resolve(values.corpus), repos: values.repo, out: resolve(values.out), commits, buildOutputs, failFast: values["fail-fast"], engine: resolve(values.engine) };
+  return { corpus: resolve(values.corpus), repos: values.repo, out: resolve(values.out), commits, buildOutputs, failFast: values["fail-fast"], engine: resolve(values.engine), daemon: values.daemon };
 }
 
 function usage(): never {
@@ -162,7 +166,7 @@ async function compareStep(run: Run, warm: Warm, side: StepResult["process"], st
   let rssBytes: number | null = null;
   const askOracle = async () => {
     const started = performance.now();
-    oracle = await startMcp({ ...warm.launch, cache: oracleCache });
+    oracle = await startMcp({ ...warm.launch, cache: oracleCache, env: { ...warm.launch.env, YE_AST_DAEMON: "off" } });
     const answers = [];
     for (const { call, snapshot } of queries) answers.push(await ask(oracle, oracleCache, call, snapshot));
     log(run, `${step}: oracle launched and answered in ${Math.round(performance.now() - started)} ms`);
@@ -349,7 +353,7 @@ async function differential(options: Options, repo: CorpusRepository, results: S
   const scratch = mkdtempSync(join(tmpdir(), "ye-ast-warm-differential-"));
   const home = join(scratch, "home");
   for (const directory of ["cache", "config", "tmp"]) mkdirSync(join(home, directory), { recursive: true });
-  const env = isolatedEnvironment(home);
+  const env = isolatedEnvironment(home, options.daemon);
   const calls = repo.queries.flatMap((query) => {
     const call = toolCallOf(query.argv);
     if ("tool" in call) return [{ id: query.id, call }];
@@ -363,6 +367,7 @@ async function differential(options: Options, repo: CorpusRepository, results: S
     await shaReplay(run, shas);
     await liveReplay(run, shas);
   } finally {
+    if (options.daemon) log(run, `daemon stopped, RSS before stop ${Math.round(((await stopDaemon(options.engine, env)) ?? 0) / 1048576)} MB`);
     log(run, `done; remove ${scratch} when the report is read`);
   }
 }
