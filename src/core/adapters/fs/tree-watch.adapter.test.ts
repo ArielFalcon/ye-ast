@@ -35,3 +35,15 @@ test("a watcher the platform refuses to open is a fault naming the platform's co
   const opened = createTreeWatch({ ...defaultTreeWatchDeps, watch: () => { throw refused; } }).watch("/nowhere", { changed: () => undefined, failed: () => undefined });
   assert.deepEqual("fault" in opened ? opened.fault.code : undefined, "EMFILE");
 });
+
+test("the watcher never holds the process open, including the per-directory watchers a platform without a native recursive watcher opens later", () => {
+  const options: unknown[] = [];
+  const watch = ((_root: string, opened: unknown) => {
+    options.push(opened);
+    return { on: () => undefined, unref: () => undefined, close: () => undefined };
+  }) as unknown as typeof defaultTreeWatchDeps.watch;
+
+  createTreeWatch({ ...defaultTreeWatchDeps, watch }).watch("/repo", { changed: () => undefined, failed: () => undefined });
+
+  assert.deepEqual(options.map((one) => (one as { persistent?: boolean }).persistent), [false]);
+});
