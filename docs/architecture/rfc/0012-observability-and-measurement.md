@@ -303,6 +303,27 @@ is configured:
 fact was derived and kept) or `not-kept` (derived and not kept: cut by a deadline, aborted, `unknown` for a transient
 reason, over declared build outputs, or a request field the key does not name). The key never appears.
 
+A **prime line**, one per run of live priming, when measurement is configured: at launch, and each time the watcher of
+a trusted live tree starts it after a change
+([ADR-0152](../adr/0152-a-watcher-on-a-trusted-live-tree-only-triggers-the-launch-priming-refresh-ahead-of-the-next-query.md)):
+
+```json
+{"ye_ast":{"event":"prime","trigger":"watch","outcome":"primed","yields":0,"duration_ms":412}}
+```
+
+`trigger` is `launch` or `watch`; `outcome` is `primed`, `aborted`, `unavailable` (what priming needs could not be read)
+or `threw`; `yields` counts the times priming waited for the queries of its process.
+
+A **watch line**, when the watcher's refreshes drain or the watcher turns off (ADR-0152):
+
+```json
+{"ye_ast":{"event":"watch","outcome":"off","reason":"EMFILE: too many open files","start_ms":5231}}
+```
+
+`outcome` is `settled` (no change is left unrefreshed and no refresh of the watcher runs) or `off` (the watcher closed
+because it could not open, failed, or found the repository no longer `trusted`; `reason` says which). A watcher closed
+by a server stop writes no line. Queries never depend on it: each proves freshness itself.
+
 **Child CPU is not measured.** `process.cpuUsage()` covers only the ye-ast process, so `cpu_ms` excludes the git and
 indexer children, and Node exposes neither `RUSAGE_CHILDREN` nor the resource usage of a `spawn`ed child. The cost of a
 child shows in the wall-clock of the stage or index line around it (`export`, `built`, `synced`), which is the figure a
