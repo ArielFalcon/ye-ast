@@ -26,7 +26,9 @@ export function createAngularRelationExtractor(deps: AngularRelationsDeps): Rela
 }
 
 async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<RelationExtraction> {
-  const contents = new Map(files.map((file) => [file.path, file.content]));
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  /** A content is read only when a template names its file, so a stage kept by what it read (ADR-0153) names no other. */
+  const contents: TemplateTexts = { get: (path) => byPath.get(path)?.content };
   const read = new Map<string, TemplateRead>();
   /** Each component's template read once, for the metadata reader's proofs and for its handlers alike. */
   const templateRead = (component: Extract<AngularClass, { kind: "component" }>): TemplateRead => {
@@ -51,6 +53,8 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
   return { relations: sortFindings([...findings, ...unitFindings, ...usage.relations]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }), ...(reassignedUses === undefined ? {} : { reassignedUses }), templates };
 }
 
+type TemplateTexts = Pick<ReadonlyMap<string, string>, "get">;
+
 const NO_EFFECTS: TemplateEffects = { calls: [], handlers: [], eventCalls: [], writes: [], passed: [] };
 
 interface TemplateRead {
@@ -60,7 +64,7 @@ interface TemplateRead {
 }
 
 /** What a component's template does, and the place it cannot be read from: its own place, or where it names its file. */
-function readTemplate(templates: TemplateUsageReader, component: Extract<AngularClass, { kind: "component" }>, contents: ReadonlyMap<string, string>): TemplateRead {
+function readTemplate(templates: TemplateUsageReader, component: Extract<AngularClass, { kind: "component" }>, contents: TemplateTexts): TemplateRead {
   const source = component.template === undefined ? undefined : templateOf(component, component.template, contents);
   if (source === undefined) return { effects: NO_EFFECTS, unreadable: { path: component.ref.path, line: component.ref.line } };
   if ("unknown" in source) return { effects: { ...NO_EFFECTS, unreadable: true }, unreadable: source.unknown.evidence[0]! };
@@ -73,7 +77,7 @@ function readTemplate(templates: TemplateUsageReader, component: Extract<Angular
  * The template of each component with its scope, and the host-directive and unreadable-template findings met on the way.
  * A component whose template is missing or unreadable has no unit.
  */
-export function templateUnitsOf(classes: readonly AngularClass[], contents: ReadonlyMap<string, string>): { units: TemplateUnit[]; findings: Finding<Relation>[] } {
+export function templateUnitsOf(classes: readonly AngularClass[], contents: TemplateTexts): { units: TemplateUnit[]; findings: Finding<Relation>[] } {
   const byKey = new Map(classes.map((candidate) => [classKey(candidate.ref), candidate]));
   const declaredIn = new Map<string, Extract<AngularClass, { kind: "module" }>[]>();
   for (const candidate of classes) {
@@ -105,7 +109,7 @@ export function templateUnitsOf(classes: readonly AngularClass[], contents: Read
   return { units, findings: found };
 }
 
-function templateOf(component: Extract<AngularClass, { kind: "component" }>, template: NonNullable<Extract<AngularClass, { kind: "component" }>["template"]>, contents: ReadonlyMap<string, string>): { path: string; text: string; firstLine: number } | { unknown: Finding<never> } {
+function templateOf(component: Extract<AngularClass, { kind: "component" }>, template: NonNullable<Extract<AngularClass, { kind: "component" }>["template"]>, contents: TemplateTexts): { path: string; text: string; firstLine: number } | { unknown: Finding<never> } {
   if ("unreadable" in template) return { unknown: unknown("no-extractor", template.unreadable) };
   if ("inline" in template) return { path: component.ref.path, text: template.inline.text, firstLine: template.inline.line };
   const text = contents.get(template.file.path);
