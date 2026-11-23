@@ -83,7 +83,37 @@ measured in ADR-0152:
 
 ## Measured
 
-To be completed with the bench and the differential of L21.
+The latency bench on the stdio MCP over clones of the corpus, five rounds of every family per scenario, p50 in ms,
+Apple M1 Max, one run each: `main` `0261d1f5e`, ADR-0152 alone (`fc5a7bb37`), and this decision (`34149bd52`).
+`edit-settled` exists only with the watcher; its "before" is `main`'s `edit-now`.
+
+| Repository, scenario, family | main | ADR-0152 | this decision |
+|---|---|---|---|
+| shopizer/backend, edit-idle, `outline` | 1,480 | 2,433 | 1,557 |
+| shopizer/backend, edit-idle, `callers` | 3,120 | 4,126 | 3,317 |
+| shopizer/backend, edit-idle, `importers` | 2,235 | 3,401 | 1,383 |
+| shopizer/backend, edit-idle, `workspace` | 2,524 | 3,699 | 1,590 |
+| shopizer/backend, edit-idle, `trace` | 4,370 | 2,996 | 3,800 |
+| shopizer/backend, edit-now, `entrypoints` | 1,896 | 2,646 | 1,889 |
+| petclinic/backend-rest, edit-now, `entrypoints` | 172 | 305 | 170 |
+| realworld-nx/frontend, edit-now, `entrypoints` | 96 | 249 | 99 |
+| shopizer/backend, edit-settled (main: edit-now), `trace` | 4,277 | 690 | 701 |
+| petclinic/backend-rest, edit-settled (main: edit-now), `callers` | 419 | 190 | 184 |
+| realworld-nx/frontend, edit-settled (main: edit-now), `callers` | 362 | 131 | 133 |
+
+- The event loop: the longest stretch the watcher's priming held it in one step after an edit on shopizer/backend went
+  from 2,523-2,662 ms (the call-sites step) to 79-80 ms; the steps it now leaves longest are the entrypoint extraction
+  (520-544 ms) and the relations (about 250 ms). The call-sites step takes about 200 ms longer in the background
+  (2,523 → 2,743 ms), and an edit settles about 0.2 s later on shopizer/backend.
+- The lock: the `live-lock` wait of `edit-now` `entrypoints` went 873 → 1 ms on shopizer/backend, 143 → 1 on
+  petclinic/backend-rest and 168 → 1 on realworld-nx/frontend. The abort cut tried first gave the same wait but cost
+  `workspace` on petclinic/backend-rest 327 → 380 ms (a retired sync worker); the declines cost none (323).
+- Every other `edit-now` cell is within +6 % of `main` (the largest, shopizer/backend `impact` 2,195 → 2,329, `callers`
+  3,003 → 3,120), and `edit-idle` on shopizer/backend `callers` +6 %, `outline` +5 %; in the same runs the `unchanged`
+  cells, which priming never meets, moved -2 % to -23 % against `main`. `edit-idle` `trace` on shopizer/backend gives
+  back part of ADR-0152's gain (2,996 → 3,800, `main` 4,370): a query that arrives during the call-sites step now
+  derives them itself instead of waiting for priming to keep them.
+- The warm differential on petclinic/backend-rest and realworld-nx/frontend passed 55 steps with 0 differing.
 
 ## Not decided here
 
