@@ -1,0 +1,267 @@
+import type { Frozen } from "../migration.testing.ts";
+
+/**
+ * The identities and sizes of the legacy `renderOutline` text of each fixture of `outline.fixtures.testing.ts`,
+ * frozen from commit 6155832 before the family moved to the presentation model (RFC-0041 U6).
+ */
+export const OUTLINE_LEGACY: Readonly<Record<string, Frozen>> = {
+ "small listing with nesting and imports": {
+  "summary": [
+   "place src/app/orders/legacy.ts:1-30",
+   "place src/app/orders/legacy.ts:12-14",
+   "place src/app/orders/orders.component.ts:12-88",
+   "place src/app/orders/orders.component.ts:14-14",
+   "place src/app/orders/orders.component.ts:24-33",
+   "place src/app/orders/orders.component.ts:26-26",
+   "place src/app/orders/orders.component.ts:35-60",
+   "place src/app/orders/orders.component.ts:62-70",
+   "place src/app/orders/orders.component.ts:90-120",
+   "place src/app/orders/orders.component.ts:95-118"
+  ],
+  "details": [
+   "place src/app/orders/legacy.ts:1-30",
+   "place src/app/orders/legacy.ts:12-14",
+   "place src/app/orders/orders.component.ts:12-88",
+   "place src/app/orders/orders.component.ts:14-14",
+   "place src/app/orders/orders.component.ts:24-33",
+   "place src/app/orders/orders.component.ts:26-26",
+   "place src/app/orders/orders.component.ts:35-60",
+   "place src/app/orders/orders.component.ts:62-70",
+   "place src/app/orders/orders.component.ts:90-120",
+   "place src/app/orders/orders.component.ts:95-118"
+  ],
+  "bytes": {
+   "summary": 875,
+   "details": 875
+  }
+ },
+ "many files with long declarations": {
+  "summary": [
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:10-30",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:100-120",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:102-110",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:104-106",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:112-118",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:12-20",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:14-16",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:22-28",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:40-60",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:42-50",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:44-46",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:52-58",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:70-90",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:72-80",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:74-76",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:82-88",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:10-30",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:100-120",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:102-110",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:104-106",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:112-118",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:12-20",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:14-16",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:22-28",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:40-60",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:42-50",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:44-46",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:52-58",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:70-90",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:72-80",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:74-76",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:82-88",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:10-30",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:100-120",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:102-110",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:104-106",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:112-118",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:12-20",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:14-16",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:22-28",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:40-60",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:42-50",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:44-46",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:52-58",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:70-90",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:72-80",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:74-76",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:82-88",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:10-30",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:100-120",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:102-110",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:104-106",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:112-118",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:12-20",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:14-16",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:22-28",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:40-60",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:42-50",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:44-46",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:52-58",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:70-90",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:72-80",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:74-76",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:82-88",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:10-30",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:100-120",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:102-110",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:104-106",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:112-118",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:12-20",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:14-16",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:22-28",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:40-60",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:42-50",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:44-46",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:52-58",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:70-90",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:72-80",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:74-76",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:82-88"
+  ],
+  "details": [
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:10-30",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:100-120",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:102-110",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:104-106",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:112-118",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:12-20",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:14-16",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:22-28",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:40-60",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:42-50",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:44-46",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:52-58",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:70-90",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:72-80",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:74-76",
+   "place services/service-0/src/main/java/org/example/web/Service0Resource.java:82-88",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:10-30",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:100-120",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:102-110",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:104-106",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:112-118",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:12-20",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:14-16",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:22-28",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:40-60",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:42-50",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:44-46",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:52-58",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:70-90",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:72-80",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:74-76",
+   "place services/service-1/src/main/java/org/example/web/Service1Resource.java:82-88",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:10-30",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:100-120",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:102-110",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:104-106",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:112-118",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:12-20",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:14-16",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:22-28",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:40-60",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:42-50",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:44-46",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:52-58",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:70-90",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:72-80",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:74-76",
+   "place services/service-2/src/main/java/org/example/web/Service2Resource.java:82-88",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:10-30",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:100-120",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:102-110",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:104-106",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:112-118",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:12-20",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:14-16",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:22-28",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:40-60",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:42-50",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:44-46",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:52-58",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:70-90",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:72-80",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:74-76",
+   "place services/service-3/src/main/java/org/example/web/Service3Resource.java:82-88",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:10-30",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:100-120",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:102-110",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:104-106",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:112-118",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:12-20",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:14-16",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:22-28",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:40-60",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:42-50",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:44-46",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:52-58",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:70-90",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:72-80",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:74-76",
+   "place services/service-4/src/main/java/org/example/web/Service4Resource.java:82-88"
+  ],
+  "bytes": {
+   "summary": 4120,
+   "details": 4120
+  }
+ },
+ "focus with ancestors, uses and omissions": {
+  "summary": [
+   "place src/app/orders/orders.component.ts:12-88",
+   "place src/app/orders/orders.component.ts:45-58",
+   "place src/app/orders/orders.component.ts:48",
+   "place src/app/orders/orders.service.ts:8"
+  ],
+  "details": [
+   "place src/app/orders/orders.component.ts:12-88",
+   "place src/app/orders/orders.component.ts:45-58",
+   "place src/app/orders/orders.component.ts:48",
+   "place src/app/orders/orders.service.ts:8"
+  ],
+  "bytes": {
+   "summary": 660,
+   "details": 660
+  }
+ },
+ "partial with cuts that name places": {
+  "summary": [
+   "anchor src/app/orders/orders.service.ts::OrdersService.save",
+   "place src/app/orders/orders.service.ts:12-20",
+   "place src/app/orders/orders.service.ts:22-38",
+   "place src/app/orders/orders.service.ts:8-40"
+  ],
+  "details": [
+   "anchor src/app/orders/orders.service.ts::OrdersService.find",
+   "anchor src/app/orders/orders.service.ts::OrdersService.save",
+   "place src/app/orders/orders.service.ts:12-20",
+   "place src/app/orders/orders.service.ts:22-38",
+   "place src/app/orders/orders.service.ts:8-40"
+  ],
+  "bytes": {
+   "summary": 659,
+   "details": 604
+  }
+ },
+ "unknown fact": {
+  "summary": [
+   "entry unknown (index-unavailable)",
+   "place src/app/orders/orders.component.ts:1"
+  ],
+  "details": [
+   "entry unknown (index-unavailable)",
+   "place src/app/orders/orders.component.ts:1"
+  ],
+  "bytes": {
+   "summary": 142,
+   "details": 142
+  }
+ },
+ "empty and complete": {
+  "summary": [],
+  "details": [],
+  "bytes": {
+   "summary": 121,
+   "details": 121
+  }
+ }
+};
