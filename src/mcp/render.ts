@@ -1,4 +1,4 @@
-import { dependencyDiagnosticText, driftText, effectText, statedRequestText, unresolvedLabel } from "./presentation.ts";
+import { dependencyDiagnosticText, driftText, statedRequestText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { ImpactOwner } from "./select-evidence.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
@@ -8,13 +8,12 @@ import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineUse, OutlineValue } from "../core/domain/outline/outline-fact.ts";
-import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
-import type { ExternalCalls, IssuingPlace, TraceLinked, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
+import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { IssuingPlace, TraceLinked, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import { FUNCTION_VALUE_AWAITS_JDK, type Cut, type Fact, type SnapshotRef, type WalkBounds } from "../core/domain/shared/fact.ts";
+import type { Cut, Fact, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
@@ -29,6 +28,9 @@ import { WORKSPACE_MANIFEST_FILE } from "../core/ports/workspace-defaults.port.t
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { blockBytes as size, preferShorterText, shareExactContext } from "./presentation-sharing.ts";
 import { LISTED_ITEMS } from "./render-budget.ts";
+import { present as presentTrace } from "./presentation/families/trace.ts";
+import { present as presentOutline } from "./presentation/families/outline.ts";
+import { present as presentImporters } from "./presentation/families/importers.ts";
 import { present as presentEntrypoints } from "./presentation/families/entrypoints.ts";
 import { present as presentWorkspace } from "./presentation/families/workspace.ts";
 import { present as presentDecisions } from "./presentation/families/decisions.ts";
@@ -41,7 +43,6 @@ const ROW_NUMBER_NOTE = "select entrypoint-evidence: findingIndex is the row num
 const GUARD_NOTE = "Only each route's own guards are recorded; inherited or runtime restrictions are not established here.";
 const DECISIONS_HINT = "ye_ast_decisions lists the declarations that would resolve these gaps, with evidence-backed options.";
 const CUTS = "cuts:";
-const NO_PROVEN_USE = "uses nothing proven outside its body; its unresolved-link cuts list the uses not proven";
 
 /** What each source of the repositories in force is called in the text; `none` says what the answer then covers. */
 const SOURCE_TEXT: Readonly<Record<WorkspaceSource, string>> = {
@@ -486,298 +487,34 @@ export function renderImpact(fact: Fact<ImpactValue>, detail: RenderDetail = "su
   return lines.join("\n");
 }
 
-/** Importer-specific wording; the shared policy supplies general mode conventions. */
-function importerPathRecovery(): string {
-  return '    File paths omitted; use mode: "details" to list them, or answer.json for the original structured fact.';
-}
-
-function importerFiles(entry: ImportedFile, detail: RenderDetail): { lines: string[]; omitted: boolean; listed: boolean } {
-  const modules: readonly (readonly [string, readonly string[] | undefined])[] = [
-    ["importers", entry.importers], ["reexporters", entry.reexporters], ["dynamic importers", entry.dynamicImporters], ["type importers", entry.typeImporters],
-  ];
-  const modulePaths = new Set(modules.flatMap(([, files]) => files ?? []));
-  const memberships = new Map<string, string[]>();
-  const add = (path: string, label: string, index: number): void => {
-    const labels = memberships.get(path) ?? [];
-    labels.push(`${label}[${index}]`);
-    memberships.set(path, labels);
-  };
-  for (const [label, files] of modules) files?.forEach((path, index) => add(path, label, index));
-  entry.users.forEach((path, index) => add(path, modulePaths.has(path) ? "users" : "additional users", index));
-  entry.unresolvedNamers.forEach((path, index) => add(path, memberships.has(path) ? "also unresolved name matches" : "unresolved name matches", index));
-  const heading = `    related files (${memberships.size} distinct)`;
-  const listing = [...memberships].map(([path, labels]) => {
-    const lines = [...new Set(entry.places?.filter((place) => place.file === path).map((place) => place.line) ?? [])].sort((a, b) => a - b);
-    return `    ${JSON.stringify(path)}: ${labels.join(", ")}${lines.length ? ` at ${lines.join(", ")}` : ""}`;
-  });
-  const counts = [
-    ...modules.flatMap(([label, files]) => files === undefined ? [] : [`    ${label} (${files.length})`]),
-    `    users (${entry.users.length}; ${entry.users.filter((path) => !modulePaths.has(path)).length} additional)`,
-    `    unresolved name matches (${entry.unresolvedNamers.length})`,
-  ];
-  const notes = entry.unresolvedNamers.length === 0 ? [] : ["    Unresolved name matches do not establish additional dependencies."];
-  const omitted = detail === "summary" && memberships.size > LISTED_ITEMS;
-  return { lines: [heading, ...(omitted ? counts : listing), ...notes], omitted, listed: !omitted && memberships.size > 0 };
-}
-
 export function renderImporters(fact: Fact<ImportersValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; inspect importers and users for recorded links and unresolvedNamers for unconfirmed matches. Inspect places for recorded relationship lines; related files without a place have no recorded line. Inspect cuts for partial results.";
-  const lines = headerLines(fact);
+  const lines = [write(presentImporters(fact), detail).text];
   if (fact.status === "unknown") return lines.join("\n");
-  let omitted = false;
-  let explained = false;
-  for (const entry of fact.value.files) {
-    const block = importerFiles(entry, detail);
-    if (block.listed && !explained) {
-      lines.push("  Indices are zero-based positions in each original category; additional users have no module category.");
-      explained = true;
-    }
-    lines.push(`  ${entry.file}`, ...block.lines);
-    omitted ||= block.omitted;
-  }
-  if (omitted) lines.push(importerPathRecovery());
+  const related = fact.value.files.some((entry) => [...entry.importers, ...(entry.reexporters ?? []), ...(entry.dynamicImporters ?? []), ...(entry.typeImporters ?? []), ...entry.users, ...entry.unresolvedNamers].length > 0);
+  if (related) lines.push("  Indices are zero-based positions in each original category; additional users have no module category.");
+  if (fact.value.files.some((entry) => entry.unresolvedNamers.length > 0)) lines.push("    Unresolved name matches do not establish additional dependencies.");
   const entries = fact.value.files;
   const hasPlaces = entries.some((entry) => (entry.places?.length ?? 0) > 0);
   const paths = (entry: ImportedFile): string[] => [...entry.importers, ...(entry.reexporters ?? []), ...(entry.dynamicImporters ?? []), ...(entry.typeImporters ?? []), ...entry.users, ...entry.unresolvedNamers];
   if (!hasPlaces && entries.some((entry) => paths(entry).length > 0)) lines.push("  These relationships are paths only; no relationship line locations were recorded.");
   else if (hasPlaces && entries.some((entry) => paths(entry).some((path) => !entry.places?.some((place) => place.file === path)))) lines.push("  Relationship lines are recorded where a place was read; a related file without one names no recorded line.");
-  lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
-}
-
-/** Each declaration on its own line, its children under it one level deeper. */
-function outlineLines(declarations: readonly OutlineDeclaration[], indent: string): string[] {
-  return declarations.flatMap((declaration) => [`${indent}${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]${declaration.placement === undefined ? "" : ` (unplaced: ${declaration.placement.reason} at ${declaration.placement.at.line}:${declaration.placement.at.column})`}`, ...outlineLines(declaration.children ?? [], `${indent}  `)]);
-}
-
-/**
- * One line per target and statement form, its bindings after a colon: `name:line` when the declaration is in the target
- * file, `name:file:line` when a re-export leads elsewhere, the bare name when no declaration is proven.
- */
-function importLines(imports: readonly OutlineImport[]): string[] {
-  const groups = new Map<string, Set<string>>();
-  for (const item of imports) {
-    const key = `${importTarget(item)}${item.kind === "reexport" ? " re-export" : ""}${item.form === undefined ? "" : ` ${item.form}`}`;
-    const names = groups.get(key) ?? new Set<string>();
-    for (const binding of item.bindings) names.add(bindingText(binding, item.target.kind === "repository" ? item.target.file : undefined));
-    groups.set(key, names);
-  }
-  return [...groups].toSorted(([a], [b]) => compareText(a, b)).map(([key, names]) => `      ${key}${names.size === 0 ? "" : `: ${[...names].toSorted(compareText).join(", ")}`}`);
-}
-
-/**
- * One line per use: `name → file:line` for a declaration, the package or the global otherwise, then relations and use
- * lines. No use is "nothing" only when no use is unproved.
- */
-function useLines(uses: readonly OutlineUse[], unproved: boolean): string[] {
-  if (uses.length === 0) return [unproved ? `    ${NO_PROVEN_USE}` : "    uses nothing outside its body"];
-  return ["    uses:", ...uses.map((use) => {
-    const target = "declaration" in use ? `${use.declaration.name} → ${use.declaration.file}:${use.declaration.line}` : "module" in use ? `${use.module} (package)` : `${use.global} (global)`;
-    const at = use.at.length === 0 ? "" : `; at ${[...new Set(use.at.map(({ line }) => line))].join(", ")}`;
-    return `      ${target} (${use.relations.join(", ")}${at})`;
-  })];
-}
-
-function importTarget({ target, specifier }: OutlineImport): string {
-  if (target.kind === "repository") return target.file;
-  if (target.kind === "external") return `${target.module} (package)`;
-  return `${specifier ?? "computed module"} (unresolved: ${target.reason})`;
-}
-
-function bindingText({ local, imported, typeOnly, declaration }: OutlineBinding, targetFile: string | undefined): string {
-  const name = local === undefined ? imported : local === imported ? local : `${imported} as ${local}`;
-  const place = declaration === undefined ? "" : declaration.file === targetFile ? `:${declaration.line}` : `:${declaration.file}:${declaration.line}`;
-  return `${typeOnly ? "type " : ""}${name}${place}`;
 }
 
 export function renderOutline(fact: Fact<OutlineValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : fact.value.focus !== undefined ? "Select value.focus: one entry per matched declaration with file, selector, path when its binding is proven (a dotted declaration path), ancestors outermost first (kind, name, line, endLine), declaration (kind, name, line, endLine and children of the same shape), omitted, how many of the file's declarations were left out, and uses, what the declaration's own body uses outside itself in order of first use: a declaration (file, name, kind, line, endLine), a module (package) or a global, each with relations (edge kinds) and at (use lines and columns); a member on a local value is not a use. Imports are not listed. Inspect value.unheld for unavailable files and cuts when partial: an unresolved-link cut at[0] \"file::path\" names the focused declaration, then each place \"file:line spelling\" of a use no binding proves." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports list each module statement or runtime reference with line, endLine, specifier, kind, form, typeOnly, target (repository file, external module, or unresolved with reason) and bindings (local, imported, typeOnly, and the declaration reached with file, name, kind, line, endLine when proven). Inspect value.unheld for unavailable files and cuts when partial: an unresolved-link cut names a binding whose declaration is not proven.";
-  const lines = headerLines(fact);
-  if (fact.status === "unknown") return lines.join("\n");
-  for (const match of fact.value.focus ?? []) {
-    lines.push(`  ${match.file}:${match.selector} matches ${match.path ?? `${match.declaration.name} at ${match.declaration.line}-${match.declaration.endLine}`} (${match.omitted} other declarations of the file omitted)`);
-    match.ancestors.forEach((ancestor, depth) => lines.push(...outlineLines([ancestor], `    ${"  ".repeat(depth)}`)));
-    lines.push(...outlineLines([match.declaration], `    ${"  ".repeat(match.ancestors.length)}`));
-    if (match.uses !== undefined) lines.push(...useLines(match.uses, hasUnprovedUses(cutsOf(fact), match.file, match.path ?? match.selector)));
-  }
-  for (const entry of fact.value.files ?? []) {
-    lines.push(`  ${entry.file}`);
-    lines.push(...(entry.declarations.length === 0 ? ["    declares nothing"] : outlineLines(entry.declarations, "    ")));
-    if (entry.imports.length > 0) lines.push("    imports:", ...importLines(entry.imports));
-  }
-  if (fact.value.unheld.length > 0) lines.push(`unheld files (${fact.value.unheld.length}): ${fact.value.unheld.join(", ")}; their declarations are unknown.`);
-  lines.push(...cutsBlock(cutsOf(fact), detail));
-  return lines.join("\n");
+  return write(presentOutline(fact), detail).text;
 }
 
 const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module), alternatives (every body a body-less method may run, when proven; one expands below it via dispatch) and effects (each HTTP request, published message or data operation a declared client makes in its body: kind http with target method, path and base, kind message with target protocol and destination, or kind data with operation, access and optional proven target, at its line). With workspace, value.links and value.unlinked retain matches at executed effects, and at effects marked deferred (a request inside a function value that a combinator such as defer or switchMap takes, which runs later, if at all; the match then carries deferred: true; a match the workspace sites at an outer caller is also retained when the trace reaches the leaf calls that issue its request, listed in issuedAt), and value.repositorySnapshots pins both endpoints; match basis does not prove host ownership. value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
 
 const TRACE_BRANCHES = "branches are not evaluated: every call in a body is listed, whichever branch makes it";
 
-function traceRootLines(value: TraceValue): string[] {
-  const byId = new Map(value.steps.map((step) => [step.id, step]));
-  return [
-    `roots (${value.steps.filter((step) => step.parent === undefined).length}):`,
-    ...value.roots.map(({ target, steps }) => {
-      const roots = steps.map((id) => byId.get(id)!).map((step) => `#${step.id} ${step.symbol} [${step.kind}] ${placeText(step.file, step.line, step.endLine)}`);
-      return `  ${target} matches ${steps.length}: ${roots.join(", ")}`;
-    }),
-  ];
-}
-
-/** The ranges to open: one per line in details; in summary one line per file, files in their first appearance. */
-function readingPlanLines(value: TraceValue, detail: RenderDetail): string[] {
-  const { ranges, lines } = value.readingPlan;
-  const span = (start: number, end: number): string => (end === start ? `${start}` : `${start}-${end}`);
-  const listed = detail === "details"
-    ? ranges.map(({ file, start, end }) => `  ${placeText(file, start, end === start ? undefined : end)}`)
-    : [...Map.groupBy(ranges, ({ file }) => file)].map(([file, inFile]) => {
-        const count = inFile.reduce((sum, { start, end }) => sum + end - start + 1, 0);
-        return `  ${file}: ${inFile.map(({ start, end }) => span(start, end)).join(", ")} (${count} ${count === 1 ? "line" : "lines"})`;
-      });
-  return [`reading plan (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"}, ${lines} lines):`, ...listed];
-}
-
-/** Every effect of the trace, in pre-order, then the requests whose destination is undecided; a trace with neither says so. */
-function effectLines(steps: readonly TraceStep[]): string[] {
-  const effects = steps.flatMap((step) => (step.effects ?? []).map((effect) => `${effectText(effect)} at ${placeText(step.file, effect.line)}`));
-  const requests = steps.flatMap((step) => (step.unresolvedEffects ?? []).map((site) => `${statedRequestText(site)} at ${placeText(step.file, site.line)}${site.deferred === true ? " (deferred)" : ""}`));
-  return [
-    ...(effects.length === 0 && requests.length > 0 ? [] : [`effects (${effects.length})${effects.length === 0 ? "" : `: ${effects.join(", ")}`}`]),
-    ...(requests.length === 0 ? [] : [`unresolved requests (${requests.length}, destination undecided): ${requests.join(", ")}`]),
-  ];
-}
-
-function externalText(group: ExternalCalls): string {
-  return `${group.kind === "import" ? group.module : group.kind}: ${group.names.join(", ")}`;
-}
-
-/** Each step on its own line under its parent: the call's line, then its span when its file is not its parent's. */
-function traceTreeLines(steps: readonly TraceStep[]): string[] {
-  const byId = new Map(steps.map((step) => [step.id, step]));
-  return steps.flatMap((step) => {
-    const indent = `  ${"  ".repeat(step.depth)}`;
-    const parent = step.parent === undefined ? undefined : byId.get(step.parent);
-    const span = parent?.file === step.file ? "" : ` (${placeText(step.file, step.line, step.endLine)})`;
-    const notes = [step.via !== undefined && step.via !== "call" ? step.via : undefined, step.deferred ? "deferred" : undefined, step.seen === undefined ? undefined : `seen #${step.seen}`].filter((note) => note !== undefined);
-    const leaves = step.leaves ?? [];
-    return [
-      `${indent}#${step.id} ${step.at?.line ?? step.line} ${step.symbol}${step.parent === undefined ? ` [${step.kind}]` : ""}${span}${notes.length === 0 ? "" : ` ${notes.join(", ")}`}`,
-      ...(leaves.length === 0 ? [] : [`${indent}  leaves: ${leaves.map((leaf) => (leaf.deferred ? `${leaf.symbol} (deferred)` : leaf.symbol)).join(", ")}`]),
-      ...(step.external === undefined ? [] : [`${indent}  external: ${step.external.map(externalText).join("; ")}`]),
-      ...(step.effects === undefined ? [] : [`${indent}  effects: ${step.effects.map((effect) => `${effectText(effect)} at ${effect.line}`).join("; ")}`]),
-      ...(step.unresolvedEffects === undefined ? [] : [`${indent}  unresolved requests (URL expressions, not proven destinations):`, ...step.unresolvedEffects.map((site) => `${indent}${unresolvedLine(site, "details")}`)]),
-      ...(step.alternatives === undefined ? [] : [`${indent}  dispatch alternatives (${step.alternatives.length}): ${step.alternatives.map((body) => placeText(body.file, body.start, body.end)).join(", ")}`]),
-    ];
-  });
-}
-
-/** An unresolved call of a trace: why it is cut, the place and spelling leading the cut, then its candidates. */
-function tracePlaceOf(cut: Cut): { why: string; file: string; line: string; spelling: string; candidates: readonly string[]; cause: readonly string[] } {
-  const [place = "", ...candidates] = cut.at;
-  const { file, line, reason } = placeOf(place);
-  return { why: cutReasonText(cut), file, line, spelling: reason, candidates, cause: cut.cause ?? [] };
-}
-
-type TracePlace = ReturnType<typeof tracePlaceOf>;
-
-const TRACE_PLACES_OMITTED = '    Call places omitted; mode "details" lists them, answer.json gives the structured fact.';
-
-/** The name a call ends with, so calls of one member through different receivers share a line. */
-function trailingName(spelling: string): string {
-  return /[\w$]+$/.exec(spelling.trimEnd())?.[0] ?? spelling.trim();
-}
-
-/** The constructs a cut's cause places stand at, each counted with the files it sits in. */
-function causeCounts(cause: readonly string[]): string {
-  return [...Map.groupBy(cause.map(placeOf), ({ reason }) => reason)]
-    .toSorted(([a], [b]) => compareText(a, b))
-    .map(([construct, places]) => {
-      const files = new Set(places.map(({ file }) => file)).size;
-      return `${places.length} ${construct} in ${files} ${files === 1 ? "file" : "files"}`;
-    })
-    .join(", ");
-}
-
-/** A cause of several cuts, by its places, numbered in the order its first cut appears. */
-function sharedCauses(places: readonly TracePlace[]): ReadonlyMap<string, number> {
-  const counts = Map.groupBy(places.filter(({ cause }) => cause.length > 0), ({ cause }) => cause.join(", "));
-  return new Map([...counts].filter(([, sharing]) => sharing.length > 1).map(([cause], index) => [cause, index + 1]));
-}
-
-/** Each unresolved call with every candidate and, where the cut has one, the places of its cause, or the number of the cause several cuts share. */
-function tracePlaceLine(place: TracePlace, shared: ReadonlyMap<string, number>): string {
-  const number = shared.get(place.cause.join(", "));
-  const cause = place.cause.length === 0 ? "" : `; cause: ${number === undefined ? place.cause.join(", ") : `#${number}`}`;
-  return `    ${place.why}: ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}${cause}`;
-}
-
-/** What declares the library signatures that settle a function value passed to a library call (ADR-0063, ADR-0044 decision 5), named on a cut with one implementation, the one that releases. */
-const JDK_NEXT_STEP = '  next: declare a JDK (--jdk on ye-ast trace or ye-ast mcp) so the function values of undeclared library calls are read; a one-implementation port is followed once none of them may implement it';
-
-/** A candidate without its file: `src/a.ts::Store.get` reads `Store.get`. */
-function candidatePath(candidate: string): string {
-  const separator = candidate.indexOf("::");
-  return separator === -1 ? candidate : candidate.slice(separator + 2);
-}
-
-/** The causes whose calls a summary counts as one line when that is shorter than a line per name: template expressions the page plan does not cover, and receivers the walk could not prove. */
-const COUNTED_CAUSES: readonly string[] = ["page-unplanned", "receiver-unproven"];
-
-/**
- * One line per reason, trailing name and candidate set, most calls first, then by name: why they are cut, its calls, its
- * files and its candidates by containment path, counted when that is shorter or when two candidates share a path. The
- * calls of a counted cause collapse to one line of calls, files and names when that line is shorter than theirs.
- */
-function traceCallGroupLines(places: readonly TracePlace[]): string[] {
-  const named = [...Map.groupBy(places, (place) => JSON.stringify([place.why, trailingName(place.spelling), place.candidates.toSorted(compareText), causeCounts(place.cause)]))]
-    .map(([key, inGroup]) => ({ key, why: inGroup[0]!.why, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), cause: causeCounts(inGroup[0]!.cause), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
-    .map((group) => {
-      const shown = [...new Set(group.candidates.map(candidatePath))].sort(compareText);
-      const listed = shown.join(", ");
-      const counted = `${group.candidates.length} ${group.candidates.length === 1 ? "candidate" : "candidates"}`;
-      const listable = shown.length === group.candidates.length && preferShorterText(listed, counted) === listed;
-      const could = group.candidates.length === 0 ? "" : listable ? ` → could be: ${listed}` : ` → ${counted}`;
-      return { ...group, line: `    ${group.why}: ${group.name} ×${group.calls} in ${group.files} ${group.files === 1 ? "file" : "files"}${could}${group.cause === "" ? "" : `; cause: ${group.cause}`}` };
-    });
-  const collapsed = [...Map.groupBy(places.filter(({ why }) => COUNTED_CAUSES.includes(why.split(" ")[0]!)), (place) => place.why)].flatMap(([why, inCause]) => {
-    const files = new Set(inCause.map(({ file }) => file)).size;
-    const names = new Set(inCause.map(({ spelling }) => trailingName(spelling))).size;
-    const line = `    ${why}: ${inCause.length} calls in ${files} ${files === 1 ? "file" : "files"}, ${names} ${names === 1 ? "name" : "names"}`;
-    const own = named.filter((group) => group.why === why);
-    return own.length > 1 && size([line]) < size(own.map((group) => group.line)) ? [{ key: why, why, name: "", calls: inCause.length, line, replaces: own }] : [];
-  });
-  const replaced = new Set(collapsed.flatMap(({ replaces }) => replaces));
-  return [...named.filter((group) => !replaced.has(group)), ...collapsed]
-    .sort((a, b) => b.calls - a.calls || compareText(a.name, b.name) || compareText(a.key, b.key))
-    .map(({ line }) => line);
-}
-
-/** The calls no rule settled: grouped by call in summary, then the modes that list each place; one per line with every candidate in details. */
-function traceCutLines(cuts: readonly Cut[], detail: RenderDetail): string[] {
-  const unresolved = cuts.filter((cut) => cut.kind === "unresolved-link").map(tracePlaceOf);
-  const lines = cutLines(cuts.filter((cut) => cut.kind !== "unresolved-link"), detail);
-  if (unresolved.length === 0) return lines.length === 0 ? [] : [CUTS, ...lines];
-  const shared = sharedCauses(unresolved);
-  const places = detail === "details" ? [...unresolved.map((place) => tracePlaceLine(place, shared)), ...[...shared].map(([cause, number]) => `    cause #${number}: ${cause}`)] : [...traceCallGroupLines(unresolved), TRACE_PLACES_OMITTED];
-  const followable = cuts.some((cut) => cut.at.length === 2 && cut.cause?.some((place) => placeOf(place).reason === FUNCTION_VALUE_AWAITS_JDK));
-  return [CUTS, ...lines, `  unresolved-link (${unresolved.length} ${unresolved.length === 1 ? "call" : "calls"}):`, ...places, ...(followable ? [JDK_NEXT_STEP] : [])];
-}
-
 export function renderTrace(fact: Fact<TraceValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : TRACE_FULL_GUIDE;
-  const lines = headerLines(fact);
-  if (fact.status === "unknown") return lines.join("\n");
-  lines.push(...traceRootLines(fact.value), ...traceSettledLine(fact.value), ...effectLines(fact.value.steps), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
-  if (detail === "details") lines.push("steps:", ...traceTreeLines(fact.value.steps));
-  if (fact.value.repositorySnapshots !== undefined) lines.push(...linkMapLines(fact.value.links ?? [], fact.value.unlinked ?? [], detail, "links from placed trace requests"));
-  lines.push(...traceCutLines(cutsOf(fact), detail));
-  return lines.join("\n");
-}
-
-/** One line when requested ranges held no token (ADR-0043 decision 3). */
-function traceSettledLine(value: TraceValue): string[] {
-  return value.settled === undefined ? [] : [`${value.settled.length} requested ranges hold no token`];
+  const text = write(presentTrace(fact), detail).text;
+  return fact.status === "unknown" ? text : `${text}\n${TRACE_BRANCHES}`;
 }
 
 /** What a line says of a request whose path the snapshot states after a base URL it does not decide (ADR-0054). */
@@ -804,22 +541,6 @@ function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, 
 
 /** Whether an answer prints each link of a list, numbered, rather than counting them: the rule a candidate pointing into the list shares. */
 const linksListed = (links: readonly Link[], detail: RenderDetail): boolean => detail === "details" || links.length <= LISTED_ITEMS;
-
-/**
- * The links of a workspace map: each one in details, and in summary up to the listed bound, beyond which the count per
- * caller, callee and transport (RFC-0017); the call sites the join reached without a link are always listed.
- */
-function linkMapLines(links: readonly TraceLinked<Link>[], unlinked: readonly TraceLinked<UnlinkedCallSite>[], detail: RenderDetail, label = "links between the repositories read"): string[] {
-  const literal = links.map((link, index) => linkLine(link, index + 1));
-  const pairs = new Map<string, number>();
-  for (const { from, to, transport } of links) pairs.set(`${from.repo} -> ${to.repo} ${transport}`, (pairs.get(`${from.repo} -> ${to.repo} ${transport}`) ?? 0) + 1);
-  const counted = [...[...pairs].map(([pair, count]) => `  - ${pair}: ${count}`), `  ${categoryRecovery({ details: "lists each link" })}`];
-  const listed = linksListed(links, detail) ? literal : counted;
-  return [
-    `${label} (${links.length}):`, ...listed,
-    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, method, outcome, name, repos, routes, deferred, issuedAt }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport}${method === undefined ? "" : ` ${method}`} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}${deferred === true ? " (runs later, if at all)" : ""}${issuedText(issuedAt)}`)]),
-  ];
-}
 
 function callSiteLine(site: CallSite): string {
   const { target } = site;

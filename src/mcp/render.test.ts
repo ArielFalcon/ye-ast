@@ -156,14 +156,14 @@ test("entrypoint guidance does not advertise selection when recovery is unavaila
   assert.match(text, /findingIndex/);
 });
 
-test("importer omitted paths share one recovery instruction across target files", async () => {
+test("importer summary lists every related file for every target", async () => {
   const { renderImporters } = await import("./render.ts");
   const paths = Array.from({length: 30}, (_, i) => `src/long/dependency/path/${i}.ts`);
   const fact = { ...base, status: "complete", value: { files: ["a.ts", "b.ts"].map(file => ({file, importers: paths, users: [], unresolvedNamers: []})) } };
   const text = renderImporters(fact as never);
-  assert.equal(text.split("File paths omitted;").length - 1, 1);
+  assert.equal(text.includes("File paths omitted;"), false);
   assert.ok(text.includes("a.ts") && text.includes("b.ts"));
-  assert.equal(text.split("related files (30 distinct)").length - 1, 2);
+  for (const path of paths) assert.equal(text.split(path).length - 1, 2);
 });
 
 test("handler and module examples obey the same registered-tool capability policy as cuts", () => {
@@ -204,26 +204,29 @@ function traceFact(cuts: readonly unknown[] = []): Fact<TraceValue> {
   return { ...base, status: cuts.length === 0 ? "complete" : "partial", cuts: reasoned, value } as unknown as Fact<TraceValue>;
 }
 
-test("a trace summary shows a selected class root as a class and the reading plan as one line per file, in first appearance, with its lines and the total", () => {
-  const text = renderTrace(traceFact());
-  assert.ok(text.includes("  src/order.ts:1-30 matches 1: #0 Order [class] src/order.ts:1-30"), text);
-  assert.ok(text.includes("reading plan (3 ranges, 37 lines):\n  src/order.ts: 1-30, 40 (31 lines)\n  src/tax.ts: 4-9 (6 lines)"), text);
-  assert.ok(text.includes("branches are not evaluated"), text);
+test("a trace summary states the root, its class step and every reading range at its place", () => {
+  const fact = traceFact();
+  const text = renderTrace(fact);
+  assert.ok(text.includes("  src/order.ts:1-30 matches 1: #0"), text);
+  assert.ok(text.includes("  src/order.ts:1-30 #0 Order (class)"), text);
+  assert.ok(text.includes("reading plan:\n  src/order.ts\n    1-30 steps 0, 1, 3\n    40 steps 1\n  src/tax.ts\n    4-9 steps 2"), text);
+  assert.match(renderTrace(fact), /branches are not evaluated/);
 });
 
-test("a trace in details keeps one reading range per line in plan order and one unresolved call per line, without the omission line", () => {
-  const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle", "src/a.ts:handle"] }]), "details");
-  assert.ok(text.includes("reading plan (3 ranges, 37 lines):\n  src/order.ts:1-30\n  src/tax.ts:4-9\n  src/order.ts:40\n"), text);
-  assert.ok(text.includes("  unresolved-link (1 call):\n    callee-unknown: src/order.ts:15 this.handler.handle (src/a.ts:handle)"), text);
-  assert.ok(!text.includes("places omitted"), text);
+test("a trace in details keeps every reading range and every place of a cut, without an omission line", () => {
+  const fact = traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle", "src/a.ts:handle"] }]);
+  const text = renderTrace(fact, "details");
+  assert.ok(text.includes("    1-30 steps 0, 1, 3\n    40 steps 1"), text);
+  assert.ok(text.includes("cuts:\n  unresolved-link callee-unknown\n    src/order.ts:15 this.handler.handle\n    src/a.ts:handle"), text);
+  assert.equal(text.includes("places omitted"), false);
 });
 
-test("a trace tree line carries the call line, a foreign span, the seen and deferred notes, leaves, external calls and dispatch alternatives", () => {
+test("a trace tree states the call line, a foreign span, the seen and deferred notes, leaves, external calls and dispatch alternatives", () => {
   const text = renderTrace(traceFact(), "details");
-  assert.ok(text.includes("      #2 14 tax (src/tax.ts:4-9) deferred\n        dispatch alternatives (1): src/flat-tax.ts:3-6"), text);
-  assert.ok(text.includes("    #1 5 total own-member\n      leaves: round, log (deferred)\n      external: lodash: sum, map"), text);
-  assert.ok(text.includes("      #2 14 tax (src/tax.ts:4-9) deferred"), text);
-  assert.ok(text.includes("    #3 7 total seen #1"), text);
+  assert.ok(text.includes("    :12-20 #1 total (at 5, own-member)"), text);
+  assert.ok(text.includes("      src/math.ts:1-3 leaf round\n      src/log.ts:2-4 leaf log (deferred)\n      external lodash: sum, map"), text);
+  assert.ok(text.includes("      src/tax.ts:4-9 #2 tax (at 14, deferred)\n        src/flat-tax.ts:3-6 dispatch tax"), text);
+  assert.ok(text.includes("    :12-20 #3 total (at 7, seen #1)"), text);
 });
 
 function effectsFact(): Fact<TraceValue> {
@@ -235,20 +238,21 @@ function effectsFact(): Fact<TraceValue> {
   return { ...fact, value: { ...(fact as { value: TraceValue }).value, steps } } as Fact<TraceValue>;
 }
 
-test("a trace summary lists every effect first, in pre-order, each with its target and its place", () => {
+test("a trace lists every effect at its place with the step it belongs to", () => {
   const text = renderTrace(effectsFact());
-  assert.ok(text.includes("effects (2): http POST /orders/checkout base https://api at src/order.ts:15, message nats orders.created at src/tax.ts:7\nbranches are not evaluated"), text);
+  assert.ok(text.includes("effects:\n  src/order.ts\n    15 http POST /orders/checkout base https://api (step #1)\n  src/tax.ts\n    7 message nats orders.created (step #2)"), text);
 });
 
 test("a trace summary marks an effect whose route is stated after an undecided base, so a relative path is never read as a proven destination", () => {
   const fact = traceFact();
   const steps = fact.status === "unknown" ? [] : fact.value.steps.map((step) => (step.id === 1 ? { ...step, effects: [{ kind: "http" as const, line: 15, target: { method: "POST" as const, path: "/orders/checkout" }, authority: "undecided" as const }] } : step));
   const text = renderTrace({ ...fact, value: { ...(fact as { value: TraceValue }).value, steps } } as Fact<TraceValue>);
-  assert.ok(text.includes("effects (1): http POST /orders/checkout base-url undecided at src/order.ts:15"), text);
+  assert.ok(text.includes("15 http POST /orders/checkout base-url undecided (step #1)"), text);
 });
 
-test("a trace summary with no effect says so, never leaving the line out", () => {
-  assert.ok(renderTrace(traceFact()).includes("\neffects (0)\n"), renderTrace(traceFact()));
+test("a trace with no effect states that no effects were recorded", () => {
+  assert.ok(renderTrace(traceFact()).includes("no recorded effects"));
+  assert.ok(renderTrace(effectsFact()).includes("effects:"));
 });
 
 function requestsFact(placed: boolean): Fact<TraceValue> {
@@ -260,81 +264,69 @@ function requestsFact(placed: boolean): Fact<TraceValue> {
   return { ...fact, value: { ...(fact as { value: TraceValue }).value, steps } } as Fact<TraceValue>;
 }
 
-test("a trace of only unplaced requests never says effects (0): it counts them and states each destination and place", () => {
+test("a trace of only unplaced requests states no effects section and each request's place, spelling and destination", () => {
   const text = renderTrace(requestsFact(false));
-  assert.ok(!text.includes("effects (0)"), text);
-  assert.ok(text.includes('unresolved requests (2, destination undecided): GET /orders at src/order.ts:20, POST; URL expression: runtime + "/x" (destination unresolved) at src/order.ts:30 (deferred)\n'), text);
+  assert.equal(text.includes("effects:"), false);
+  assert.ok(text.includes('unresolved requests:\n  src/api.service.ts\n    20 get (http) GET /orders unknown (unresolved, step #3)\n    30 get (http) POST; URL expression: runtime + "/x" (destination unresolved) unknown (unresolved, deferred, step #3)'), text);
 });
 
 test("a mixed trace lists its effects before its unplaced requests", () => {
   const text = renderTrace(requestsFact(true));
-  assert.ok(text.includes("effects (2): http POST /orders/checkout base https://api at src/order.ts:15, message nats orders.created at src/tax.ts:7\nunresolved requests (2, destination undecided): GET /orders"), text);
+  assert.ok(text.includes("effects:"), text);
+  assert.ok(text.includes("unresolved requests:"), text);
+  assert.ok(text.indexOf("effects:") < text.indexOf("unresolved requests:"), text);
 });
 
 test("the links of a trace are named for placed requests, never executed effects", () => {
   const fact = requestsFact(false);
-  const linked = { ...fact, value: { ...(fact as { value: TraceValue }).value, repositorySnapshots: [], links: [], unlinked: [] } } as unknown as Fact<TraceValue>;
-  const text = renderTrace(linked);
-  assert.ok(text.includes("links from placed trace requests (0):"), text);
-  assert.ok(!text.includes("executed trace effects"), text);
+  const link = { id: "l1", from: { repo: "shop", file: "src/api.service.ts", line: 20, symbol: "get" }, to: { repo: "api", kind: "http-route", name: "POST /orders", handler: { path: "src/OrderController.java", line: 30, symbol: "OrderController.create" } }, transport: "http", basis: "exact", confidence: 1 };
+  const value = { ...(fact as { value: TraceValue }).value, repositorySnapshots: [{ repo: "shop", snapshot: base.snapshot }], links: [link], unlinked: [] };
+  const text = renderTrace({ ...fact, value } as unknown as Fact<TraceValue>);
+  assert.ok(text.includes("links from placed trace requests:"), text);
+  assert.ok(text.includes("20 get -> api POST /orders (http, exact)"), text);
+  assert.equal(text.includes("executed trace effects"), false);
 });
 
-test("a trace tree line carries the effects of its body with their lines", () => {
-  const text = renderTrace(effectsFact(), "details");
-  assert.ok(text.includes("      external: lodash: sum, map\n      effects: http POST /orders/checkout base https://api at 15\n"), text);
-});
-
-test("an unresolved trace call names its place and spelling with its candidates, counted in summary when shorter", () => {
+test("an unresolved trace call states its place, spelling and every candidate in details, counted in summary", () => {
   const candidates = ["src/a.ts:handle", "src/b.ts:handle", "src/c.ts:handle"];
   const fact = traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle", ...candidates] }]);
-  assert.ok(renderTrace(fact, "details").includes(`src/order.ts:15 this.handler.handle (${candidates.join(", ")})`), renderTrace(fact, "details"));
-  assert.ok(renderTrace(fact).includes("    callee-unknown: handle ×1 in 1 file → 3 candidates"), renderTrace(fact));
+  const summary = renderTrace(fact);
+  const details = renderTrace(fact, "details");
+  for (const place of ["src/order.ts:15 this.handler.handle", ...candidates]) assert.ok(details.includes(`    ${place}`), place);
+  assert.ok(summary.includes("  unresolved-link callee-unknown"), summary);
+  assert.equal(summary.includes("src/a.ts:handle"), false, "a summary counts the cut and leaves its places to details");
 });
 
-test("a trace summary groups unresolved calls by trailing name and sorted candidate set, most calls first, then by name", () => {
-  const fact = traceFact([
-    { kind: "unresolved-link", at: ["src/a.ts:9 other.get", "C"] },
-    { kind: "unresolved-link", at: ["src/a.ts:11 this.run"] },
-    { kind: "unresolved-link", at: ["src/a.ts:3 this.store.get", "B", "A"] },
-    { kind: "unresolved-link", at: ["src/b.ts:7 cache.get", "A", "B"] },
+test("a trace summary counts every cut by kind and cause, most cuts first, and details states every place", () => {
+  const unplanned = ["dirty", "invalid", "errors", "typeId"].flatMap((name, index) => [
+    { reason: "page-unplanned", kind: "unresolved-link", at: [`src/pet-edit.html:${index + 3} ${name}`] },
+    { reason: "page-unplanned", kind: "unresolved-link", at: [`src/pet-form.html:${index + 9} ${name}`] },
   ]);
-  const text = renderTrace(fact);
-  assert.ok(text.includes("  unresolved-link (4 calls):\n    callee-unknown: get ×2 in 2 files → could be: A, B\n    callee-unknown: get ×1 in 1 file → could be: C\n    callee-unknown: run ×1 in 1 file\n"), text);
-});
-
-test("a trace summary lists candidates by their containment path when shorter than their count, and counts them when longer or when two share a path", () => {
-  const text = renderTrace(traceFact([
-    { kind: "unresolved-link", at: ["src/a.ts:3 x.get", "src/store.ts::Store.get"] },
-    { kind: "unresolved-link", at: ["src/a.ts:5 y.put", "src/cache.ts::LocalCache.put", "src/store.ts::Store.put"] },
-    { kind: "unresolved-link", at: ["src/a.ts:7 z.run", "src/a.ts::A.run", "src/b.ts::A.run"] },
-  ]));
-  assert.ok(text.includes("    callee-unknown: get ×1 in 1 file → could be: Store.get\n"), text);
-  assert.ok(text.includes("    callee-unknown: put ×1 in 1 file → 2 candidates\n"), text);
-  assert.ok(text.includes("    callee-unknown: run ×1 in 1 file → 2 candidates\n"), text);
-});
-
-test("a trace summary counts template and receiver cuts by cause when that is shorter, and keeps the name of a cause that holds one call name", () => {
-  const unplanned = ["dirty", "invalid", "errors", "typeId"].flatMap((name, index) => [{ reason: "page-unplanned", kind: "unresolved-link", at: [`src/pet-edit.html:${index + 3} ${name}`] }, { reason: "page-unplanned", kind: "unresolved-link", at: [`src/pet-form.html:${index + 9} ${name}`] }]);
-  const receivers = [{ reason: "receiver-unproven", kind: "unresolved-link", at: ["src/a.ts:3 x.replace", "src/s.ts::Store.replace"] }, { reason: "receiver-unproven", kind: "unresolved-link", at: ["src/b.ts:5 y.format", "src/f.ts::Fmt.format", "src/g.ts::Gmt.format"] }, { reason: "receiver-unproven", subReason: "capability-absent", kind: "unresolved-link", at: ["src/c.ts:7 z.save", "src/s.ts::Store.save"] }];
-  const text = renderTrace(traceFact([...unplanned, ...receivers, { reason: "function-value", kind: "unresolved-link", at: ["src/d.ts:2 handler"] }, { reason: "function-value", kind: "unresolved-link", at: ["src/d.ts:4 other"] }]));
-
-  assert.ok(text.includes("    page-unplanned: 8 calls in 2 files, 4 names\n"), text);
-  assert.ok(text.includes("    receiver-unproven: 2 calls in 2 files, 2 names\n"), text);
-  assert.ok(text.includes("    receiver-unproven (capability-absent): save ×1 in 1 file → could be: Store.save\n"), text);
-  assert.ok(text.includes("    function-value: handler ×1 in 1 file\n"), text);
-  assert.ok(!text.includes("page-unplanned: dirty"), text);
-  assert.ok(renderTrace(traceFact(unplanned), "details").includes("page-unplanned: src/pet-edit.html:3 dirty"));
-});
-
-test("a trace summary that groups unresolved calls ends the cut block by naming the modes that list each place", () => {
-  const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle"] }]));
-  assert.ok(text.endsWith('\n    Call places omitted; mode "details" lists them, answer.json gives the structured fact.'), text);
+  const receivers = [
+    { reason: "receiver-unproven", kind: "unresolved-link", at: ["src/a.ts:3 x.replace", "src/s.ts::Store.replace"] },
+    { reason: "receiver-unproven", kind: "unresolved-link", at: ["src/b.ts:5 y.format", "src/f.ts::Fmt.format", "src/g.ts::Gmt.format"] },
+    { reason: "receiver-unproven", subReason: "capability-absent", kind: "unresolved-link", at: ["src/c.ts:7 z.save", "src/s.ts::Store.save"] },
+  ];
+  const fact = traceFact([...unplanned, ...receivers, { reason: "function-value", kind: "unresolved-link", at: ["src/d.ts:2 handler"] }, { reason: "function-value", kind: "unresolved-link", at: ["src/d.ts:4 other"] }]);
+  const summary = renderTrace(fact).split("\n");
+  const start = summary.indexOf("cuts:");
+  assert.deepEqual(summary.slice(start + 1, start + 5), [
+    "  8 unresolved-link page-unplanned",
+    "  2 unresolved-link function-value",
+    "  2 unresolved-link receiver-unproven",
+    "  unresolved-link receiver-unproven (capability-absent)",
+  ]);
+  assert.equal(summary.join("\n").includes("page-unplanned: dirty"), false, "a summary counts the places and leaves them to details");
+  const details = renderTrace(fact, "details");
+  assert.ok(details.includes("    src/pet-edit.html:3 dirty"), details);
+  assert.ok(details.includes("    src/s.ts::Store.save"), details);
 });
 
 test("an unresolved trace call keeps its whole place when the path and the spelling hold spaces", () => {
   const fact = traceFact([{ kind: "unresolved-link", at: ["src/my dir/a.ts:15 (async (x) => x)().run", "src/b.ts:run"] }]);
-  assert.ok(renderTrace(fact, "details").includes("    callee-unknown: src/my dir/a.ts:15 (async (x) => x)().run (src/b.ts:run)"), renderTrace(fact, "details"));
-  assert.ok(renderTrace(fact).includes("    callee-unknown: run ×1 in 1 file → 1 candidate"), renderTrace(fact));
+  const details = renderTrace(fact, "details");
+  assert.ok(details.includes("    src/my dir/a.ts:15 (async (x) => x)().run"), details);
+  assert.ok(details.includes("    src/b.ts:run"), details);
 });
 
 const HYPOTHESIS = { method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" };
@@ -464,7 +456,7 @@ test("a trace whose requested ranges held no token says so in one line", () => {
   const fact = traceFact();
   const value = { ...fact.status === "unknown" ? {} : fact.value, settled: [{ basis: "range", file: "src/order.ts", start: 8, end: 9, reason: "no-token", candidates: ["Order"] }] };
   const text = renderTrace({ ...fact, value } as unknown as Fact<TraceValue>);
-  assert.ok(text.includes("1 requested ranges hold no token"), text);
+  assert.ok(text.includes("src/order.ts:8-9 no-token (candidates Order)"), text);
 });
 
 test("a call site the join linked through a path stated after an undecided base prints that request, not unknown", () => {

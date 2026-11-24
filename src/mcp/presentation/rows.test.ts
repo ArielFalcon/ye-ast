@@ -60,3 +60,29 @@ test("a reached unknown entrypoint keeps each distinct observation as a child, a
   const ui = entrypointRow({ kind: "ui-route", name: "/x", handler: { path: "src/X.ts", symbol: "X", line: 1 }, depth: 0, confidence: 1, seeds: [], declaredAt: { path: "src/r.ts", line: 9 } });
   assert.deepEqual(ui.qualifiers?.at(-1), { name: "at", value: "src/r.ts:9" });
 });
+
+test("cut rows retain explicit bounds including zero in both modes", async () => {
+  const { write } = await import("./writer.ts");
+  const presentation = {
+    status: [], snapshots: [], sections: [cutSection([
+      { kind: "depth", reason: "depth", at: ["a.ts::a"], limit: 0, reach: { kind: "anything" } },
+      { kind: "hub", reason: "hub", at: ["b.ts::b"], limit: 3, reach: { kind: "anything" } },
+    ])],
+  };
+  for (const mode of ["summary", "details"] as const) {
+    const text = write(presentation, mode).text;
+    assert.match(text, /depth \(limit 0\)/);
+    assert.match(text, /hub \(limit 3\)/);
+  }
+});
+
+test("cut causes keep their summary counts and share their evidence in details", async () => {
+  const { write } = await import("./writer.ts");
+  const cause = ["src/my app/a.ts:4 function-value", "src/my app/a.ts:8 function-value"];
+  const cuts: Cut[] = ["src/c.ts:2 run", "src/c.ts:6 stop"].map((at) => ({ kind: "unresolved-link", at: [at], reason: "dispatch", cause, reach: { kind: "anything" } }));
+  const presentation = { status: [], snapshots: [], sections: [cutSection(cuts)] };
+  assert.match(write(presentation, "summary").text, /2 function-value in 1 file/);
+  const details = write(presentation, "details").text;
+  assert.equal(details.split("src/my app/a.ts").length - 1, 1);
+  assert.match(details, /4,8 via function-value/);
+});

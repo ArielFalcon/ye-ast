@@ -48,10 +48,12 @@ export function declarationRow(file: string, declaration: DeclarationSource, rep
 
 function cutRow(cut: Cut): Row {
   const key = ["cut", cut.kind, cut.reason, cut.subReason ?? "", String(cut.limit ?? ""), cut.at.join("\u0001")].join("\0");
-  const places = cut.kind === "section" ? [] : [...cut.at, ...(cut.cause ?? [])];
+  const cause = cutCausePlaces(cut.cause ?? []);
+  const places = cut.kind === "section" ? [] : [...cut.at, ...cause.unplaced];
   return {
     key,
-    label: `${cut.kind === "section" ? `${cutRowLabel(cut)}: ${cut.at.join(", ")}` : cutRowLabel(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`,
+    label: `${cut.kind === "section" ? `${cutRowLabel(cut)}: ${cut.at.join(", ")}` : cutRowLabel(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}${cause.summary}`,
+    ...(cause.evidence.length === 0 ? {} : { evidence: cause.evidence }),
     ...(places.length === 0 ? {} : { children: places.map((at) => ({ key: `${key}\0${at}`, label: at })) }),
   };
 }
@@ -225,4 +227,19 @@ export function callSiteRow(site: UnlinkedCallSite | UnresolvedCallSite, repo?: 
 export function repositorySourceLine(source: WorkspaceSource): string {
   const label = { request: "the request", persisted: `${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}`, none: "nothing: this answer covers the bound repository alone" }[source];
   return `repositories declared by: ${label}${source === "none" ? " (pass repos, or persist a declaration with ye-ast init --workspace)" : ""}`;
+}
+
+function cutCausePlaces(causes: readonly string[]): { evidence: Place[]; unplaced: string[]; summary: string } {
+  const evidence: Place[] = [];
+  const unplaced: string[] = [];
+  for (const cause of causes) {
+    const match = /^(.*):(\d+)(?:-(\d+))? (.+)$/.exec(cause);
+    if (match === null) unplaced.push(cause);
+    else evidence.push({ path: match[1]!, line: Number(match[2]), ...(match[3] === undefined ? {} : { endLine: Number(match[3]) }), via: match[4]! });
+  }
+  const counts = [...Map.groupBy(evidence, (place) => place.via!)].map(([kind, places]) => {
+    const files = new Set(places.map((place) => place.path)).size;
+    return `${places.length} ${kind} in ${files} ${files === 1 ? "file" : "files"}`;
+  });
+  return { evidence, unplaced, summary: counts.length === 0 ? "" : `; cause: ${counts.join(", ")}` };
 }
