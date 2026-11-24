@@ -16,12 +16,12 @@ test("details conserve ordered category memberships per target with one path occ
   const fact: Fact<ImportersValue> = { ...base, status: "complete", value };
   const output = renderImporters(fact, "details");
   const first = output.split("  target-a\n")[1]!.split("  target-b\n")[0]!;
-  assert.match(first, /shared": importers\[1\], reexporters\[0\], dynamic importers\[0\], users\[0\], also unresolved name matches\[1\]/);
-  assert.match(first, /other": additional users\[1\], also unresolved name matches\[0\]/);
-  assert.match(first, /barrel": reexporters\[1\]/);
-  assert.match(first, /unknown": unresolved name matches\[2\]/);
-  for (const path of ["shared", "other", "barrel", "unknown"]) assert.equal(first.split(`${JSON.stringify(path)}:`).length - 1, 1);
-  assert.match(output.split("  target-b\n")[1]!, /other": importers\[0\]/);
+  assert.match(first, /shared \(importers\[1\], reexporters\[0\], dynamic importers\[0\], users\[0\], also unresolved name matches\[1\]\)/);
+  assert.match(first, /other \(additional users\[1\], also unresolved name matches\[0\]\)/);
+  assert.match(first, /barrel \(reexporters\[1\]\)/);
+  assert.match(first, /unknown \(unresolved name matches\[2\]\)/);
+  for (const path of ["shared", "other", "barrel", "unknown"]) assert.equal(first.split(`${path} (`).length - 1, 1);
+  assert.match(output.split("  target-b\n")[1]!, /other \(importers\[0\]\)/);
   assert.deepEqual(value, original);
 });
 
@@ -30,9 +30,9 @@ test("details reconstruct source arrays including nonadjacent overlaps and unusu
   const output = renderImporters({ ...base, status: "complete", value: { files: [entry] } }, "details");
   const rebuilt: Record<string, string[]> = {};
   for (const line of output.split("\n")) {
-    const row = line.match(/^    ("(?:[^"\\]|\\.)*"): (.*)$/);
+    const row = line.match(/^    (.*) \((.*)\)$/);
     if (!row) continue;
-    const path = JSON.parse(row[1]!) as string;
+    const path = row[1]!;
     for (const membership of row[2]!.split(", ")) {
       const match = membership.match(/^(.*?)\[(\d+)\]$/)!;
       const label = match[1] === "additional users" ? "users" : match[1] === "also unresolved name matches" ? "unresolved name matches" : match[1]!;
@@ -51,35 +51,35 @@ test("empty results remain explicit in every mode", () => {
   for (const mode of ["summary", "details", "full"] as const) {
     const text = renderImporters(empty, mode);
     assert.doesNotMatch(text, /File paths omitted/);
-    if (mode !== "full") assert.match(text, /related files \(0 distinct\)/);
+    if (mode !== "full") assert.match(text, /no related files/);
   }
 });
 
-test("summary names every related file up to the listed bound and counts them beyond it", () => {
+test("summary names every tier-zero related file beyond the listed bound", () => {
   const render = (count: number) => renderImporters({ ...base, status: "complete", value: { files: [{ file: "target", importers: Array.from({ length: count }, (_, i) => `long/path/consumer-${i}.ts`), users: [], unresolvedNamers: [] }] } }, "summary");
   const within = render(LISTED_ITEMS);
   assert.doesNotMatch(within, /File paths omitted/);
   assert.ok(within.includes(`long/path/consumer-${LISTED_ITEMS - 1}.ts`));
   const beyond = render(LISTED_ITEMS + 1);
-  assert.match(beyond, /File paths omitted/);
-  assert.ok(!beyond.includes("long/path/consumer-0.ts"));
+  assert.doesNotMatch(beyond, /File paths omitted/);
+  assert.ok(beyond.includes("long/path/consumer-0.ts"));
 });
 
-test("summary counts full memberships and shares recovery for multiple targets", () => {
+test("summary preserves full memberships for multiple targets", () => {
   const paths = Array.from({ length: LISTED_ITEMS + 1 }, (_, i) => `long/path/consumer-${i}.ts`);
   const value: ImportersValue = { files: ["one", "two"].map(file => ({ file, importers: paths, reexporters: paths.slice(0, 2), users: paths, unresolvedNamers: paths.slice(0, 3) })) };
   const text = renderImporters({ ...base, status: "complete", value }, "summary");
-  assert.equal((text.match(/File paths omitted/g) ?? []).length, 1);
-  assert.equal((text.match(/reexporters \(2\)/g) ?? []).length, 2);
-  assert.equal((text.match(new RegExp(`users \\(${LISTED_ITEMS + 1}; 0 additional\\)`, "g")) ?? []).length, 2);
-  assert.equal((text.match(/unresolved name matches \(3\)/g) ?? []).length, 2);
+  assert.doesNotMatch(text, /File paths omitted/);
+  for (const path of paths) assert.equal(text.split(path).length - 1, 2);
+  assert.equal((text.match(/reexporters\[1\]/g) ?? []).length, 2);
+  assert.equal((text.match(/also unresolved name matches\[2\]/g) ?? []).length, 2);
 });
 
 test("recorded, mixed and legacy relationship places are presented honestly", () => {
   const entry = { file: "target", importers: ["a", "b"], users: [], unresolvedNamers: [] };
   const render = (places?: readonly { file: string; line: number }[]) => renderImporters({ ...base, status: "complete", value: { files: [{ ...entry, ...(places ? { places } : {}) }] } }, "details");
   const recorded = render([{ file: "a", line: 11 }, { file: "a", line: 8 }, { file: "b", line: 4 }]);
-  assert.match(recorded, /"a": importers\[0\] at 8, 11/);
+  assert.match(recorded, /a \(importers\[0\]\)\n {6}evidence: a:8,11/);
   assert.doesNotMatch(recorded, /paths only|no recorded line/);
   assert.match(render([{ file: "a", line: 8 }]), /no recorded line/);
   assert.match(render(), /These relationships are paths only; no relationship line locations were recorded\./);
