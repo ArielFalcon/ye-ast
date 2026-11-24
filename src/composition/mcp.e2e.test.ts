@@ -176,7 +176,7 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   const { recovery: summaryRecovery, text: _summaryText, ...summaryReceipt } = resultFields(summary);
   assert.deepEqual(summaryRecovery, recovery);
   assert.deepEqual(summaryReceipt, { mode: "summary", status: fact["status"], snapshot: fact["snapshot"] });
-  assert.match(summary.content[0]?.text ?? "", /GET \/orders\/\{id\}.*OrderController\.java:\d+/);
+  assert.match(summary.content[0]?.text ?? "", /OrderController\.java\n +\d+\. \d+-\d+ http-route GET \/orders\/\{id\}/);
 });
 
 test("callers with a workspace joins the call site of another repository to the route the symbol serves, and the answer is the same twice", async () => {

@@ -18,12 +18,13 @@ export interface WriteOptions {
 }
 
 interface Rendered { lines: string[]; printed: PrintedRow[]; elided: ElidedRows[] }
-interface Context { section: Section; mode: ResponseMode; seen: Set<string>; printed: PrintedRow[] }
+interface Context { section: Section; mode: ResponseMode; seen: Set<string>; printed: PrintedRow[]; numbers: ReadonlyMap<Row, number> }
 
 const ROLE_ORDER: readonly SectionRole[] = ["answer", "completeness", "context"];
 const indent = (level: number) => "  ".repeat(level);
 const fileKey = (place: Place) => `${place.repo ?? ""}\0${place.path}`;
-const placeKey = (place: Place) => `${fileKey(place)}\0${place.line ?? ""}\0${place.endLine ?? ""}`;
+const placeKey = (place: Place) => `${fileKey(place)}\0${place.line ?? ""}\0${place.endLine ?? ""}\0${place.via ?? ""}\0${place.confidence ?? ""}`;
+const annotationText = (place: Place) => `${place.via === undefined ? "" : ` via ${place.via}`}${place.confidence === undefined ? "" : ` confidence ${place.confidence}`}`;
 const spanText = (place: Place) => place.line === undefined ? "" : place.endLine === undefined ? `${place.line}` : `${place.line}-${place.endLine}`;
 const fileText = (place: Place) => `${place.repo === undefined ? "" : `${place.repo}:`}${place.path}`;
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -57,7 +58,8 @@ function hiddenRows(section: Section, listed: number): readonly Row[] {
 }
 
 function layoutSection(section: Section, rows: readonly Row[], mode: ResponseMode, hidden: readonly Row[]): Rendered {
-  const context: Context = { section, mode, seen: new Set(), printed: [] };
+  const numbers = new Map(section.numbered === true ? section.rows.map((row, position) => [row, position] as const) : []);
+  const context: Context = { section, mode, seen: new Set(), printed: [], numbers };
   const lines = [`${section.title}:`];
   if (section.layout === "by-file") {
     for (const [group, inGroup] of Map.groupBy(rows, (row) => row.place === undefined ? undefined : fileKey(row.place))) {
@@ -119,7 +121,8 @@ function block(row: Row, level: number, context: Context, group?: string): { hea
     ...(row.qualifiers ?? []).map(({ name, value }) => value === undefined ? name : `${name} ${value}`),
     ...(context.mode === "summary" && own.length > 0 ? [plural(own.length, "place")] : []),
   ];
-  const head = `${indent(level)}${place === "" ? "" : `${place} `}${row.label}${facts.length === 0 ? "" : ` (${facts.join(", ")})`}`;
+  const number = context.numbers.get(row);
+  const head = `${indent(level)}${number === undefined ? "" : `${number}. `}${place === "" ? "" : `${place} `}${row.label}${facts.length === 0 ? "" : ` (${facts.join(", ")})`}`;
   const children = row.children !== undefined && (context.mode === "details" || row.childrenAreAnswer === true) ? sequence(row.children, level + 1, context, group) : [];
   return { head, rest: children };
 }
@@ -138,8 +141,11 @@ function evidenceLines(evidence: readonly Place[] | undefined, owner: Place | un
   const news = (evidence ?? []).filter((place) => owner === undefined || placeKey(place) !== placeKey(owner));
   if (news.length === 0) return [];
   const ownFile = owner === undefined ? undefined : fileKey(owner);
-  const items = [...Map.groupBy(news, fileKey)].flatMap(([file, inFile]) =>
-    file === ownFile ? inFile.map((place) => `:${spanText(place)}`) : [`${fileText(inFile[0]!)}${inFile.some((place) => place.line !== undefined) ? `:${inFile.map(spanText).join(",")}` : ""}`],
-  );
+  const items = [...Map.groupBy(news, (place) => `${fileKey(place)}\0${annotationText(place)}`)].flatMap(([, inFile]) => {
+    const annotation = annotationText(inFile[0]!);
+    return fileKey(inFile[0]!) === ownFile
+      ? inFile.map((place) => `:${spanText(place)}${annotation}`)
+      : [`${fileText(inFile[0]!)}${inFile.some((place) => place.line !== undefined) ? `:${inFile.map(spanText).join(",")}` : ""}${annotation}`];
+  });
   return [`${indent(level)}evidence: ${items.join(", ")}`];
 }

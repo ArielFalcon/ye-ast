@@ -18,7 +18,7 @@ test("finding positions distinguish repeated object references in grouped text",
   const fact = { ...base, status: "complete", value: { entrypoints: { ...base, status: "partial", cuts: [cut], value: [finding, finding] } } } as unknown as Fact<EntrypointMap>;
   for (const mode of ["summary", "details"] as const) {
     const text = renderEntrypointMap(fact, mode);
-    assert.match(text, /findingIndex 0/); assert.match(text, /findingIndex 1/);
+    assert.match(text, /^ {2}0\. ui-route a very long route name -> component unknown$/m); assert.match(text, /^ {2}1\. ui-route a very long route name -> component unknown$/m);
     assert.ok(text.includes('"owner":{"kind":"entrypoints"},"cutIndex":0'));
   }
 });
@@ -64,8 +64,7 @@ test("unknown findings share a file and reason without losing indices and ranges
   for (const mode of ["summary", "details"] as const) {
     const text = renderEntrypointMap(fact, mode);
     assert.equal(text.split("src/really-long-repeated-path.ts").length - 1, 1);
-    for (let i = 0; i < 20; i++) assert.match(text, new RegExp(`findingIndex ${i}[^\\n]*${i + 1}-${i + 2}(?:\\D|$)`));
-    assert.match(text, /unresolved/);
+    for (let i = 0; i < 20; i++) assert.match(text, new RegExp(`^ {4}${i}\\. ${i + 1}-${i + 2} unknown \\(unresolved\\)$`, "m"));
   }
 });
 

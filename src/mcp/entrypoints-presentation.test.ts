@@ -8,48 +8,45 @@ import { validRecoveryControls } from "./evidence-schema.ts";
 const base = { schema: "0.12.0", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "1" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [] };
 const render = (items: unknown[], mode: "summary" | "details") => renderEntrypointMap({ ...base, status: "complete", value: { entrypoints: { ...base, status: "complete", value: items } } } as never, mode);
 
-test("multi-evidence unknowns retain exact ordered location associations including duplicates", () => {
+test("an unknown row keeps every evidence place beyond its own, in order, with how it was found, in details only", () => {
   const shared = { path: "src/configuration/very-long-shared-unresolved-location.ts", line: 8, endLine: 9, via: "router", confidence: 0.5 };
   const different = { ...shared, via: "other" };
   const items = Array.from({ length: 20 }, (_, i) => ({ status: "unknown", reason: i === 10 ? "no-extractor" : "unresolved", evidence: [{ path: `src/route-${i}.ts`, line: i + 1 }, shared, i === 10 ? different : shared] }));
   items.splice(5, 0, { status: "unknown", reason: "unresolved", evidence: [{ path: "src/other.ts", line: 4 }] } as never);
-  for (const mode of ["summary", "details"] as const) {
-    const text = render(items, mode);
-    const contexts = new Map([...text.matchAll(/^  evidence (\d+): (.+)$/gm)].map(m => [Number(m[1]), JSON.parse(m[2]!)]));
-    const rows = [...text.matchAll(/^  - unknown \(([^)]+)\) \[findingIndex (\d+)\] evidence: (.+)$/gm)];
-    assert.equal(rows.length, items.length - 1);
-    rows.forEach((row, i) => {
-      const index = i < 5 ? i : i + 1;
-      assert.equal(Number(row[2]), index); assert.equal(row[1], items[index]!.reason);
-      assert.deepEqual(JSON.parse(row[3]!).map((entry: unknown) => typeof entry === "number" ? contexts.get(entry) : entry), items[index]!.evidence);
-    });
-    assert.match(text, /src\/other.ts:4[^\n]*findingIndex 5/);
-    assert.equal((text.match(/very-long-shared-unresolved-location/g) ?? []).length, 2);
-  }
+  const details = render(items, "details");
+  const rowOf = (text: string, index: number) => text.split("\n").findIndex((line) => new RegExp(`^ +${index}\\. `).test(line));
+  const lines = details.split("\n");
+  items.forEach((item, index) => {
+    const at = rowOf(details, index);
+    assert.ok(at >= 0, `row ${index}`);
+    assert.match(lines[at]!, new RegExp(`${index === 5 ? 4 : (index < 5 ? index : index - 1) + 1} unknown \\(${item.reason}\\)$`));
+    const evidence = lines[at + 1]!.startsWith("      evidence:") ? lines[at + 1]! : "";
+    if (item.evidence.length === 1) assert.equal(evidence, "");
+    else if (item.reason === "no-extractor") assert.match(evidence, /8-9 via router confidence 0\.5, .*8-9 via other confidence 0\.5$/);
+    else assert.match(evidence, /8-9,8-9 via router confidence 0\.5$/);
+  });
+  assert.equal(render(items, "summary").includes("via router"), false);
+  assert.match(render(items, "summary"), /^ {4}5\. 4 unknown \(unresolved\)$/m);
 });
 
-test("details share exact base-path context independently of row evidence and route guards", () => {
+test("details state each distinct base path once, with the routes that share it, and a route names its base by row number", () => {
   const evidence = [{ path: "src/config/very-long-shared-configuration-source.yaml", line: 12 }];
   const items = Array.from({ length: 20 }, (_, i) => ({ status: "complete", evidence: [{ path: `src/controller-${i}.ts`, line: i + 1 }], value: { kind: "http-route", name: `GET /route-${i}`, method: "GET", path: `/route-${i}`, handler: { path: `src/controller-${i}.ts`, symbol: `route${i}`, line: i + 1 }, basePath: { status: "unknown", reason: i === 10 ? "no-extractor" : "unresolved", evidence } } }));
   items.splice(5, 0, { status: "complete", evidence: [{ path: "src/page.ts", line: 1 }], value: { kind: "ui-route", name: "/page", path: "/page", component: "unknown", guards: [{ name: "guard", path: "src/guard.ts" }] } } as never);
   const text = render(items, "details");
-  assert.equal((text.match(/very-long-shared-configuration-source/g) ?? []).length, 2);
-  for (let i = 0; i < items.length; i++) assert.match(text, new RegExp(`findingIndex ${i}\\]`));
-  for (let i = 0; i < 20; i++) assert.match(text, new RegExp(`src/controller-${i}\\.ts:${i + 1}`));
-  const baseContexts = new Map([...text.matchAll(/^  base context (\d+): base path unknown \([^)]+\) (.+)$/gm)].map(m => [Number(m[1]), JSON.parse(m[2]!) ]));
-  const sections = text.split(/(?=^  - (?:http-route|ui-route) )/m);
-  for (let i = 0; i < items.length; i++) {
-    const section = sections.find(part => part.includes(`[findingIndex ${i}]`));
-    assert.ok(section);
-    const item = items[i]!;
-    if (item.value.kind === "http-route") {
-      const ref = section.match(/base context (\d+)/);
-      if (ref) assert.deepEqual(baseContexts.get(Number(ref[1])), item.value.basePath);
-      else assert.match(section, /base path unknown \(no-extractor\)/);
-    }
+  assert.equal((text.match(/very-long-shared-configuration-source/g) ?? []).length, 1);
+  const bases = new Map([...text.matchAll(/^ {2}(\d+)\. base path unknown \((no-extractor|unresolved)\) \(routes (\d+)\)$/gm)].map((match) => [Number(match[1]), { reason: match[2], routes: Number(match[3]) }]));
+  assert.deepEqual([...bases.values()].toSorted((a, b) => a.routes - b.routes), [{ reason: "no-extractor", routes: 1 }, { reason: "unresolved", routes: 19 }]);
+  const lines = text.split("\n");
+  for (let i = 0; i < 20; i++) {
+    const row = lines.findIndex((line) => line.includes(`GET /route-${i} -> route${i}`));
+    assert.ok(row >= 0);
+    const reference = /^ +base (\d+)$/.exec(lines[row + 1]!);
+    assert.equal(bases.get(Number(reference![1]))!.reason, i === 10 ? "no-extractor" : "unresolved");
+    assert.match(lines.slice(0, row).reverse().find((line) => /^ {2}\S/.test(line))!, new RegExp(`src/controller-${i}\\.ts`));
   }
-  assert.match(text, /own guards \(1\):\n\s+- guard \(src\/guard.ts\)/);
-  assert.match(text, /base path unknown \(unresolved\)/); assert.match(text, /base path unknown \(no-extractor\)/);
+  assert.match(text, /guard guard|src\/guard\.ts guard guard/);
+  assert.match(text, /ui-route \/page -> component unknown \(at src\/page\.ts:1, guards 1\)/);
 });
 
 test("shared cut rows print only their cutIndex, and each completes the one select example", () => {
@@ -63,12 +60,14 @@ test("shared cut rows print only their cutIndex, and each completes the one sele
   assert.ok(rows.every(({ cutIndex }) => validRecoveryControls("entrypoints", { select: { ...example, cutIndex }, page: { limit: 1 } })));
 });
 
-test("an entrypoints row for a UI route prints the place its route entry is declared at; an HTTP route row prints none", () => {
+test("an entrypoints row for a UI route states the place its route entry is declared at in both modes; an HTTP route row states none", () => {
   const uiRoute = { status: "complete", evidence: [{ path: "src/routes.ts", line: 12 }], value: { kind: "ui-route", name: "/orders", path: "/orders", component: { path: "src/orders.page.ts", symbol: "OrdersPage", line: 5 }, guards: [] } };
   const httpRoute = { status: "complete", evidence: [{ path: "src/orders.ts", line: 3 }], value: { kind: "http-route", name: "GET /orders", method: "GET", path: "/orders", handler: { path: "src/orders.ts", symbol: "list", line: 3 }, basePath: { status: "complete", value: { default: {}, profiles: {} }, evidence: [] } } };
-  const text = render([uiRoute, httpRoute], "details");
-  assert.match(text, /^  - ui-route \/orders -> src\/orders\.page\.ts:5 OrdersPage at src\/routes\.ts:12 \[findingIndex 0\]$/m);
-  assert.match(text, /^  - http-route GET \/orders -> src\/orders\.ts:3 list \[findingIndex 1\]$/m);
+  for (const mode of ["summary", "details"] as const) {
+    const text = render([uiRoute, httpRoute], mode);
+    assert.match(text, /^ {2}src\/orders\.page\.ts\n {4}0\. 5 ui-route \/orders -> OrdersPage \(at src\/routes\.ts:12\)$/m);
+    assert.match(text, /^ {2}src\/orders\.ts\n {4}1\. 3 http-route GET \/orders -> list$/m);
+  }
 });
 
 test("callback rows render bare contract names and class handlers", () => {
@@ -77,8 +76,8 @@ test("callback rows render bare contract names and class handlers", () => {
     { status: "complete", evidence: [], value: { kind: "callback", name: "a.b.A", contract: { type: "a.b.A" }, handler: { path: "src/B.java", line: 2, symbol: "B" } } },
   ];
   const text = render(items, "details");
-  assert.match(text, /^  - callback a\.b\.C\.m -> src\/A\.java:7 A\.run/m);
-  assert.match(text, /^  - callback a\.b\.A -> src\/B\.java:2 B/m);
+  assert.match(text, /^ {4}0\. 7 callback a\.b\.C\.m -> A\.run$/m);
+  assert.match(text, /^ {4}1\. 2 callback a\.b\.A -> B$/m);
 });
 
 test("published entrypoint kind accepts callbacks", () => {
@@ -98,7 +97,8 @@ test("an unknown item states what it stands for in every presentation, and an it
   ];
   for (const mode of ["summary", "details"] as const) {
     const text = render(items, mode);
-    assert.match(text, /unknown \(no-extractor\) for listener Queue\.take \(raised by [^)]+\) src\/Queue\.java:7-9/);
-    assert.match(text, /for Queue \(raised by lib\.Base\)/);
+    assert.match(text, /^ {4}0\. 7-9 unknown \(no-extractor\) for listener Queue\.take \(raised by [^)]+\)$/m);
+    assert.match(text, /^ {4}3\. 3 unknown \(no-extractor\) for Queue \(raised by lib\.Base\)/m);
+    assert.match(text, /^ {4}4\. 3 unknown \(no-extractor\)(?! for)/m);
   }
 });

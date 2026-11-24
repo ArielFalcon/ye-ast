@@ -26,7 +26,7 @@ test("a complete collection with unknown items states how many are undecided, an
   const routes = (items: readonly unknown[]) => complete({ entrypoints: complete(items) }) as never;
   const map = renderEntrypointMap(routes([unknownFinding, unknownFinding]), "summary").split("\n");
   assert.equal(map[0], "status: complete (2 undecided)");
-  assert.ok(map.includes("  status: complete (2 undecided)"), map.join("\n"));
+  assert.equal(map.filter((line) => line.includes("status:")).length, 1, map.join("\n"));
   assert.equal(renderEntrypointMap(routes([]), "summary").split("\n")[0], "status: complete");
 
   const site = { reason: "unresolved", evidence: [{ path: "src/a.ts", line: 4 }], path: "src/a.ts", line: 4, symbol: "call", transport: "http" };

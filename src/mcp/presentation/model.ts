@@ -2,7 +2,15 @@ import type { SnapshotRef } from "../../core/domain/shared/fact.ts";
 
 export type SectionRole = "answer" | "completeness" | "context";
 
-export interface Place { repo?: string; path: string; line?: number; endLine?: number }
+export interface Place {
+  repo?: string;
+  path: string;
+  line?: number;
+  endLine?: number;
+  /** How an evidence place was found and how sure that is; printed only on an evidence place, never on a row's own. */
+  via?: string;
+  confidence?: number;
+}
 
 /** One stated fact about a row, printed in parentheses: depth, confidence, fan-in, via. */
 export interface Qualifier { name: string; value?: string }
@@ -34,6 +42,8 @@ export interface Section {
   rows: readonly Row[];
   /** The one section `page` pages when no `select` is given. At most one per presentation. */
   primary?: true;
+  /** A selection addresses the rows by position, so each top-level row prints its zero-based position in `rows` as `n. `. */
+  numbered?: true;
 }
 
 export interface Presentation {

@@ -2,9 +2,8 @@ import { dependencyDiagnosticText, driftText, effectText, statedRequestText, unr
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
-import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind, cutCounts, cutReasonText, cutRowLabel, completeText, undecidedOf, type StatusContext } from "./presentation-context.ts";
+import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind, cutCounts, cutReasonText, cutRowLabel, completeText, undecidedOf, subjectText, type StatusContext } from "./presentation-context.ts";
 import type { RenderDetail, RenderContext } from "./presentation.ts";
-import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
@@ -19,7 +18,7 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import { FUNCTION_VALUE_AWAITS_JDK, type Cut, type Evidence, type Fact, type Finding, type SnapshotRef, type UnknownSubject, type WalkBounds } from "../core/domain/shared/fact.ts";
+import { FUNCTION_VALUE_AWAITS_JDK, type Cut, type Fact, type SnapshotRef, type WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
@@ -35,8 +34,12 @@ import { WORKSPACE_MANIFEST_FILE } from "../core/ports/workspace-defaults.port.t
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { blockBytes as size, preferShorterText, shareExactContext } from "./presentation-sharing.ts";
 import { LISTED_ITEMS } from "./render-budget.ts";
+import { present as presentEntrypoints } from "./presentation/families/entrypoints.ts";
+import { write } from "./presentation/writer.ts";
 
 const NONE = "  (none)";
+const ROW_NUMBER_NOTE = "select entrypoint-evidence: findingIndex is the row number";
+const GUARD_NOTE = "Only each route's own guards are recorded; inherited or runtime restrictions are not established here.";
 const DECISIONS_HINT = "ye_ast_decisions lists the declarations that would resolve these gaps, with evidence-backed options.";
 const CUTS = "cuts:";
 const NO_PROVEN_USE = "uses nothing proven outside its body; its unresolved-link cuts list the uses not proven";
@@ -246,10 +249,6 @@ function cutsBlock(cuts: readonly Cut[], detail: RenderDetail = "summary"): stri
   return cuts.length === 0 ? [] : [CUTS, ...cutLines(cuts, detail)];
 }
 
-function list(lines: readonly string[]): string[] {
-  return lines.length === 0 ? [NONE] : [...lines];
-}
-
 function counted(label: string, items: readonly string[]): string {
   return items.length === 0 ? `${label} (0):` : `${label} (${items.length}): ${items.join(", ")}`;
 }
@@ -275,172 +274,6 @@ function substitutionLegend(symbols: readonly ImpactedSymbol[]): string[] {
   return [...new Set(lines)].sort(compareText);
 }
 
-function entrypointLocation(entrypoint: Entrypoint): string {
-  return entrypoint.kind === "ui-route" ? (entrypoint.component === "unknown" ? "component unknown" : handlerText(entrypoint.component)) : handlerText(entrypoint.handler);
-}
-
-function entrypointLine(entrypoint: Entrypoint, declaredAt?: Evidence): string {
-  const served = entrypointLocation(entrypoint);
-  return `  - ${entrypoint.kind} ${entrypoint.name} -> ${served}${declaredAt === undefined ? "" : ` at ${declaredAt.path}:${declaredAt.line}`}`;
-}
-
-function itemLine(item: Finding<Entrypoint>): string {
-  if (item.status === "unknown") return `  - unknown (${item.reason})${subjectText(item.subject)} ${item.evidence.map(evidenceText).join(", ")}`.trimEnd();
-  return entrypointLine(item.value, item.value.kind === "ui-route" ? item.evidence[0] : undefined);
-}
-
-function entrypointContext(entrypoint: Entrypoint): string[] {
-  if (entrypoint.kind === "ui-route") {
-    return entrypoint.guards.length === 0 ? ["    no own guards recorded"] : [
-      `    own guards (${entrypoint.guards.length}):`,
-      ...entrypoint.guards.map((guard) => `      - ${guard.name}${guard.path === undefined ? "" : ` (${guard.path})`}${guard.external === true ? " (external)" : ""}`),
-    ];
-  }
-  if (entrypoint.kind !== "http-route") return [];
-  const base = entrypoint.basePath;
-  if (base.status === "unknown") return [`    base path unknown (${base.reason})${base.evidence.length === 0 ? "" : `: ${base.evidence.map(evidenceText).join(", ")}`}`];
-  const profiles = Object.keys(base.value.profiles).length;
-  return [`    base path defaults: ${JSON.stringify(base.value.default)}${profiles === 0 ? "" : `; ${profiles} profile-specific settings, ${categoryRecovery({ answerJson: "includes them" })}`}`];
-}
-
-/** What an unknown item stands for, as "for <kind> <symbol> (raised by <name>)", leaving out the parts it does not state. */
-function subjectText(subject: UnknownSubject | undefined): string {
-  if (subject === undefined) return "";
-  const stands = [subject.candidate, subject.symbol].filter((part) => part !== undefined).join(" ");
-  return `${stands === "" ? "" : ` for ${stands}`}${subject.raisedBy === undefined ? "" : ` (raised by ${subject.raisedBy})`}`;
-}
-
-function unknownFindingRun(items: readonly Finding<Entrypoint>[], start: number): { end: number; lines: string[] } {
-  const first = items[start]!;
-  if (first.status !== "unknown" || first.evidence.length !== 1 || first.subject !== undefined) return { end: start + 1, lines: [`${itemLine(first)} [findingIndex ${start}]`] };
-  const evidence = first.evidence[0]!;
-  const { line: _line, endLine: _endLine, ...sharedEvidence } = evidence;
-  let end = start + 1;
-  while (end < items.length) {
-    const next = items[end]!;
-    if (next.status !== "unknown" || next.reason !== first.reason || next.evidence.length !== 1 || next.subject !== undefined) break;
-    const { line: _nextLine, endLine: _nextEndLine, ...rest } = next.evidence[0]!;
-    if (JSON.stringify(rest) !== JSON.stringify(sharedEvidence)) break;
-    end++;
-  }
-  const literal = items.slice(start, end).map((item, offset) => `${itemLine(item)} [findingIndex ${start + offset}]`);
-  const shared = [`  - unknown (${first.reason}) ${evidence.path}:`, ...items.slice(start, end).map((item, offset) => {
-    const place = item.evidence[0]!;
-    return `    findingIndex ${start + offset}: ${spanText(place.line, place.endLine)}`;
-  })];
-  return { end, lines: size(shared) < size(literal) ? shared : literal };
-}
-
-/** Repeated extraction evidence can support several findings without repeating the same coordinates. */
-function entrypointItems(items: readonly Finding<Entrypoint>[], detail: RenderDetail, sharedBase?: ReadonlyMap<string, number>, sharedEvidence?: ReadonlyMap<string, number>): string[] {
-  if (sharedBase === undefined || sharedEvidence === undefined) {
-    const evidence = shareExactContext(items.flatMap((item) => item.status === "unknown" && item.evidence.length !== 1 ? item.evidence : []), (place) => place);
-    const evidenceCounts = new Map<number, number>();
-    for (const row of evidence.rows) evidenceCounts.set(row.contextIndex, (evidenceCounts.get(row.contextIndex) ?? 0) + 1);
-    const evidenceIndices = new Map<string, number>();
-    const evidenceDefinitions: string[] = [];
-    evidence.contexts.forEach((place, index) => {
-      if ((evidenceCounts.get(index) ?? 0) > 1) {
-        const reference = evidenceIndices.size;
-        evidenceIndices.set(canonicalJson(place), reference);
-        evidenceDefinitions.push(`  evidence ${reference}: ${JSON.stringify(place)}`);
-      }
-    });
-    if (evidenceDefinitions.length > 0) evidenceDefinitions.unshift("  Evidence references are indices; each row lists evidence in its original order, including repeats.");
-    const routes = detail === "details" ? items.flatMap((item) => item.status === "complete" && item.value.kind === "http-route" ? [item.value] : []) : [];
-    const bases = shareExactContext(routes, (route) => route.basePath);
-    const baseCounts = new Map<number, number>();
-    for (const row of bases.rows) baseCounts.set(row.contextIndex, (baseCounts.get(row.contextIndex) ?? 0) + 1);
-    const baseIndices = new Map<string, number>();
-    const baseDefinitions: string[] = [];
-    bases.contexts.forEach((base, index) => {
-      if ((baseCounts.get(index) ?? 0) > 1) {
-        const reference = baseIndices.size;
-        baseIndices.set(canonicalJson(base), reference);
-        const description = base.status === "unknown" ? `base path unknown (${base.reason})` : "base path";
-        baseDefinitions.push(`  base context ${reference}: ${description} ${JSON.stringify(base)}`);
-      }
-    });
-    const empty = new Map<string, number>();
-    let best = entrypointItems(items, detail, empty, empty);
-    for (const [baseMap, baseLines] of [[empty, []], [baseIndices, baseDefinitions]] as const) {
-      for (const [evidenceMap, evidenceLines] of [[empty, []], [evidenceIndices, evidenceDefinitions]] as const) {
-        const candidate = [...baseLines, ...evidenceLines, ...entrypointItems(items, detail, baseMap, evidenceMap)];
-        if (preferShorterText(best.join("\n"), candidate.join("\n")) === candidate.join("\n")) best = candidate;
-      }
-    }
-    return best;
-  }
-  const contextOf = (entrypoint: Entrypoint): string[] => {
-    if (entrypoint.kind === "http-route") {
-      const index = sharedBase?.get(canonicalJson(entrypoint.basePath));
-      if (index !== undefined) return [`    base context ${index}`];
-    }
-    return entrypointContext(entrypoint);
-  };
-  if (detail !== "details") {
-    const lines: string[] = [];
-    for (let index = 0; index < items.length;) {
-      const first = items[index]!;
-      if (first.status === "unknown") {
-        if (first.evidence.length !== 1 && first.evidence.some((place) => sharedEvidence.has(canonicalJson(place)))) {
-          const references = first.evidence.map((place) => sharedEvidence.get(canonicalJson(place)) ?? place);
-          lines.push(`  - unknown (${first.reason})${subjectText(first.subject)} [findingIndex ${index}] evidence: ${JSON.stringify(references)}`);
-          index++;
-        } else { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; }
-        continue;
-      }
-      const location = entrypointLocation(first.value);
-      let end = index + 1;
-      while (end < items.length) {
-        const next = items[end]!;
-        if (next.status === "unknown" || entrypointLocation(next.value) !== location) break;
-        end++;
-      }
-      const group = items.slice(index, end);
-      const listing = group.map((item, offset) => `${itemLine(item)} [findingIndex ${index + offset}]`);
-      const shared = [`  served by ${location}`, ...group.map((item, offset) => item.status === "complete" ? `    - ${item.value.kind} ${item.value.name} [findingIndex ${index + offset}]` : itemLine(item))];
-      lines.push(...(group.length > 1 && size(shared) < size(listing) ? shared : listing));
-      index = end;
-    }
-    return list(lines);
-  }
-  const lines: string[] = [];
-  for (let index = 0; index < items.length;) {
-    const first = items[index]!;
-    if (first.status === "unknown") {
-      if (first.evidence.length !== 1 && first.evidence.some((place) => sharedEvidence.has(canonicalJson(place)))) {
-        const references = first.evidence.map((place) => sharedEvidence.get(canonicalJson(place)) ?? place);
-        lines.push(`  - unknown (${first.reason})${subjectText(first.subject)} [findingIndex ${index}] evidence: ${JSON.stringify(references)}`);
-        index++;
-      } else { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; }
-      continue;
-    }
-    if (first.evidence.length === 0) {
-      lines.push(`${itemLine(first)} [findingIndex ${index}]`, ...(first.status === "complete" ? contextOf(first.value) : []));
-      index++;
-      continue;
-    }
-    const key = JSON.stringify(first.evidence);
-    let end = index + 1;
-    while (end < items.length && items[end]!.status === "complete" && JSON.stringify(items[end]!.evidence) === key) end++;
-    const evidence = first.evidence.map((place) => `${evidenceText(place)}${place.via === undefined ? "" : ` via ${place.via}`}${place.confidence === undefined ? "" : ` confidence ${place.confidence}`}`).join(", ");
-    const findings = items.slice(index, end).map((item, offset) => `${itemLine(item)} [findingIndex ${index + offset}]`);
-    const separate = findings.flatMap((line) => [line, `    evidence: ${evidence}`]);
-    const shared = [`  evidence shared by ${findings.length} findings: ${evidence}`, ...findings];
-    lines.push(...(findings.length > 1 && size(shared) < size(separate) ? shared : separate));
-    const contexts = items.slice(index, end).flatMap((item) => item.status === "complete" ? [contextOf(item.value)] : []);
-    const contextKeys = new Set(contexts.map((context) => JSON.stringify(context)));
-    if (contextKeys.size === 1) {
-      if (findings.length > 1 && (contexts[0]?.length ?? 0) > 0) lines.push("  The following context applies to all findings above:");
-      lines.push(...(contexts[0] ?? []));
-    }
-    else for (const item of items.slice(index, end)) if (item.status === "complete") lines.push(`  ${item.value.kind} ${item.value.name}:`, ...contextOf(item.value));
-    index = end;
-  }
-  return list(lines);
-}
-
 export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") {
     if (fact.status === "unknown") return "Inspect reason and evidence; the result has no value.";
@@ -449,25 +282,14 @@ export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: RenderDet
       ? "Check value.entrypoints.status, reason and evidence; this section has no value."
       : `${context?.recovery?.status === "unavailable" ? `Recovery unavailable (${context.recovery.reason}); recorded coordinates` : "Selection lookup"}: findingIndex is the zero-based position in value.entrypoints.value. Check value.entrypoints.status; match each complete finding (value.entrypoints.value[].value) by kind/name and handler or component coordinates. HTTP routes: inspect basePath status and evidence. Unknown findings carry reason and evidence; partial sections carry cuts.${section.value.some((item) => item.status === "complete" && item.value.kind === "ui-route") ? " UI routes: inspect value.entrypoints.value[].value.guards; they are the route's own, not inherited or runtime restrictions." : ""}`;
   }
-  const undecided = fact.status === "unknown" || fact.value.entrypoints.status === "unknown" ? 0 : undecidedOf(fact.value.entrypoints.value);
-  const lines = headerLines(fact, { undecided });
+  const lines = [write(presentEntrypoints(fact), detail).text];
   if (fact.status === "unknown") return lines.join("\n");
   const section = fact.value.entrypoints;
-  lines.push("entrypoints:", ...statusLines(section, "  ", { undecided }));
   if (section.status !== "unknown") {
-    const known = section.value.filter((item) => item.status === "complete").length;
-    const unknown = section.value.length - known;
-    const unknownBases = section.value.filter((item) => item.status === "complete" && item.value.kind === "http-route" && item.value.basePath.status === "unknown").length;
-    const uiRoutes = section.value.flatMap((item) => item.status === "complete" && item.value.kind === "ui-route" ? [item.value] : []);
-    const guardCount = uiRoutes.reduce((total, route) => total + route.guards.length, 0);
-    const guardedRoutes = uiRoutes.filter((route) => route.guards.length > 0).length;
-    const guardNote = uiRoutes.length === 0 ? [] : [
-      ...(detail === "summary" && guardCount > 0 ? [`  ${guardCount} own guards across ${guardedRoutes} routes; ${categoryRecovery({ answerJson: "locates them at value.entrypoints.value[].value.guards after matching route kind and name." })}`] : []),
-      "  Only each route's own guards are recorded; inherited or runtime restrictions are not established here.",
-    ];
-    lines.push(`  findings: ${known} known, ${unknown} unknown`, ...(unknownBases === 0 ? [] : [`  base path unknown for ${unknownBases} ${unknownBases === 1 ? "route" : "routes"}`]), ...guardNote, ...entrypointItems(section.value, detail));
+    lines.push(...(section.value.length === 0 ? ["entrypoints: none"] : [ROW_NUMBER_NOTE]));
+    if (section.value.some((item) => item.status === "complete" && item.value.kind === "ui-route")) lines.push(GUARD_NOTE);
   }
-  lines.push(...cutsBlock([...cutsOf(fact), ...cutsOf(section)], detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context), ...cutCoordinates(cutsOf(section), { kind: "entrypoints" }, detail, context));
+  lines.push(...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context), ...cutCoordinates(cutsOf(section), { kind: "entrypoints" }, detail, context));
   return lines.join("\n");
 }
 

@@ -148,3 +148,17 @@ test("every row key summary prints is printed by details, over generated present
     for (const { section, key } of write(presentation, "summary", { listedItems: 6 }).printed) assert.ok(details.has(`${section}\0${key}`), `seed ${seed} ${section} ${key}`);
   }
 });
+
+test("a numbered section prints each top-level row's position in the section, wherever its file group sits, and nothing for children", () => {
+  const rows = [row("a", { path: "src/a.ts", line: 1 }), row("b", { path: "src/b.ts", line: 2 }), row("c", { path: "src/a.ts", line: 3 }, { children: [row("child")] })];
+  const text = write(base([{ ...answer(rows), numbered: true }]), "details").text;
+  assert.match(text, /^ {2}src\/a\.ts\n {4}0\. 1 label-a\n {4}2\. 3 label-c\n {6}label-child\n {2}src\/b\.ts\n {4}1\. 2 label-b$/m);
+  assert.doesNotMatch(write(base([answer(rows)]), "details").text, /\d\. /);
+});
+
+test("an evidence place that adds how it was found is printed with it, even when it is the row's own place", () => {
+  const own: Place = { path: "src/a.ts", line: 4 };
+  const text = write(base([answer([row("a", own, { evidence: [{ ...own, via: "router", confidence: 0.5 }, { path: "src/a.ts", line: 9 }] })])]), "details").text;
+  assert.match(text, /evidence: :4 via router confidence 0\.5, :9$/m);
+  assert.doesNotMatch(write(base([answer([row("a", own, { evidence: [own] })])]), "details").text, /evidence/);
+});

@@ -1421,7 +1421,7 @@ test("entrypoints reads the bound repository at HEAD by default and answers the 
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /GET \/orders\/\{id\}/);
-  assert.match(text, /src\/OrderController\.java:17/);
+  assert.match(text, /^ {2}src\/OrderController\.java\n {4}0\. 17 http-route GET \/orders\/\{id\} -> OrderController\.one$/m);
   await session.close();
 });
 
@@ -2056,8 +2056,9 @@ test("entrypoints closes with the cut list of the map and of its section", async
   const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
   const lines = text.split("\n");
   assert.equal(lines[0], "status: partial (cuts: 1 section section-partial: entrypoints)");
-  assert.match(text, / {2}status: partial \(cuts: 1 no-extractor not-indexed\)/);
-  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+answer: answers\/entrypoints\/\d+\/answer\.json$/);
+  assert.match(text, /\ncuts:\n {2}no-extractor not-indexed\n(?:[^\n]*\n)*(?: {2}lookup example: [^\n]+\n)+answer: answers\/entrypoints\/\d+\/answer\.json$/);
+  const details = textOf(await session.callTool("ye_ast_entrypoints", { mode: "details" }));
+  assert.match(details, /\ncuts:\n {2}no-extractor not-indexed\n {4}src\/scripts\/build\.js\n/);
   await session.close();
 });
 
@@ -2086,7 +2087,7 @@ test("an unknown entrypoint item is rendered unknown next to the routes found", 
   const fact = { ...base(), status: "complete", value: { entrypoints: section } } as EntrypointMapFact;
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
-  assert.match(text, /unknown \(unresolved\).*src\/Weird\.java:9/);
+  assert.match(text, /^ {2}src\/Weird\.java\n {4}0\. 9 unknown \(unresolved\)$/m);
   await session.close();
 });
 
@@ -3156,9 +3157,9 @@ test("entrypoint summary distinguishes known and unknown findings while preservi
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   try {
     const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
-    assert.match(text, /1 known.*1 unknown/);
-    assert.match(text, /src\/OrderController\.java:17/);
-    assert.match(text, /unknown \(unresolved\).*src\/other\.java:5/);
+    assert.match(text, /^status: complete \(1 undecided\)$/m);
+    assert.match(text, /^ {2}src\/OrderController\.java\n {4}0\. 17 http-route GET \/orders\/\{id\}/m);
+    assert.match(text, /^ {2}src\/other\.java\n {4}1\. 5 unknown \(unresolved\)$/m);
   } finally { await session.close(); }
 });
 
@@ -3193,13 +3194,11 @@ test("entrypoint details group identical recorded evidence while retaining each 
   const { session } = await setup({ map: async () => ({ ok: true, value: map }) });
   try {
     const text = textOf(await session.callTool("ye_ast_entrypoints", { mode: "details" }));
-    assert.match(text, /src\/router\.ts:18/);
-    assert.match(text, /declared-route/);
-    assert.match(text, /confidence 0\.7/);
+    assert.match(text, /evidence: src\/router\.ts:18 via declared-route confidence 0\.7/);
     assert.equal(text.split("src/router.ts:18").length - 1, 1);
     assert.match(text, /GET \/route-0/);
     assert.match(text, /GET \/route-7/);
-    assert.match(text, /src\/OrderController\.java:17/);
+    assert.equal(text.split("src/OrderController.java").length - 1, 1);
   } finally { await session.close(); }
 });
 
@@ -3212,7 +3211,7 @@ test("entrypoint summary groups repeated handler coordinates without dropping ro
     const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
     assert.match(text, /GET \/route-0/);
     assert.match(text, /GET \/route-7/);
-    assert.equal(text.split("src/OrderController.java:17").length - 1, 1);
+    assert.equal(text.split("src/OrderController.java").length - 1, 1);
   } finally { await session.close(); }
 });
 
@@ -3277,23 +3276,21 @@ test("UI route guard details preserve each route's own guards and summary offers
   const { session } = await setup({ map: async () => ({ ok: true, value: map }) });
   try {
     const summary = textOf(await session.callTool("ye_ast_entrypoints", {}));
-    assert.match(summary, /3 (?:own |declared )?guards/i);
-    assert.match(summary, /answer\.json/);
-    assert.match(summary, /value\.entrypoints\.value\[\]\.value\.guards/);
-    assert.match(summary, /kind.*name/i);
+    assert.equal(summary.split("(at src/router.ts:18, guards 1)").length - 1, 3);
+    assert.match(summary, /ui-route \/public -> Page \(at src\/router\.ts:18\)/);
+    assert.doesNotMatch(summary, /SessionGuard|PartnerGuard/);
     assert.doesNotMatch(summary, /unguarded|unprotected/i);
     const details = textOf(await session.callTool("ye_ast_entrypoints", { mode: "details" }));
-    const privateContext = details.split("ui-route /private:")[1]?.split("ui-route /partner:")[0] ?? "";
-    const partnerContext = details.split("ui-route /partner:")[1]?.split("ui-route /unknown:")[0] ?? "";
-    const unknownContext = details.split("ui-route /unknown:")[1]?.split("ui-route /public:")[0] ?? "";
-    const publicContext = details.split("ui-route /public:")[1] ?? "";
-    assert.match(privateContext, /SessionGuard[^\n]*src\/SessionGuard\.ts/);
+    const privateContext = details.split("ui-route /private")[1]?.split("ui-route /partner")[0] ?? "";
+    const partnerContext = details.split("ui-route /partner")[1]?.split("ui-route /unknown")[0] ?? "";
+    const unknownContext = details.split("ui-route /unknown")[1]?.split("ui-route /public")[0] ?? "";
+    const publicContext = details.split("ui-route /public")[1] ?? "";
+    assert.match(privateContext, /src\/SessionGuard\.ts guard SessionGuard/);
     assert.doesNotMatch(privateContext, /PartnerGuard/);
-    assert.match(partnerContext, /PartnerGuard[^\n]*external/);
+    assert.match(partnerContext, /guard PartnerGuard \(external\)/);
     assert.doesNotMatch(partnerContext, /SessionGuard/);
-    assert.match(unknownContext, /\(inline\)/);
-    assert.match(publicContext, /(?:0 own guards|no own guards)/i);
-    assert.doesNotMatch(publicContext, /SessionGuard|PartnerGuard/);
+    assert.match(unknownContext, /guard \(inline\)/);
+    assert.doesNotMatch(publicContext.split("\n").slice(1).join("\n"), /guard (?:SessionGuard|PartnerGuard)/);
     assert.match(details, /component unknown/);
     assert.match(details, /inherited.*(?:not|unknown)/i);
     assert.doesNotMatch(details, /unguarded|unprotected/i);

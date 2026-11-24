@@ -1,5 +1,5 @@
 import { mountOf } from "../core/domain/shared/build-outputs.ts";
-import type { Cut, DeclaredScope, Evidence, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
+import type { Cut, DeclaredScope, Evidence, Fact, SnapshotRef, UnknownSubject } from "../core/domain/shared/fact.ts";
 import { declaredScope as engineScope } from "../core/domain/map/entrypoint-map.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { SourceSummary } from "./select-evidence.ts";
@@ -115,7 +115,12 @@ function changedLines(fact: Fact<unknown>): string[] {
 
 /** What every answer opens with: its completeness, what that completeness covers, and the snapshot it read. */
 export function renderFactHeader(fact: Fact<unknown>, status?: StatusContext): string[] {
-  return [...renderFactStatus(fact, "", status), ...declaredScopeLines(fact), ...scopeLines(fact), ...changedLines(fact), ...buildOutputLines(fact), snapshotLine(contextOf(fact).snapshot)];
+  return [...renderFactStatus(fact, "", status), ...renderFactNarrowing(fact), snapshotLine(contextOf(fact).snapshot)];
+}
+
+/** What narrowed or qualified the read: the declared scope, the caller's scope and change selection, the build outputs. */
+export function renderFactNarrowing(fact: Fact<unknown>): string[] {
+  return [...declaredScopeLines(fact), ...scopeLines(fact), ...changedLines(fact), ...buildOutputLines(fact)];
 }
 
 /** Each build output the fact read (ADR-0037), and whether the snapshot's lockfile verified it; a declared JDK is always unverified (ADR-0063). */
@@ -141,4 +146,11 @@ export function renderSourceContext(source: SourceSummary): string[] {
   if (source.limits.length > 0) lines.push(`Source limits: ${JSON.stringify(source.limits)}`);
   lines.push("Provenance catalogs: source in the result JSON.");
   return lines;
+}
+
+/** What an unknown item stands for, as "for <kind> <symbol> (raised by <name>)", leaving out the parts it does not state. */
+export function subjectText(subject: UnknownSubject | undefined): string {
+  if (subject === undefined) return "";
+  const stands = [subject.candidate, subject.symbol].filter((part) => part !== undefined).join(" ");
+  return `${stands === "" ? "" : ` for ${stands}`}${subject.raisedBy === undefined ? "" : ` (raised by ${subject.raisedBy})`}`;
 }

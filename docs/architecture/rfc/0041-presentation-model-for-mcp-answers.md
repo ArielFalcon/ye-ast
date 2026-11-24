@@ -218,6 +218,13 @@ Consequences that follow by construction, not by per-family care:
 
 No new constant is introduced. A caller that wants less states it with `page.limit` or `answerBytes`.
 
+Settled in U3 (`entrypoints`): a section a selection addresses sets `numbered`, and each of its top-level rows prints its
+zero-based position in the section (`3. `) in both modes, so the number is the `findingIndex` and the position in
+`answer.json` and a `summary` reader can select; a UI route's own guards are children (`details`) with a `guards n`
+qualifier on the row, an unguarded route states nothing per row, and a base path is one `context` row per distinct
+value (`routes n`, its evidence) that a route names as the child `base <row number>`. An evidence place may carry `via`
+and `confidence`, which the writer prints beside it (W4 then keeps a place equal to the row's own that adds them).
+
 ### 3.6 A byte bound is filled in role order
 
 `answerBytes` (request or host) is today applied after rendering: the whole text, else the whole summary, else a
