@@ -238,7 +238,7 @@ evidence set materializes identically across input order and duplication. Execut
 moving live state or external configuration does not promise atomicity or identical observations.
 
 Composition uses the same single content block as the original tools. Summary/details put explained findings in the
-presentation and `kind: "composition-receipt"` in the result JSON line. The full composition (`kind: "composition"`,
+presentation and `kind: "composition-receipt"` in `_meta["ye-ast/result"]`. The full composition (`kind: "composition"`,
 with normalized tables under `graph`) is `answer.json` of the composition's answer folder
 ([ADR-0113](../adr/0113-the-mcp-offers-no-full-mode-the-full-answer-is-the-answer-file.md)). Both include
 `compositionSchema: 1`, `mode`, `verification` and complete safe `requests`. The text modes put findings, source
@@ -263,10 +263,16 @@ contextual JSON guide rather than a repeated family listing. Strict input schema
 `detail` and `full` controls, including `full: false`; no compatibility alias exists. Older RFC-0014 and RFC-0018
 descriptions of `detail: "full"` predate this contract; this section supersedes those references.
 
-Every successful result uses one text content block: presentation (summary/details findings, ending with the answer files line), followed
-by one `result JSON: ` line containing the result fields. This is a server convention, not MCP-defined framing; the
-whole block is not itself JSON. Clients can read the presentation and parse the final line. No `structuredContent` or
-`outputSchema` is published. Consequently clients cannot obtain machine-readable output types from discovery or validate
+Every successful result uses one text content block: the status line, one `snapshot:` line per repository read, the
+narrowing lines the caller asked for, the findings (summary or details) and one closing line, `answer:
+answers/<tool>/<key>/answer.json` (relative to the cache directory the server instructions name) or `no answer file
+written: <reason>`
+([ADR-0161](../adr/0161-the-mcp-reply-carries-a-compact-envelope-and-states-session-constants-once.md)). The result
+fields (mode, status, snapshot, recovery, an unknown reason) are in `_meta` under `ye-ast/result`, with or without a
+byte bound; `structuredContent` is not used and no `outputSchema` is published. The instructions state once what is
+constant for the session: every declared repository with its root, the answers cache directory and the declared scope;
+a reply prints a `repository root:` only for a clone neither the instructions nor the request named, and a `declared
+scope:` only when it differs. Consequently clients cannot obtain machine-readable output types from discovery or validate
 responses against a server-advertised schema. The server validates the complete canonical result with its per-family Zod
 schema before delivery, including selected responses. The exported full schemas remain available to local consumers.
 
@@ -306,8 +312,8 @@ replay and composition argument objects still rely on the original server valida
 These offline schema checks do not establish how every live client presents or interprets the constraints.
 
 `ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` deliver recovery metadata once, in
-the `recovery` result field in the text's result JSON line, for ordinary and selected responses in all modes. The presentation text points to that field rather than copying its JSON; unavailable
-recovery states its reason.
+the `recovery` result field of `_meta["ye-ast/result"]` and of `answer.json`, for ordinary and selected responses in all modes. The presentation text does not repeat it; unavailable
+recovery states its reason there.
 Available metadata contains a versioned opaque result identity
 and a normal query recipe. Entrypoints and callers pin the actual revision; impact pins the recorded merge base and
 head. Live recipes request fresh live content and do not preserve historical working-tree content.
@@ -343,8 +349,8 @@ imposed. Continue with `page.cursor` from `nextCursor`, the same selection and l
 query and verifies source identity before delivering selected data. A changed source returns a typed failure. Live
 replay captures current state; neither old live captures nor final answers are retained.
 
-A selected reply is a projection receipt in the result JSON; both modes render the page in text, with its records,
-source limits, continuation and the recovery recipe. A selected reply writes no answer folder.
+A selected reply is a projection receipt in `_meta["ye-ast/result"]`; both modes render the page in text, with its records,
+source limits and continuation, under the same status and snapshot lines. A selected reply writes no answer folder.
 
 Presentation may share identical context across associated rows, retaining literal selector
 examples and the coordinates needed for each row. Source analysis and owner-grouped limits remain separate from page availability. An available zero total
@@ -431,14 +437,14 @@ With ye-ast's per-user cache directory, the MCP also writes every answer of a re
 `<cache>/answers/<tool>/<key>/` (and `answers/compose/<key>/` for a composition) holding `answer.json` (the full JSON projection, its guide as the first field),
 `summary.txt` and `details.txt` ([ADR-0110](../adr/0110-every-mcp-answer-is-also-written-as-a-folder-of-files-an-agent-can-query.md)),
 so an agent can query the parts it needs with `jq` or `python`. The files are a delivery artifact ye-ast never reads
-back. Summary and details text end, before the `result JSON:` line, with `answer files: <folder> — answer.json (the full
-result, queryable with jq): <section> <count>, ...; summary.txt, details.txt`, and every reply carries the folder in
+back. Summary and details text end with `answer: answers/<tool>/<key>/answer.json`, relative to the cache directory
+([ADR-0161](../adr/0161-the-mcp-reply-carries-a-compact-envelope-and-states-session-constants-once.md)), and every reply carries the absolute folder in
 `_meta` under `ye-ast/answer-files`, a response-level sibling of the fact like the live freshness signal, never one of
 its fields. `answer.json` is the only delivery of the full result: the MCP has no `full` mode
 ([ADR-0113](../adr/0113-the-mcp-offers-no-full-mode-the-full-answer-is-the-answer-file.md)). A reply with no folder
 (no cache directory, an answer cut by a deadline or holding `index-unavailable`, a full answer that does not match its
 output schema, or a folder that could not be written) ends with `no answer file written: <reason>` instead; a key whose
-folder exists with other bytes writes one stderr line and changes no reply. `select` and `page` replies write no folder.
+folder exists with other bytes writes one stderr line and changes no reply. `select` and `page` replies write no folder and end with `no answer file written: a selected page is a projection of the plain query's answer`.
 `ye_ast_compose` writes its composition the same way under `answers/compose/<key>/`, keyed by the composition identity
 (a composition without one writes no folder).
 

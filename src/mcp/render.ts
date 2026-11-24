@@ -754,7 +754,6 @@ function impactBody(value: ImpactValue, detail: RenderDetail, owner: ImpactOwner
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     ...(value.changedContracts === undefined ? [] : [`changed contracts (${value.changedContracts.length}):`, ...value.changedContracts.map(changedContractLine)]),
     ...(narrowable && value.changedPaths !== undefined ? changedPathLines(value.changedPaths, detail) : []),
-    ...(narrowable && value.testDependents !== undefined ? ["test dependents: excluded; JVM and TypeScript test files are never listed as dependents (ye_ast_importers lists them)"] : []),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) ? [value.entrypoints.length === 1
       ? `  ${categoryRecovery({ answerJson: "has all origins." })}`

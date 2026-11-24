@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { AnswerFiles, AnswerFolder } from "../core/ports/answer-files.port.ts";
 import { ANSWER_FILES_META } from "./answer-files.ts";
-import { RESULT_JSON_LABEL } from "./server.ts";
+import { RESULT_META } from "./presentation/envelope.ts";
 import type { Session, ToolResult } from "./test-session.testing.ts";
 
 /** Answer files that keep their folders in memory: the latest answer of a key wins, as in the file adapter. */
@@ -22,13 +22,13 @@ export function memoryAnswerFiles(): { files: AnswerFiles; folders: Map<string, 
   return { files, folders };
 }
 
-/** The reply `answer.json` stands for: its guide as the presentation and its fields as the closing result JSON line, read from the folder `result` names. */
+/** The reply `answer.json` stands for: its guide as the presentation and its fields as the result fields of `_meta`, read from the folder `result` names. */
 export function fullReply(result: ToolResult, folders: ReadonlyMap<string, Pick<AnswerFolder["files"], "answer.json">>): ToolResult {
   const folder = result._meta?.[ANSWER_FILES_META];
   const written = typeof folder === "string" ? folders.get(folder) : undefined;
   if (written === undefined) throw new Error(`the reply names no answer folder: ${JSON.stringify(result.content)}`);
   const { guide, ...fields } = JSON.parse(written["answer.json"]) as { guide: string };
-  return { content: [{ type: "text", text: `${guide}\n${RESULT_JSON_LABEL}${JSON.stringify(fields)}` }], _meta: result._meta ?? {} };
+  return { content: [{ type: "text", text: guide }], _meta: { ...result._meta, [RESULT_META]: fields } };
 }
 
 /** The same reply, read from the folder a real file writer left on disk. */

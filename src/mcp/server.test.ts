@@ -34,16 +34,16 @@ import type { AnswerFiles, AnswerFolder } from "../core/ports/answer-files.port.
 import type { QueryExecutionDeps } from "./query-runner.ts";
 import { ANSWER_FILES_META } from "./answer-files.ts";
 import { fullReply, memoryAnswerFiles } from "./answer-files.testing.ts";
-import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
+import { createMcpServer, instructionsFor, FAULT_META, RESULT_META, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
 import { partSchema } from "./composition-schema-parts.ts";
 import { expandFull } from "./full-projection.testing.ts";
 
 function resultFields(result: any): any {
   const text = result.content?.[0]?.text;
   assert.ok(text);
-  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  assert.notEqual(at, -1);
-  return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
+  const fields = result._meta?.[RESULT_META];
+  assert.ok(fields !== undefined);
+  return { text, ...fields };
 }
 import { openSession, textOf, type Session, type ToolResult } from "./test-session.testing.ts";
 import { CONSUMER_ROUTES } from "./test-consumer-routes.testing.ts";
@@ -560,7 +560,6 @@ test("entrypoint recovery uses recorded normalized scope in a replayable recipe"
     const recovery = (resultFields(response) as { recovery: { query: { name: string; arguments: unknown } } }).recovery;
     assert.deepEqual(recovery.query.arguments, { repo: "shop", revision: "a".repeat(40), scope: { include: ["src/**", "web/**"], exclude: ["src/test/**"] } });
     assert.equal(textOf(response).includes(JSON.stringify(recovery)), false);
-    assert.match(textOf(response), /recovery in the result JSON/);
     const replay = await session.callTool(recovery.query.name, recovery.query.arguments);
     assert.deepEqual((resultFields(replay) as { recovery: unknown }).recovery, recovery);
     assert.deepEqual(calls.map[1]?.scope, { include: ["src/**", "web/**"], exclude: ["src/test/**"] });
@@ -773,9 +772,6 @@ test("every consumer route receives findings, status, snapshot, provenance, reco
       const result = await session.callTool(name, args);
       assert.notEqual(result.isError, true, `${name} ${JSON.stringify(args)}: ${JSON.stringify(result.content)}`);
       assert.equal(result.structuredContent, undefined);
-      const shown = result.content.map((block) => block.text).join("\n");
-      const at = shown.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-      assert.deepEqual({ text: shown.slice(0, at), ...JSON.parse(shown.slice(at + 1 + RESULT_JSON_LABEL.length)) }, resultFields(result), name);
       const fields = resultFields(result) as { status?: string; snapshot?: { sha?: string }; recovery?: unknown; page?: { nextCursor?: string }; source?: { analysis: { status: string }; snapshot: { sha: string } } };
       const status = fields.status ?? fields.source!.analysis.status;
       assert.equal(typeof status, "string", `${name}: missing analysis status`);
@@ -787,9 +783,10 @@ test("every consumer route receives findings, status, snapshot, provenance, reco
         for (const sentinel of sentinels) assert.ok(view.includes(sentinel), `${label} lacks ${sentinel}`);
         assert.match(view, new RegExp(`status\\W+${status}`), label);
         assert.ok(view.includes(sha), label);
-        if (fields.recovery !== undefined) assert.ok(view.includes(JSON.stringify(fields.recovery)), `${label} lacks recovery`);
+        const identity = (fields.recovery as { resultIdentity?: string } | undefined)?.resultIdentity;
+        if (identity !== undefined) assert.equal(view.includes(identity), false, `${label} repeats the recovery the answer file holds`);
         if (fields.page?.nextCursor !== undefined) assert.ok(view.includes(fields.page.nextCursor), `${label} lacks nextCursor`);
-        if (fields.source !== undefined) assert.ok(view.includes(JSON.stringify(fields.source)), `${label} lacks provenance`);
+        if (fields.source !== undefined) assert.ok(view.includes("Source context:"), `${label} lacks provenance`);
       }
     }
     const changed = await session.callTool("ye_ast_entrypoints", { select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 }, expect: `mcp-r1:${"0".repeat(64)}` });
@@ -1007,8 +1004,7 @@ test("the server instructions tell the agent when to call every tool", async () 
   const { session } = await setup();
   const tools = await session.listTools();
   for (const tool of tools) assert.ok(session.instructions?.includes(tool.name), tool.name);
-  assert.match(session.instructions ?? "", /Content carries presentation text[^\n]*answer files line[^\n]*answer\.json[^\n]*jq[^\n]*result JSON/);
-  assert.match(session.instructions ?? "", /Recovery is the recovery field/);
+  assert.match(session.instructions ?? "", /answer: answers\/<tool>\/<key>\/answer\.json[^\n]*jq[^\n]*_meta "ye-ast\/result"/);
   await session.close();
 });
 
@@ -2061,7 +2057,7 @@ test("entrypoints closes with the cut list of the map and of its section", async
   const lines = text.split("\n");
   assert.equal(lines[0], "status: partial (cuts: 1 section section-partial: entrypoints)");
   assert.match(text, / {2}status: partial \(cuts: 1 no-extractor not-indexed\)/);
-  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+Recovery recipe and resultIdentity: recovery in the result JSON\.\nrepository root: shop -> \/work\/shop\nanswer files: [^\n]+$/);
+  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+answer: answers\/entrypoints\/\d+\/answer\.json$/);
   await session.close();
 });
 
@@ -4447,7 +4443,7 @@ test("a full answer with cuts prints a copyable cut selection", async () => {
   } finally { await session.close(); }
 });
 
-test("recovery recipes appear once in content across ordinary and selected response modes", async () => {
+test("recovery recipes are in the result fields only, never in the reply text, across ordinary and selected response modes", async () => {
   const targets = [{ file: "src/OrderService.java", symbol: "OrderService.find" }];
   const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2, reason: "depth", reach: { kind: "anything" } }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
   const { session } = await setup({ callers: async () => ({ ok: true, value: fact }), ofChange: async () => ({ ok: true, value: fact }) });
@@ -4471,9 +4467,8 @@ test("recovery recipes appear once in content across ordinary and selected respo
           const text = textOf(result);
           assert.equal(text.includes(JSON.stringify(recovery)), false, `${name} ${mode}: duplicate recovery`);
           assert.equal(text.includes(JSON.stringify(recovery.query)), false, `${name} ${mode}: duplicate recipe`);
-          assert.equal((text.match(/recovery in the result JSON/g) ?? []).length, 1, `${name} ${mode}: recovery location`);
-          const content = result.content.map((block) => block.text).join("\n");
-          assert.equal(content.split(JSON.stringify(recovery)).length - 1, 1, `${name} ${mode}: one recipe in content`);
+          assert.doesNotMatch(text, /Recovery recipe|recovery in the result JSON/, `${name} ${mode}: recovery pointer`);
+          assert.deepEqual(result._meta?.[RESULT_META] && (result._meta[RESULT_META] as { recovery: unknown }).recovery, recovery);
         }
       }
     }
@@ -4625,15 +4620,16 @@ test("contract consequences full mode delivers every answer with its chains and 
   } finally { await session.close(); }
 });
 
-test("bounded responses identify their structured output location across delivery paths", async () => {
+test("bounded responses deliver the result fields in _meta, not duplicated into structuredContent, across delivery paths", async () => {
   const { session } = await setup();
   try {
     const selection = { select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } };
     for (const args of [{ mode: "summary" }, { mode: "details" }, { mode: "summary", ...selection }]) {
       const result = await session.callTool("ye_ast_entrypoints", { ...args, answerBytes: 100000 });
       assert.notEqual(result.isError, true, textOf(result));
-      assert.ok(result.structuredContent);
-      assert.match(textOf(result), /structuredContent/);
+      assert.equal(result.structuredContent, undefined);
+      assert.ok(result._meta?.[RESULT_META]);
+      assert.doesNotMatch(textOf(result), /structuredContent|Result JSON/);
     }
   } finally { await session.close(); }
 });
@@ -4649,8 +4645,8 @@ test("a details fallback retains its context lines or explicitly refuses", async
   });
   try {
     const cases: [string, Record<string, unknown>, string[]][] = [
-      ["ye_ast_entrypoints", { live: true }, ["stale:", "repository root:", "Recovery"]],
-      ["ye_ast_callers", { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: {} }, ["workspace live:", "repository root:", "Recovery"]],
+      ["ye_ast_entrypoints", { live: true }, ["stale:"]],
+      ["ye_ast_callers", { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: {} }, ["workspace live:", "repository root:"]],
     ];
     for (const [tool, args, context] of cases) {
       const details = await session.callTool(tool, { ...args, mode: "details", answerBytes: 100000 });
@@ -4671,7 +4667,8 @@ test("answerBytes limits the MCP text and preserves the receipt or refusal metad
     const bounded = await session.callTool("ye_ast_entrypoints", { answerBytes: 100000 });
     assert.equal(bounded.isError, undefined);
     assert.equal(CallToolResultSchema.safeParse(bounded).success, true);
-    assert.deepEqual(bounded.structuredContent, original);
+    assert.equal(bounded.structuredContent, undefined);
+    assert.deepEqual(bounded._meta?.[RESULT_META], original);
     assert.ok(Buffer.byteLength(bounded.content[0]!.text) <= 100000);
     for (const args of [{ mode: "details" }, { mode: "summary", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }] as const) {
       const refused = await session.callTool("ye_ast_entrypoints", { ...args, answerBytes: 0 });
@@ -4734,7 +4731,7 @@ test("a reply names the folder its answer was written to, and the folder holds t
     const [summary, details] = await Promise.all((["summary", "details"] as const).map((mode) => session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode })));
     const folder = folderOf(summary!);
     assert.equal(folderOf(details!), folder);
-    for (const reply of [summary!, details!]) assert.match(lastLine(reply), new RegExp(`^answer files: ${folder} — answer\\.json \\(the full result, queryable with jq\\): .*value\\.symbols 1.*; summary\\.txt, details\\.txt$`));
+    for (const reply of [summary!, details!]) assert.equal(lastLine(reply), "answer: answers/callers/0/answer.json");
     const { text: _receiptText, ...receiptFields } = resultFields(summary);
     assert.equal(JSON.stringify(receiptFields).includes(folder), false);
     const written = folders.get(folder)!;
@@ -4787,7 +4784,7 @@ test("an answer cut by a deadline, or one that could not read its index, writes 
       const result = await session.callTool("ye_ast_callers", CALLERS_ARGS);
       assert.equal(result.isError, undefined);
       assert.equal(result._meta?.[ANSWER_FILES_META], undefined);
-      assert.equal(textOf(result).includes("answer files:"), false);
+      assert.equal(textOf(result).includes("answer:"), false);
       assert.match(lastLine(result), reason);
       assert.match(lastLine(result), /^no answer file written: /);
     } finally { await session.close(); }
@@ -4830,18 +4827,72 @@ test("a folder that could not be written says so in the line a folder would have
   } finally { await session.close(); }
 });
 
-test("a reply bounded by answerBytes carries the line in its text, and a select page writes no folder", async () => {
+test("a reply bounded by answerBytes carries the closing line in its text, and a select page writes no folder", async () => {
   const { files, folders } = memoryAnswerFiles();
   const { session } = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, 100000, files);
   try {
     const bounded = await session.callTool("ye_ast_callers", CALLERS_ARGS);
-    assert.match(bounded.content[0]!.text, /\nanswer files: .*\nResult JSON fields are in structuredContent\.$/);
+    assert.match(bounded.content[0]!.text, /\nanswer: answers\/callers\/0\/answer\.json$/);
     assert.equal(typeof folderOf(bounded), "string");
     const page = await session.callTool("ye_ast_entrypoints", { select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
     assert.equal(page.isError, undefined);
     assert.equal(page._meta?.[ANSWER_FILES_META], undefined);
     assert.equal(folders.size, 1);
   } finally { await session.close(); }
+});
+
+/** Answer files whose folders sit under an absolute host cache directory, as the file adapter's do. */
+function hostAnswerFiles(): AnswerFiles {
+  return { keep: async ({ tool }) => `/home/dev/.cache/ye-ast/answers/${tool}/k1` };
+}
+
+test("a reply opens with its status and snapshot, closes with a relative pointer, and carries no host path, no recovery pointer and no repeated session constant", async () => {
+  for (const answerBytes of [undefined, 100000]) {
+    const { session } = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, answerBytes, hostAnswerFiles());
+    try {
+      for (const mode of ["summary", "details"] as const) {
+        const result = await session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode });
+        const text = textOf(result);
+        const lines = text.split("\n");
+        assert.match(lines[0]!, /^status: /);
+        assert.equal(lines.filter((line) => line.startsWith("snapshot: ")).length, 1);
+        assert.equal(lines.at(-1), "answer: answers/callers/k1/answer.json");
+        assert.doesNotMatch(text, /\/home\/dev|result JSON|Result JSON|answer files:|Recovery recipe|repository root:|structuredContent/);
+        assert.equal(result.structuredContent, undefined);
+        assert.equal(result._meta?.[ANSWER_FILES_META], "/home/dev/.cache/ye-ast/answers/callers/k1");
+        const fields = result._meta?.[RESULT_META] as Record<string, unknown>;
+        assert.deepEqual(Object.keys(fields).toSorted(), ["mode", "recovery", "snapshot", "status"]);
+        assert.equal(fields["mode"], mode);
+        assert.deepEqual(await session.callTool("ye_ast_callers", { ...CALLERS_ARGS, mode }), result);
+      }
+    } finally { await session.close(); }
+  }
+});
+
+test("the declared scope is stated once in the instructions and printed by a reply only when it differs", async () => {
+  const engine = { languages: ["java", "typescript"], frameworks: ["angular", "spring"], include: [], exclude: [] };
+  const same = await setup({ map: async () => ({ ok: true, value: mapFact({ inputs: { ...base().inputs, declaredScope: engine } }) }) });
+  const other = await setup();
+  try {
+    assert.match(same.session.instructions!, /Declared scope: languages java, typescript; frameworks angular, spring;/);
+    assert.doesNotMatch(textOf(await same.session.callTool("ye_ast_entrypoints", {})), /declared scope/);
+    assert.match(textOf(await other.session.callTool("ye_ast_entrypoints", {})), /^declared scope: languages java; frameworks spring$/m);
+  } finally { await same.session.close(); await other.session.close(); }
+});
+
+test("a repository root is printed only for a clone neither the instructions nor the request named", async () => {
+  const roots = [{ repo: "shop", path: REPOSITORY.path }, { repo: "shop-web", path: "/clones/frontend" }, { repo: "persisted", path: "/clones/persisted" }];
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact(), repositoryRoots: roots } }) }, undefined, undefined, REPOSITORY, fakeRedaction, undefined, undefined);
+  try {
+    const text = textOf(await session.callTool("ye_ast_workspace", { repos: [{ path: "/clones/frontend", id: "shop-web" }] }));
+    assert.equal(text.split("\n").filter((line) => line.startsWith("repository root: ")).join("|"), "repository root: persisted -> /clones/persisted");
+  } finally { await session.close(); }
+});
+
+test("the instructions name every declared repository with its root and the cache the closing pointer is relative to", () => {
+  const text = instructionsFor({ path: "/work/shop", repoId: "shop" }, [{ path: "/work/shop", repoId: "shop" }, { path: "/work/web", repoId: "web" }], "/home/dev/.cache/ye-ast");
+  assert.match(text, /declared repositories \(id -> root\): shop -> \/work\/shop, web -> \/work\/web\./);
+  assert.match(text, /answer: answers\/<tool>\/<key>\/answer\.json" under \/home\/dev\/\.cache\/ye-ast/);
 });
 
 test("the writer is no part of what a read query family receives", () => {

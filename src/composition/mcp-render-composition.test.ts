@@ -12,7 +12,8 @@ import { composeReceipt, renderComposition } from "../mcp/render-composition.ts"
 import { composeOutput } from "../mcp/composition-schema.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
-import { RESULT_JSON_LABEL } from "../mcp/server.ts";
+/** The label of the line that closed a reply in the recorded run, which is measured in the format it was recorded in. */
+const RESULT_JSON_LABEL = "result JSON: ";
 import { renderEntrypointMap, renderImpact, renderOutline } from "../mcp/render.ts";
 import { blockBytes } from "../mcp/presentation-sharing.ts";
 import type { ComposeFull, CompositionResult, CoverageSummary, RepeatRequest } from "../mcp/composition-contract.ts";

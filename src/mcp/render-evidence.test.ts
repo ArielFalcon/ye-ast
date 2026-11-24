@@ -9,30 +9,30 @@ const source = {
   limits: [{ owner: { kind: "fact" }, kind: "depth", cuts: 1, places: 2, limit: 3 }],
 } as unknown as EvidenceSelectionResult["source"];
 
-test("renders the supplied page without slicing it again and preserves provenance and recovery", () => {
+test("renders the supplied page without slicing it again and preserves provenance", () => {
   const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 2, kind: "depth", reason: "depth", anchor: "anchor" }, items: [{ atIndex: 2, place: "second" }] } as EvidenceSelectionResult;
-  const text = renderEvidenceSelection({ select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 2 }, records, page: { limit: 1, offset: 1, returned: 1, total: 2 }, recovery: { version: 1, status: "available", resultIdentity: "identity", query: { name: "ye_ast_callers", arguments: { revision: "sha" } } } });
+  const text = renderEvidenceSelection({ select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 2 }, records, page: { limit: 1, offset: 1, returned: 1, total: 2 } });
   assert.match(text, /"place":"second"/);
   assert.match(text, /"anchor":"anchor"/);
   assert.match(text, /"status":"partial"/);
   assert.match(text, /"limit":3/);
-  assert.match(text, /recovery in the result JSON/);
+  assert.doesNotMatch(text, /Recovery|recovery in the result JSON/);
   assert.doesNotMatch(text, /"resultIdentity":/);
   assert.doesNotMatch(text, /"revision":"sha"/);
 });
 
 test("renders unavailable evidence without inventing an empty page", () => {
   const records = { source, availability: "unavailable", reason: "unresolved", evidence: [{ source: "actual" }] } as unknown as EvidenceSelectionResult;
-  const text = renderEvidenceSelection({ select: { kind: "entrypoint-evidence", findingIndex: 0 }, records, recovery: { version: 1, status: "unavailable", reason: "deadline" } });
+  const text = renderEvidenceSelection({ select: { kind: "entrypoint-evidence", findingIndex: 0 }, records });
   assert.match(text, /"source":"actual"/);
   assert.match(text, /unresolved/);
   assert.doesNotMatch(text, /Page:/);
-  assert.match(text, /Recovery unavailable \(deadline\)/);
+  assert.doesNotMatch(text, /Recovery unavailable/);
 });
 
 test("preserves a complete UI finding with unknown component and the selected evidence index", () => {
   const records = { source, availability: "available", kind: "entrypoint-evidence", context: { findingIndex: 3, section: { status: "complete" }, finding: { status: "complete", identity: { kind: "ui-route", name: "route", path: "/x", outlet: "main", component: "unknown" } } }, items: [{ evidenceIndex: 4, evidence: { path: "src/ui.ts", line: 12 } }] } as EvidenceSelectionResult;
-  const text = renderEvidenceSelection({ select: { kind: "entrypoint-evidence", findingIndex: 3 }, records, page: { limit: 1, offset: 4, returned: 1, total: 5 }, recovery: { version: 1, status: "unavailable", reason: "unresolved-context" } });
+  const text = renderEvidenceSelection({ select: { kind: "entrypoint-evidence", findingIndex: 3 }, records, page: { limit: 1, offset: 4, returned: 1, total: 5 } });
   assert.match(text, /"component":"unknown"/);
   assert.match(text, /"outlet":"main"/);
   assert.match(text, /"evidenceIndex":4/);
@@ -41,12 +41,12 @@ test("preserves a complete UI finding with unknown component and the selected ev
 
 test("a verified empty base-module page retains its owner, snapshot, and zero total", () => {
   const records = { source, availability: "available", kind: "module-origins", context: { owner: { kind: "section", repo: "other" }, snapshot: { repo: "other", kind: "sha", sha: "base-sha" }, module: { file: "src/base.ts", snapshot: "base", depth: 0 }, originCount: 0 }, items: [] } as EvidenceSelectionResult;
-  const text = renderEvidenceSelection({ select: { kind: "module-origins", owner: { kind: "section", repo: "other" }, module: { file: "src/base.ts", snapshot: "base" } }, records, page: { limit: 5, offset: 0, returned: 0, total: 0 }, recovery: { version: 1, status: "available", resultIdentity: "identity", query: { name: "ye_ast_impact", arguments: { repo: "other", base: "base-sha", head: "head-sha", changed: ["src/**"] } } } });
+  const text = renderEvidenceSelection({ select: { kind: "module-origins", owner: { kind: "section", repo: "other" }, module: { file: "src/base.ts", snapshot: "base" } }, records, page: { limit: 5, offset: 0, returned: 0, total: 0 } });
   assert.match(text, /"owner":\{"kind":"section","repo":"other"\}/);
   assert.match(text, /"sha":"base-sha"/);
   assert.match(text, /"total":0/);
   assert.match(text, /Records: \[\]/);
-  assert.match(text, /recovery in the result JSON/);
+  assert.doesNotMatch(text, /Recovery|recovery in the result JSON/);
   assert.doesNotMatch(text, /"changed":/);
 });
 
@@ -54,7 +54,7 @@ test("selected text keeps unknown read coverage but leaves producer catalogs in 
   const contextualSource = { ...source, producer: { name: "unique-heavy-engine-catalog", version: "1" }, analysis: { status: "complete" }, reads: [{ owner: { kind: "section", repo: "other" }, snapshot: source.snapshot, inputs: {}, analysis: { status: "unknown", reason: "index-unavailable" } }] } as unknown as EvidenceSelectionResult["source"];
   const records = { source: contextualSource, availability: "unavailable", reason: "unresolved", evidence: [] } as unknown as EvidenceSelectionResult;
   const before = JSON.stringify(records.source);
-  const text = renderEvidenceSelection({ select: { kind: "entrypoint-evidence", findingIndex: 0 }, records, recovery: { version: 1, status: "unavailable", reason: "deadline" } });
+  const text = renderEvidenceSelection({ select: { kind: "entrypoint-evidence", findingIndex: 0 }, records });
   assert.doesNotMatch(text, /unique-heavy-engine-catalog/);
   assert.match(text, /index-unavailable/);
   assert.match(text, /"repo":"other"/);
@@ -71,7 +71,7 @@ test("selected read context inherits exactly and preserves ordered owner-specifi
   const contextualSource = { ...source, inputs, analysis: { status: "complete" as const }, reads: [inherited, foreign, inherited], limits: [{ owner: foreign.owner, kind: "depth" as const, cuts: 2, places: 3, limit: 1 }] };
   const records = { source: contextualSource, availability: "unavailable" as const, reason: "unresolved" as const, evidence: [] };
   const before = structuredClone(records);
-  const text = renderEvidenceSelection({ select: { kind: "entrypoint-evidence", findingIndex: 0 }, records, recovery: { version: 1, status: "unavailable", reason: "unresolved-context" } });
+  const text = renderEvidenceSelection({ select: { kind: "entrypoint-evidence", findingIndex: 0 }, records });
   const lines = text.split("\n");
   const reads = lines.filter(line => line.startsWith("  Read: ")).map(line => JSON.parse(line.slice("  Read: ".length)));
   assert.match(text, /Reads inherit source snapshot\/trust\/scope\/config unless explicitly overridden/);
@@ -87,11 +87,10 @@ test("selected read context inherits exactly and preserves ordered owner-specifi
 
 test("a page offers continuation only while records remain", () => {
   const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 0, kind: "depth", reason: "depth", anchor: "anchor" }, items: [{ atIndex: 1, place: "p" }] } as EvidenceSelectionResult;
-  const recovery = { version: 1 as const, status: "available" as const, resultIdentity: "identity", query: { name: "ye_ast_impact" as const, arguments: { base: "b" } } };
   const select = { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 } as const;
-  const more = renderEvidenceSelection({ select, records, recovery, page: { limit: 1, offset: 0, returned: 1, total: 2, nextCursor: "cursor-1" } }).split("\n");
+  const more = renderEvidenceSelection({ select, records, page: { limit: 1, offset: 0, returned: 1, total: 2, nextCursor: "cursor-1" } }).split("\n");
   const at = more.findIndex((line) => line.startsWith("Page: "));
   assert.match(more[at + 1]!, /^Next page: .*page\.cursor.*nextCursor.*expect.*recovery\.resultIdentity/);
-  const last = renderEvidenceSelection({ select, records, recovery, page: { limit: 1, offset: 1, returned: 1, total: 2 } });
+  const last = renderEvidenceSelection({ select, records, page: { limit: 1, offset: 1, returned: 1, total: 2 } });
   assert.doesNotMatch(last, /Next page|cursor/);
 });

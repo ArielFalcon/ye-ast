@@ -33,6 +33,8 @@ export interface ProcessHost {
   withCache(directory: string): ProcessHost;
   /** Writes each answer as a folder of files under the per-user cache directory; absent when the host has none (ADR-0110). */
   answerFiles?: AnswerFiles;
+  /** The cache directory the answer folders live under (`answers/<tool>/<key>`); absent with `answerFiles`. */
+  cacheDirectory?: string;
 }
 
 /**
@@ -49,7 +51,7 @@ export function processHost(options: { signal: AbortSignal; indexCache?: string;
     stdin: process.stdin,
     stdout: process.stdout,
     err,
-    ...(options.indexCache !== undefined && { answerFiles: composeAnswerFiles({ directory: options.indexCache, report: err }) }),
+    ...(options.indexCache !== undefined && { answerFiles: composeAnswerFiles({ directory: options.indexCache, report: err }), cacheDirectory: options.indexCache }),
     withCache: (directory) => processHost({ ...options, indexCache: directory }),
     queries: ({ trustRecord = false, launchOutputs, throughDaemon = false } = {}) => {
       const trustDirectory = trustRecord ? options.trustDirectory : undefined;

@@ -732,12 +732,12 @@ test("changed paths are counted in the summary with a row for each one the walk 
   assert.match(summary, /^ {2}src\/form\.js outside-scope$/m);
   assert.match(summary, /^ {2}src\/form\.test\.ts test$/m);
   assert.doesNotMatch(summary, /src\/A\.java|docs\/guide\.md/);
-  assert.match(summary, /^test dependents: excluded/m);
+  assert.doesNotMatch(summary, /test dependents/);
   const detail = renderImpact({ ...base, status: "complete", value }, "details");
   assert.match(detail, /^ {2}src\/A\.java walked$/m);
   assert.match(detail, /^ {2}docs\/guide\.md not-read$/m);
   const { changedPaths: _paths, testDependents: _rule, ...bare } = value;
-  assert.doesNotMatch(renderImpact({ ...base, status: "complete", value: bare }), /changed paths|test dependents/);
+  assert.doesNotMatch(renderImpact({ ...base, status: "complete", value: bare }), /changed paths/);
 });
 
 test("a callers answer with a settled range says how many ranges held no token", () => {

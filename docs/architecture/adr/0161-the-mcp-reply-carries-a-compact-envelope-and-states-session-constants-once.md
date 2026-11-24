@@ -1,6 +1,6 @@
 # ADR-0161: The MCP reply carries a compact envelope and states session constants once
 
-- Status: Proposed, 2026-11-24
+- Status: Accepted, 2026-11-24
 - Decision source: Owner, 2026-11-24: "Parte del proceso este es tambien reducir al maximo que se pueda el tamaño de
   las respuestas sin sacrificar calidad. buscar ese equilibrio." (part of this process is also to reduce the size of
   the answers as much as possible without sacrificing quality; find that balance). And, 2026-11-16 (ADR-0109): "Una
@@ -53,6 +53,15 @@ every reply of a session (121 of 127 for the scope).
 - An agent that replays or asserts an identity opens `answer.json`; a client that branches on the result reads
   `_meta`. A client that parsed the `result JSON:` line must change; the MCP has no consumers yet.
 - The snapshot stays in every answer (RFC-0002), and the facts keep their bytes.
+
+## Recorded at implementation
+
+- The declared scope is the engine's own declaration (`declaredScope()` of the map domain), the same for every
+  repository, so the instructions state it once and a reply prints it only when its fact carries another.
+- A selected reply carries the status and snapshot lines and ends with `no answer file written: a selected page is a
+  projection of the plain query's answer` (decision 3 with ADR-0113 decision 7).
+- The cache root the instructions name comes from the host (`ProcessHost.cacheDirectory`); the pointer is the last
+  three segments of the answer folder plus `answer.json`.
 
 ## Not decided here
 

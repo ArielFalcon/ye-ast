@@ -8,7 +8,7 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { composeCli } from "./compose.ts";
-import { RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT } from "../mcp/server.ts";
+import { RESULT_META, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT } from "../mcp/server.ts";
 import { expandFull } from "../mcp/full-projection.testing.ts";
 import { asFull, fullReplyFromDisk } from "../mcp/answer-files.testing.ts";
 import type { ToolResult } from "../mcp/test-session.testing.ts";
@@ -16,16 +16,14 @@ import type { ToolResult } from "../mcp/test-session.testing.ts";
 function resultFields(result: any): any {
   const text = result.content?.[0]?.text;
   assert.ok(text);
-  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  assert.notEqual(at, -1);
-  return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
+  const fields = result._meta?.[RESULT_META];
+  assert.ok(fields !== undefined);
+  return { text, ...fields };
 }
 
-/** Content text without its closing result JSON line. */
+/** The content text: the result fields are in `_meta`. */
 function presentation(text: string): string {
-  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  assert.notEqual(at, -1);
-  return text.slice(0, at);
+  return text;
 }
 
 const GIT_ENV = {
@@ -245,9 +243,8 @@ test("declared foreign repository reads its own snapshot without implicit worksp
     assert.equal(result.isError, undefined);
     assert.equal(validate(resultFields(result)).valid, true);
     assert.deepEqual(resultFields(result)["recovery"], recovery);
-    assert.match(presentation(result.content[0]!.text), /recovery in the result JSON/);
     assert.equal(presentation(result.content[0]!.text).includes(JSON.stringify(recovery.query)), false);
-    assert.equal(result.content[0]!.text.split(JSON.stringify(recovery)).length - 1, 1);
+    assert.equal(result.content[0]!.text.split(JSON.stringify(recovery)).length - 1, 0);
   }
   const replay = async () => (await request("tools/call", { name: recovery.query.name, arguments: { ...recovery.query.arguments, mode: "full" } })).result as { structuredContent: Record<string, unknown> };
   const sourceFact = (result: Record<string, unknown>) => {
@@ -329,9 +326,8 @@ test("callers and impact replay real local and persisted workspace facts", async
         const result = await call(name, { ...input, mode });
         assert.equal(validate(resultFields(result)).valid, true);
         assert.deepEqual(resultFields(result).recovery, recovery);
-        assert.match(presentation(result.content[0]!.text), /recovery in the result JSON/);
-        assert.equal(presentation(result.content[0]!.text).includes(JSON.stringify(recovery.query)), false);
-        assert.equal(result.content[0]!.text.split(JSON.stringify(recovery)).length - 1, 1);
+            assert.equal(presentation(result.content[0]!.text).includes(JSON.stringify(recovery.query)), false);
+        assert.equal(result.content[0]!.text.split(JSON.stringify(recovery)).length - 1, 0);
       }
       const replayed = await call(name, { ...recovery.query.arguments, mode: "full" });
       assert.deepEqual(resultFields(replayed).recovery, recovery);

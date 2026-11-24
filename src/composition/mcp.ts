@@ -105,7 +105,7 @@ export async function runMcp(commandLine: readonly string[], host: ProcessHost):
   });
   const handle = serveStdio(() => {
     const digest = createSha256Digest();
-    return createMcpServer({ ...queries, digest, evidenceComposition: createEvidenceComposition(digest), repository, repositories: bindings, ...(answerBytes === undefined ? {} : { answerBytes }), ...(served.answerFiles === undefined ? {} : { answerFiles: served.answerFiles }) });
+    return createMcpServer({ ...queries, digest, evidenceComposition: createEvidenceComposition(digest), repository, repositories: bindings, ...(answerBytes === undefined ? {} : { answerBytes }), ...(served.answerFiles === undefined ? {} : { answerFiles: served.answerFiles }), ...(served.cacheDirectory === undefined ? {} : { answerCacheRoot: resolve(served.cacheDirectory) }) });
   }, {
     transport: wire,
     onerror: (error) => host.err(`ye-ast: ${queries.redaction.redactError(error)}`),
