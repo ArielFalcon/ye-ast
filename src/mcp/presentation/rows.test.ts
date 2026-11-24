@@ -45,9 +45,12 @@ test("a finding and the same entrypoint reached from a change share one key, and
   const row = entrypointRow(reached);
   assert.equal(row.key, finding.key);
   assert.deepEqual(row.place, { path: "src/A.java", line: 7, endLine: 20 });
-  assert.deepEqual(row.qualifiers, [{ name: "depth", value: "2" }, { name: "confidence", value: "0.5" }]);
+  assert.deepEqual(row.qualifiers, [{ name: "depth", value: "2" }, { name: "origins", value: "0" }, { name: "confidence", value: "0.5" }]);
   assert.notEqual(entrypointRow({ ...reached, handler: { ...handler, line: 30 } }).key, row.key);
   assert.notEqual(entrypointRow(reached, "other").key, row.key);
+  const owned = entrypointRow(reached, "other", { seeds: [{ file: "src/seed.ts", symbol: "seed", line: 4, basis: "requested" }] });
+  assert.equal(owned.place?.repo, "other");
+  assert.equal(owned.evidence?.[0]?.repo, "other");
 });
 
 test("a reached unknown entrypoint keeps each distinct observation as a child, and a UI route its declaration as a qualifier", () => {

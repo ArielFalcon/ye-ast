@@ -18,34 +18,38 @@ const SCAN = new RegExp(
   `(?<route>\\b(?:${VERBS}) /[^\\s,)]*)|(?<json>"path":"[^"]+","line":\\d+(?:,"endLine":\\d+)?)|(?<inline>[\\w@.\\-/\\[\\]{}$]+\\.[A-Za-z0-9]+:\\d+(?:-\\d+)?(?:,\\d+(?:-\\d+)?)*)|(?<cont>(?<![^\\s(,]):\\d+(?:-\\d+)?)|(?<anchor>[\\w@.\\-/\\[\\]{}$]+::[\\w.$]+)`,
   "g",
 );
-const HEADER = /^ +(?=\S*[./])([^\s:()]+)$/;
-const ROW_SPAN = /^ *(?:\d+\. )?(\d+(?:-\d+)?) \S/;
+const HEADER = /^ {2}(?![ \d])(?=.+[./])([^()]+\.[A-Za-z0-9]+)$/;
+const ROW_SPAN = /^ *(?:\d+\. )?(\d+(?:-\d+)?) (?!other\b|containment\b|declarations?\b)\S/;
 const LEGACY_RUN = /^ *- unknown \(.*\) (\S+):$/;
 const LEGACY_RUN_ROW = /^ *findingIndex \d+: (\d+(?:-\d+)?)$/;
 const ANNOTATION = /\b(via|confidence) ([\w.-]+)/g;
 const SYMBOL = /-> (?:\S+:\d+(?:-\d+)? )?(\S+)/g;
-const IDENTITY = /(?<!for )\b(http-route|ui-route|listener|job|callback) (.+?)(?: ->| \[findingIndex \d+\]|$)/;
-const UNKNOWN = /\bunknown \([^)]+\)(?: for [^(\n]*?(?= \(raised by| \S+:\d|\s*\[findingIndex|$))?(?: \(raised by [^)]+\))?/;
+const IDENTITY = /(?<!for )\b(http-route|ui-route|listener|job|callback) (.+?)(?: ->| \(depth\b| \[findingIndex \d+\]|$)/;
+const UNKNOWN = /\bunknown \((?!depth\b)[^)]+\)(?: for [^(\n]*?(?= \(raised by| \S+:\d|\s*\[findingIndex|$))?(?: \(raised by [^)]+\))?/;
 
 /** The identities a text states; see the file comment for the forms. */
 export function tokensOf(text: string): Set<string> {
   const tokens = new Set<string>();
   let file: string | undefined;
   let inCuts = false;
+  let groupFile: string | undefined;
   for (const line of text.split("\n")) {
-    if (!line.startsWith(" ")) { file = undefined; inCuts = line === "cuts:"; }
+    if (!line.startsWith(" ")) { file = undefined; groupFile = undefined; inCuts = line === "cuts:"; }
     const place = (value: string) => tokens.add(`${inCuts ? "cut " : ""}place ${value}`);
     const header = HEADER.exec(line);
-    if (header !== null) file = header[1];
+    if (header !== null) { file = header[1]; groupFile = file; }
     const run = LEGACY_RUN.exec(line);
     if (run !== null) file = run[1];
     const span = ROW_SPAN.exec(line)?.[1] ?? LEGACY_RUN_ROW.exec(line)?.[1];
-    if (span !== undefined && file !== undefined) place(`${file}:${span}`);
+    if (span !== undefined && (groupFile ?? file) !== undefined) place(`${groupFile ?? file}:${span}`);
+    const legacyHandler = /-> (.+?:\d+(?:-\d+)?) (\S+) \(depth/.exec(line);
+    if (legacyHandler !== null) place(legacyHandler[1]!);
     for (const match of line.matchAll(SCAN)) {
       const { route, json, inline, cont, anchor } = match.groups as Record<string, string | undefined>;
       if (route !== undefined) tokens.add(`route ${route}`);
       else if (json !== undefined) { const [, path, at, end] = /"path":"([^"]+)","line":(\d+)(?:,"endLine":(\d+))?/.exec(json)!; place(`${path}:${at}${end === undefined ? "" : `-${end}`}`); }
       else if (inline !== undefined) {
+        if (legacyHandler?.[1]?.endsWith(inline) === true) continue;
         const [head, ...more] = inline.split(",");
         const at = head!.lastIndexOf(":");
         file = head!.slice(0, at);
@@ -53,7 +57,8 @@ export function tokensOf(text: string): Set<string> {
       } else if (cont !== undefined && file !== undefined) place(`${file}${cont}`);
       else if (anchor !== undefined) tokens.add(`anchor ${anchor}`);
     }
-    for (const match of line.matchAll(SYMBOL)) tokens.add(`symbol ${match[1]}`);
+    if (legacyHandler !== null) tokens.add(`symbol ${legacyHandler[2]}`);
+    else if (!line.includes("<path>")) for (const match of line.matchAll(SYMBOL)) tokens.add(`symbol ${match[1]}`);
     for (const match of line.matchAll(ANNOTATION)) tokens.add(`${match[1]} ${match[2]}`);
     const unknown = UNKNOWN.exec(line);
     if (unknown !== null) tokens.add(`entry ${unknown[0]}`);

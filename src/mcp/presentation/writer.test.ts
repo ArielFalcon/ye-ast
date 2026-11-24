@@ -62,15 +62,15 @@ test("sections are written answer, completeness, context in mapper order within 
   assert.ok(text.indexOf("status: complete") < at[0]! && text.indexOf(`snapshot: app @ ${sha}`) < at[0]!);
 });
 
-test("a path is stated once per group however its rows interleave, and once per section in a list", () => {
+test("a path is stated once per group however its rows interleave, and repeated when list files interleave", () => {
   const rows = [row("1", { path: "src/a.ts", line: 3 }), row("2", { path: "src/b.ts", line: 4 }), row("3", { path: "src/a.ts", line: 9, endLine: 12 }), row("4", { repo: "other", path: "src/a.ts", line: 1 })];
   const grouped = write(base([answer(rows)]), "summary");
   assert.equal(occurrences(grouped.text, "src/a.ts"), 2);
   assert.equal(occurrences(grouped.text, "other:src/a.ts"), 1);
   assert.deepEqual(grouped.printed.map((printed) => printed.key), ["1", "3", "2", "4"]);
   const list = write(base([answer(rows, "list")]), "summary").text;
-  assert.equal(occurrences(list, "src/a.ts"), 2);
-  assert.match(list, /\n {2}:9-12 label-3/);
+  assert.equal(occurrences(list, "src/a.ts"), 3);
+  assert.match(list, /\n {2}src\/a\.ts:9-12 label-3/);
 });
 
 test("evidence that repeats the row's place is not printed and its own file prints as lines", () => {
@@ -161,4 +161,14 @@ test("an evidence place that adds how it was found is printed with it, even when
   const text = write(base([answer([row("a", own, { evidence: [{ ...own, via: "router", confidence: 0.5 }, { path: "src/a.ts", line: 9 }] })])]), "details").text;
   assert.match(text, /evidence: :4 via router confidence 0\.5, :9$/m);
   assert.doesNotMatch(write(base([answer([row("a", own, { evidence: [own] })])]), "details").text, /evidence/);
+});
+
+ test("list and tree continuations follow only the immediately preceding row file and repository", () => {
+  for (const layout of ["list", "tree"] as const) for (const mode of ["summary", "details"] as const) {
+    const rows = [row("1", { repo: "a", path: "x.ts", line: 1 }, { children: [row("child", { repo: "b", path: "x.ts", line: 2 })], childrenAreAnswer: true }), row("2", { repo: "a", path: "x.ts", line: 3 }), row("3", { repo: "a", path: "x.ts", line: 4 }), row("none"), row("4", { repo: "a", path: "x.ts", line: 5 })];
+    const text = write(base([answer(rows, layout)]), mode).text;
+    assert.match(text, /a:x\.ts:3 label-2/);
+    assert.match(text, /:4 label-3/);
+    assert.match(text, /a:x\.ts:5 label-4/);
+  }
 });
