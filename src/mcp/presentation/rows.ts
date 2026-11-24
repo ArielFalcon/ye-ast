@@ -1,11 +1,20 @@
+import type { Decision } from "../../core/domain/decisions/decision.ts";
 import type { Entrypoint } from "../../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../../core/domain/entrypoints/http-route.ts";
 import type { ImpactedSymbol, ReachedEntrypoint, Seed } from "../../core/domain/impact/impact-fact.ts";
 import type { OutlineDeclaration } from "../../core/domain/outline/outline-fact.ts";
+import { canonicalJson } from "../../core/domain/shared/canonical-json.ts";
 import { compareText } from "../../core/domain/shared/code-node.ts";
 import type { Cut, Evidence, Finding } from "../../core/domain/shared/fact.ts";
+import type { UnresolvedCallSite } from "../../core/domain/topology/call-site.ts";
+import { linkIdentity, type Link, type UnlinkedCallSite } from "../../core/domain/topology/link.ts";
+import type { OutwardName } from "../../core/domain/topology/outward-name.ts";
 import type { TraceStep } from "../../core/domain/trace/trace-fact.ts";
+import { FIXED_LAYER_DIRECTORY } from "../../core/ports/fixed-layer-store.port.ts";
+import { WORKSPACE_MANIFEST_FILE } from "../../core/ports/workspace-defaults.port.ts";
+import type { WorkspaceSource } from "../../core/ports/workspace-repos.port.ts";
 import { cutRowLabel, subjectText } from "../presentation-context.ts";
+import { driftText, statedRequestText, unresolvedLabel } from "../presentation.ts";
 import type { Place, Qualifier, Row, Section } from "./model.ts";
 
 export type DeclarationSource = Seed | ImpactedSymbol | TraceStep | OutlineDeclaration;
@@ -142,13 +151,6 @@ export function entrypointRow(source: Finding<Entrypoint> | ReachedEntrypoint, r
   return source.status === "unknown" ? unknownRow(source, repo) : foundRow(source, repo);
 }
 
-import type { Decision } from "../../core/domain/decisions/decision.ts";
-import type { OutwardName } from "../../core/domain/topology/outward-name.ts";
-import { linkIdentity, type Link, type UnlinkedCallSite } from "../../core/domain/topology/link.ts";
-import type { UnresolvedCallSite } from "../../core/domain/topology/call-site.ts";
-import { canonicalJson } from "../../core/domain/shared/canonical-json.ts";
-import { driftText, statedRequestText, unresolvedLabel } from "../presentation.ts";
-
 export function qualifiedEvidence(evidence: Evidence, repo?: string): Place {
   const owner = "repo" in evidence && typeof evidence.repo === "string" ? evidence.repo : repo;
   return { ...evidencePlace(evidence), ...(owner === undefined ? {} : { repo: owner }) };
@@ -205,10 +207,6 @@ export function callSiteRow(site: UnlinkedCallSite | UnresolvedCallSite, repo?: 
     evidence: [...site.evidence, ...(site.diagnostic?.unreadableSources ?? [])].map(place => qualifiedEvidence(place, repo)),
   };
 }
-
-import type { WorkspaceSource } from "../../core/ports/workspace-repos.port.ts";
-import { FIXED_LAYER_DIRECTORY } from "../../core/ports/fixed-layer-store.port.ts";
-import { WORKSPACE_MANIFEST_FILE } from "../../core/ports/workspace-defaults.port.ts";
 
 export function repositorySourceLine(source: WorkspaceSource): string {
   const label = { request: "the request", persisted: `${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}`, none: "nothing: this answer covers the bound repository alone" }[source];
