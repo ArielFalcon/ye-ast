@@ -105,6 +105,13 @@ module.exports = {
       from: { path: "^src/(cli|mcp|protocol|hooks|daemon)/" },
       to: { path: ENTRYPOINTS, pathNot: "^src/$1/" },
     },
+    {
+      name: "presentation-families-never-import-the-writer",
+      comment: "A family maps its fact to a presentation model and writes no text; the one writer renders it (RFC-0041 3.3, ADR-0160).",
+      severity: "error",
+      from: { path: "^src/mcp/presentation/families/" },
+      to: { path: "^src/mcp/presentation/writer\\.ts$" },
+    },
     { name: "not-to-unresolvable", severity: "error", from: {}, to: { couldNotResolve: true } },
   ],
   options: {

@@ -1,6 +1,6 @@
 # ADR-0160: An MCP answer is written by one writer from a presentation model each family maps its fact to
 
-- Status: Proposed, 2026-11-24
+- Status: Accepted, 2026-11-24
 - Decision source: Owner, 2026-11-24: "las soluciones a estos problemas se deben plantear de forma transversal,
   adaptable a cada herramienta mediante mecanismos de herencia o composicion segun mejor sea, pero no como parche
   ad-hoc para cada caso. Deben ser soluciones "de abajo hacia arriba" a nivel de arquitectura, eficientes y
