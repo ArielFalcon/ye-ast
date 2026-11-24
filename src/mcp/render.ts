@@ -1,15 +1,12 @@
 import { dependencyDiagnosticText, driftText, effectText, statedRequestText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
-import type { ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
+import type { ImpactOwner } from "./select-evidence.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind, cutCounts, cutReasonText, cutRowLabel, completeText, undecidedOf, subjectText, type StatusContext } from "./presentation-context.ts";
 import type { RenderDetail, RenderContext } from "./presentation.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
-import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
-import type { ChangedPath } from "../core/domain/impact/changed-paths.ts";
-import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
-import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
+import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineUse, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
@@ -36,6 +33,8 @@ import { blockBytes as size, preferShorterText, shareExactContext } from "./pres
 import { LISTED_ITEMS } from "./render-budget.ts";
 import { present as presentEntrypoints } from "./presentation/families/entrypoints.ts";
 import { write } from "./presentation/writer.ts";
+import { present as presentImpact, presentWorkspace } from "./presentation/families/impact.ts";
+import { cutSection } from "./presentation/rows.ts";
 
 const NONE = "  (none)";
 const ROW_NUMBER_NOTE = "select entrypoint-evidence: findingIndex is the row number";
@@ -257,23 +256,6 @@ function handlerText(handler: Handler): string {
   return `${placeText(handler.path, handler.line, handler.endLine)} ${handler.symbol}`;
 }
 
-/** The dependence that reached a symbol: where it depends on it, and what that dependence is. */
-function viaText(via: NonNullable<ImpactedSymbol["via"]>, file: string): string {
-  const where = via.file === file ? via.symbol : `${via.file}:${via.symbol}`;
-  const marker = via.substitutes === undefined ? "" : ` ${SUBSTITUTION_MARKER}`;
-  if (via.lines === undefined || via.lines.length === 0) return `${where} (${via.basis})${marker}`;
-  const at = `at ${via.resource === undefined ? "" : `${via.resource} `}${via.lines.join(", ")}`;
-  return `${via.basis === "call" ? `${where} ${at}` : `${where} ${at} (${via.basis})`}${marker}`;
-}
-
-const SUBSTITUTION_MARKER = "†";
-
-/** One legend line per provider substitution the shown dependences carry. */
-function substitutionLegend(symbols: readonly ImpactedSymbol[]): string[] {
-  const lines = symbols.flatMap((symbol) => (symbol.via?.substitutes ?? []).map((substitute) => `  ${SUBSTITUTION_MARKER} may be replaced by ${substitute.file}:${substitute.symbol} at ${substitute.at.file}:${substitute.at.line}`));
-  return [...new Set(lines)].sort(compareText);
-}
-
 export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") {
     if (fact.status === "unknown") return "Inspect reason and evidence; the result has no value.";
@@ -293,443 +275,37 @@ export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: RenderDet
   return lines.join("\n");
 }
 
-function changedLine(change: ChangedEntrypoint): string {
-  return `  - ${change.change} ${change.kind} ${change.name} -> ${handlerText(change.handler)}`;
-}
-
-function changedContractLine(change: ChangedContract): string {
-  return `  - ${changedContractText(change)}`;
-}
-
 function changedContractText(change: Omit<ChangedContract, "handlers">): string {
   const name = change.operationId === undefined ? "" : ` (${change.operationId})`;
   const parts = change.parts === undefined ? "" : ` ${change.parts.join(" and ")}`;
   return `${change.change} ${change.method} ${change.path}${name}${parts} at ${change.document}:${change.line}`;
 }
 
-/** A compact row names its handler as `path:line[-endLine] symbol`; a literal row carries its complete selector. */
-function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: RenderDetail, owner: ImpactOwner, compact: boolean, sharedOrigin = false): string[] {
-  const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
-  const facts = [`depth ${reached.depth}`];
-  if (reached.confidence < 1) facts.push(`confidence ${reached.confidence}`);
-  if (!compact && reached.handler.endLine !== undefined) facts.push(`endLine ${reached.handler.endLine}`);
-  if (detail === "summary" && reached.seeds.length > 0) facts.push(plural(reached.seeds.length, "origin"));
-  const origin = seeds[reached.seeds[0] ?? -1];
-  const others = reached.seeds.length - 1;
-  const { path, symbol, line } = reached.handler;
-  const declared = reached.declaredAt === undefined ? "" : ` at ${reached.declaredAt.path}:${reached.declaredAt.line}`;
-  return [
-    compact ? `  - ${name} -> ${handlerText(reached.handler)} (${facts.join(", ")})${declared}` : `  - ${name} (${facts.join(", ")})${declared}; lookup example: ${literalSelection({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
-    ...(reached.kind === "unknown" ? [...new Set(reached.observations.map((observation) => `    unknown (${observation.reason})${subjectText(observation.subject)}${observation.evidence.length === 0 ? "" : `: ${observation.evidence.map(evidenceText).join(", ")}`}`))] : []),
-    ...(detail === "summary" || origin === undefined || sharedOrigin ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${plural(others, "other origin")}` : ""}`]),
-  ];
-}
-
-/** The symbol is the last word of a compact handler coordinate, so a symbol with whitespace keeps literal selectors. */
-const HANDLER_ROW = "-> <path>:<line>[-<endLine>] <symbol>";
-
-function reachedGroup(value: ImpactValue, detail: RenderDetail, owner: ImpactOwner, selectable = true): string[] {
-  const support = shareExactContext(value.entrypoints, (entrypoint) => ({
-    indices: entrypoint.seeds,
-    support: entrypoint.seeds.map((index) => value.seeds[index]),
-    confidence: entrypoint.confidence,
-  }));
-  const rows = (compact: boolean): string[] => {
-    const output: string[] = [];
-    for (let index = 0; index < value.entrypoints.length;) {
-      const first = value.entrypoints[index]!;
-      let end = index + 1;
-      while (end < value.entrypoints.length) {
-        if (support.rows[end]!.contextIndex !== support.rows[index]!.contextIndex) break;
-        end++;
-      }
-      const run = value.entrypoints.slice(index, end);
-      const literal = run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, compact));
-      const origin = value.seeds[first.seeds[0] ?? -1];
-      if (detail === "details" && run.length > 1 && origin !== undefined) {
-        const other = first.seeds.length - 1;
-        const shared = [`  For the next ${run.length} handler rows, one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${other > 0 ? `; ${plural(other, "other origin")}` : ""}`, ...run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, compact, true))];
-        output.push(...(size(shared) < size(literal) ? shared : literal));
-      } else output.push(...literal);
-      index = end;
-    }
-    return output;
-  };
-  if (!selectable) return rows(true);
-  const literal = rows(false);
-  const first = value.entrypoints[0];
-  if (first === undefined || value.entrypoints.some((entrypoint) => /\s/.test(entrypoint.handler.symbol))) return literal;
-  const { path, symbol, line } = first.handler;
-  const shared = [
-    sharedLookup("Handler", HANDLER_ROW, "handler path, line and symbol (not endLine)", { kind: "handler-origins", owner, handler: { path, symbol, line } }),
-    ...rows(true),
-  ];
-  return preferShorterText(literal.join("\n"), shared.join("\n")) === shared.join("\n") ? shared : literal;
-}
-
-/** A seed is already listed, so a symbol reached at depth 0 that stands for one is not printed twice. */
-function seedKeys(value: ImpactValue): Set<string> {
-  return new Set(value.seeds.map((seed) => `${seed.file}\0${seed.symbol}\0${seed.line}`));
-}
-
-function symbolLine(symbol: ImpactedSymbol, file: string, includeVia = true): string {
-  const facts = [`depth ${symbol.depth}`];
-  if (symbol.confidence < 1) facts.push(`confidence ${symbol.confidence}`);
-  if (symbol.via?.derivation === "name-match") facts.push("name match");
-  if (symbol.via?.derivation === "typed") facts.push("typed");
-  if (symbol.fanIn > 0) facts.push(`fan-in ${symbol.fanIn}`);
-  if (includeVia && symbol.via !== undefined) facts.push(`via ${viaText(symbol.via, file)}`);
-  return `    ${spanText(symbol.line, symbol.endLine)} ${symbol.symbol} [${symbol.kind}] (${facts.join(", ")})`;
-}
-
-
-function groupedLines(symbols: readonly ImpactedSymbol[]): string[] {
-  return [...Map.groupBy(symbols, (symbol) => symbol.file)].flatMap(([file, inFile]) => {
-    const lines = [`  ${file}`];
-    for (let start = 0; start < inFile.length;) {
-      const first = inFile[start]!;
-      const via = first.via === undefined ? undefined : viaText(first.via, file);
-      let end = start + 1;
-      while (via !== undefined && end < inFile.length) {
-        const next = inFile[end]!;
-        if (next.via === undefined || viaText(next.via, file) !== via) break;
-        end++;
-      }
-      const run = inFile.slice(start, end);
-      const listing = run.map((symbol) => symbolLine(symbol, file));
-      const grouped = [`    via ${via}`, ...run.map((symbol) => `  ${symbolLine(symbol, file, false)}`)];
-      lines.push(...(via !== undefined && size(grouped) <= size(listing) ? grouped : listing));
-      start = end;
-    }
-    return lines;
-  });
-}
-
-function consequenceSymbols(value: ImpactValue): readonly ImpactedSymbol[] {
-  const seeds = seedKeys(value);
-  return value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
-}
-
-/** A containment reaches the symbol that holds a reached one, and a dispatch the same member in a related type; only another basis reaches a symbol that depends on it. */
-function isDependent(symbol: ImpactedSymbol): boolean {
-  return symbol.via?.basis !== "contains" && symbol.via?.basis !== "dispatch";
-}
-
-function dependentLevel(symbols: readonly ImpactedSymbol[]): number {
-  return symbols.reduce((depth, symbol) => isDependent(symbol) ? Math.min(depth, symbol.depth) : depth, Infinity);
-}
-
-/**
- * The nearest dependents and the reached handlers, with the rows that place them: the dispatch counterpart a shown row
- * depends through, and the containment of a shown row.
- */
-function investigationSymbols(value: ImpactValue): readonly ImpactedSymbol[] {
-  const symbols = consequenceSymbols(value);
-  const level = dependentLevel(symbols);
-  const shown = new Set(symbols.filter((symbol) => (isDependent(symbol) && symbol.depth === level) || value.entrypoints.some(({ handler }) => handler.path === symbol.file && handler.line === symbol.line && handler.symbol === symbol.symbol)));
-  const context = symbols.filter((symbol) => !isDependent(symbol) && !shown.has(symbol));
-  for (let added = true; added;) {
-    const shownKeys = new Set([...shown].map((symbol) => symbolKey(symbol.file, symbol.symbol)));
-    const dependedOn = new Set([...shown].flatMap(({ via }) => (via === undefined ? [] : [symbolKey(via.file, via.symbol)])));
-    const placing = context.filter((symbol) => !shown.has(symbol) && (symbol.via?.basis === "contains" ? shownKeys.has(symbolKey(symbol.via.file, symbol.via.symbol)) : dependedOn.has(symbolKey(symbol.file, symbol.symbol))));
-    for (const symbol of placing) shown.add(symbol);
-    added = placing.length > 0;
-  }
-  return symbols.filter((symbol) => shown.has(symbol));
-}
-
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
-const segmentsOf = (file: string) => file.split("/");
-const symbolKey = (file: string, symbol: string) => `${file}\0${symbol}`;
-
-/** A `changed` glob over changed files and the narrower areas inside it. */
-interface ChangeArea {
-  glob: string;
-  files: readonly string[];
-  children: readonly ChangeArea[];
+function literalHandlers(value: ImpactValue, owner: ImpactOwner, context?: RenderContext): boolean {
+  const handler = value.entrypoints[0]?.handler;
+  if (handler === undefined || !value.entrypoints.some((entrypoint) => /\s/.test(entrypoint.handler.symbol))) return false;
+  return context === undefined || canSelect(context, { kind: "handler-origins", owner, handler: { path: handler.path, symbol: handler.symbol, line: handler.line } }, owner.kind === "section");
 }
 
-/** The directories below the first `depth` shared segments, each collapsed to where its files diverge. */
-function directoryAreas(files: readonly string[], depth: number): ChangeArea[] {
-  const nested = files.filter((file) => segmentsOf(file).length > depth + 1);
-  return [...Map.groupBy(nested, (file) => segmentsOf(file)[depth]!)].map(([, inside]) => {
-    const first = segmentsOf(inside[0]!);
-    let end = depth + 1;
-    while (inside.every((file) => { const segments = segmentsOf(file); return segments.length > end + 1 && segments[end] === first[end]; })) end++;
-    return { glob: `${first.slice(0, end).join("/")}/**`, files: inside, children: directoryAreas(inside, end) };
-  }).toSorted((a, b) => compareText(a.glob, b.glob));
-}
-
-/**
- * The changed files as a tree of `changed` globs: below the directories every file shares, each file and each
- * directory, a directory broken down wherever its files diverge. Undefined when the tree has one root, since narrowing
- * to it repeats the request.
- */
-function changeAreas(changed: readonly string[]): readonly ChangeArea[] | undefined {
-  const files = [...new Set(changed)].toSorted(compareText);
-  const first = segmentsOf(files[0] ?? "");
-  let shared = 0;
-  while (files.every((file) => { const segments = segmentsOf(file); return segments.length > shared + 1 && segments[shared] === first[shared]; })) shared++;
-  const roots = [
-    ...files.filter((file) => segmentsOf(file).length === shared + 1).map((file) => ({ glob: file, files: [file], children: [] })),
-    ...directoryAreas(files, shared),
-  ].toSorted((a, b) => compareText(a.glob, b.glob));
-  return roots.length > 1 ? roots : undefined;
-}
-
-/** The seed file a symbol's recorded `via` chain starts at; undefined when the chain does not reach a seed. */
-function seedFileOf(symbol: ImpactedSymbol, seedFiles: ReadonlyMap<string, string>, byKey: ReadonlyMap<string, ImpactedSymbol>): string | undefined {
-  const visited = new Set<ImpactedSymbol>();
-  for (let current: ImpactedSymbol | undefined = symbol; current?.via !== undefined && !visited.has(current);) {
-    visited.add(current);
-    const key = symbolKey(current.via.file, current.via.symbol);
-    const file = seedFiles.get(key);
-    if (file !== undefined) return file;
-    current = byKey.get(key);
-  }
-  return undefined;
-}
-
-/** A change's impacted symbols and module dependencies counted per changed area, so a large change answers where to narrow. */
-function areaLines(value: ImpactValue, areas: readonly ChangeArea[], symbols: readonly ImpactedSymbol[]): string[] {
-  const seedFiles = new Map(value.seeds.map((seed) => [symbolKey(seed.file, seed.symbol), seed.file]));
-  const byKey = new Map<string, ImpactedSymbol>();
-  for (const symbol of symbols) {
-    const key = symbolKey(symbol.file, symbol.symbol);
-    if (!byKey.has(key)) byKey.set(key, symbol);
-  }
-  type Tally = { seeds: number; direct: number; deeper: number; entrypoints: Set<number>; modules: Set<number> };
-  const tallies = new Map<string, Tally>();
-  const tally = (file: string) => tallies.get(file) ?? tallies.set(file, { seeds: 0, direct: 0, deeper: 0, entrypoints: new Set(), modules: new Set() }).get(file)!;
-  for (const seed of value.seeds) tally(seed.file).seeds++;
-  let unrecorded = 0;
-  for (const symbol of symbols) {
-    const file = seedFileOf(symbol, seedFiles, byKey);
-    if (file === undefined) unrecorded++;
-    else if (symbol.depth === 1) tally(file).direct++;
-    else tally(file).deeper++;
-  }
-  value.entrypoints.forEach((entrypoint, index) => { for (const seed of entrypoint.seeds) if (value.seeds[seed] !== undefined) tally(value.seeds[seed].file).entrypoints.add(index); });
-  const modules = value.modules;
-  modules?.modules.forEach((module, index) => { for (const origin of module.origins) if (modules.origins[origin] !== undefined) tally(modules.origins[origin].file).modules.add(index); });
-  const row = (area: ChangeArea, level: number): string[] => {
-    const parts = area.files.map((file) => tally(file));
-    const sum = (count: (part: Tally) => number) => parts.reduce((total, part) => total + count(part), 0);
-    const union = (members: (part: Tally) => Set<number>) => new Set(parts.flatMap((part) => [...members(part)])).size;
-    const counts = [plural(sum((part) => part.seeds), "seed"), `${sum((part) => part.direct)} direct`, `${sum((part) => part.deeper)} deeper`, plural(union((part) => part.entrypoints), "entrypoint"), ...(modules === undefined ? [] : [plural(union((part) => part.modules), "module")])];
-    return [`${"  ".repeat(level)}${area.glob}: ${counts.join(", ")}`, ...area.children.flatMap((child) => row(child, level + 1))];
-  };
-  return [
-    `impacted symbols (${symbols.length}) by changed area (a symbol counts under the area its first recorded path starts in; indented areas break down the one above):`,
-    ...areas.flatMap((area) => row(area, 1)),
-    ...(unrecorded === 0 ? [] : [`  origin not recorded: ${plural(unrecorded, "symbol")}`]),
-    `  repeat with changed ["<area>"] to walk one area's seeds; mode "details" shows investigation evidence; ${categoryRecovery({ answerJson: "includes every symbol" })}`,
-  ];
-}
-
-function impactedSymbols(value: ImpactValue, detail: RenderDetail): string[] {
-  const symbols = consequenceSymbols(value);
-  const header = `impacted symbols (${symbols.length}):`;
-  const none = dependentLevel(symbols) === Infinity ? ["  no dependent recorded"] : [];
-  if (symbols.length === 0) return [header, ...none];
-  const literal = [header, ...groupedLines(symbols), ...substitutionLegend(symbols), ...none];
-  if (detail === "summary") {
-    if (symbols.length <= LISTED_ITEMS) return literal;
-    const direct = symbols.filter((symbol) => symbol.depth === 1);
-    const deeper = [...Map.groupBy(symbols.filter((symbol) => symbol.depth !== 1), (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
-    const counts = deeper.length === 0 ? "" : `by depth: ${deeper.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; `;
-    const counted = [header, ...groupedLines(direct), `  ${counts}mode "details" shows investigation evidence; ${categoryRecovery({ answerJson: "includes every symbol" })}`, ...none];
-    return size(counted) <= size(literal) ? counted : literal;
-  }
-  const shown = investigationSymbols(value);
-  const omitted = symbols.length - shown.length;
-  const level = dependentLevel(shown);
-  const view = level === Infinity
-    ? `  evidence view: no dependent recorded${omitted === 0 ? "" : `; ${plural(omitted, "containment or dispatch row")}`}; ${categoryRecovery({ answerJson: "includes all" })}`
-    : `  evidence view: nearest dependent depth ${level} and reached handlers`;
-  const evidence = [header, view, ...groupedLines(shown), ...substitutionLegend(shown), ...(level === Infinity || omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; ${categoryRecovery({ answerJson: "includes all" })}`])];
-  return omitted > 0 && size(evidence) <= size(literal) ? evidence : literal;
-}
-
-/**
- * The change the answer read: a count per disposition, then a row for each path the walk did not simply start from (a
- * test, a path outside the declared scope, a settled or deleted one, a removal that declared a name); details lists all.
- */
-function changedPathLines(paths: readonly ChangedPath[], detail: RenderDetail): string[] {
-  const counts = [...Map.groupBy(paths, ({ disposition }) => disposition)].map(([disposition, group]) => `${group.length} ${disposition}`);
-  const shown = detail === "details" ? paths : paths.filter(({ disposition, deleted, removed }) => (disposition !== "walked" && disposition !== "not-read") || deleted === true || removed !== undefined);
-  return [
-    `changed paths (${paths.length}): ${counts.join(", ")}`,
-    ...shown.map(({ path, disposition, deleted, removed }) => `  ${path} ${disposition}${deleted === true ? ", deleted" : ""}${removed === undefined ? "" : `; removed ${removed.join(", ")}`}`),
-    ...(shown.length < paths.length ? [`  ${paths.length - shown.length} more; mode "details" lists every path`] : []),
-  ];
-}
-
-/** What an impact answer says about its walk, without its header or its cuts. */
-function impactBody(value: ImpactValue, detail: RenderDetail, owner: ImpactOwner, context?: RenderContext, narrowable = true): string[] {
-  const selectable = (selection: EvidenceSelection) => context === undefined || canSelect(context, selection, owner.kind === "section");
+function impactGuidance(value: ImpactValue, owner: ImpactOwner, context?: RenderContext): string[] {
   const handler = value.entrypoints[0]?.handler;
   const module = value.modules?.modules[0];
+  const handlerExample = handler === undefined ? undefined : { kind: "handler-origins", owner, handler: { path: handler.path, symbol: handler.symbol, line: handler.line } } as const;
+  const moduleExample = module === undefined ? undefined : { kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } } as const;
   return [
-    ...(narrowable && context?.recovery?.status === "unavailable" ? [`  Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`] : []),
-    ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
-    ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
-    ...(value.changedContracts === undefined ? [] : [`changed contracts (${value.changedContracts.length}):`, ...value.changedContracts.map(changedContractLine)]),
-    ...(narrowable && value.changedPaths !== undefined ? changedPathLines(value.changedPaths, detail) : []),
-    `reached entrypoints (${value.entrypoints.length}):`,
-    ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) ? [value.entrypoints.length === 1
-      ? `  ${categoryRecovery({ answerJson: "has all origins." })}`
-      : `  Origin counts and examples below: ${categoryRecovery({ answerJson: "includes all" })} recorded associations for this owner.`] : []),
-    ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? ["  A recorded origin is an association, not a complete call chain."] : []),
-    ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; ${categoryRecovery({ answerJson: "includes all" })}`] : []),
-    ...reachedGroup(value, detail, owner, handler === undefined || selectable({ kind: "handler-origins", owner, handler: { path: handler.path, symbol: handler.symbol, line: handler.line } })),
-    ...consequenceLines(value, detail, owner, module === undefined || selectable({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } }), narrowable),
+    ...(handlerExample === undefined || value.entrypoints.some((entrypoint) => /\s/.test(entrypoint.handler.symbol)) || (context !== undefined && !canSelect(context, handlerExample, owner.kind === "section")) ? [] : [value.entrypoints.length === 1 ? `  lookup example: ${literalSelection(handlerExample)}` : sharedLookup("Handler", "<path>:<line>[-<endLine>] -> <symbol>", "handler path, line and symbol (not endLine)", handlerExample)]),
+    ...(moduleExample === undefined || (context !== undefined && !canSelect(context, moduleExample, owner.kind === "section")) ? [] : [value.modules!.modules.length === 1 ? `  lookup example: ${literalSelection(moduleExample)}` : sharedLookup("Module", "<file> <snapshot>", "module snapshot and file", moduleExample)]),
+    ...(value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? ["Origin indexes join seeds; an association is not a complete call chain."] : []),
+    ...(owner.kind === "local" && context?.recovery?.status === "unavailable" ? [`Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`] : []),
   ];
 }
 
 /**
- * Impacted symbols and module dependencies. A change's summary that the request can narrow with `changed` counts both
- * per changed area instead, when that is not longer.
+ * The traversal bound a cut provably came from. Depth and hub cuts come only from symbol and module walks, and a walk
+ * records its bounds in its own declared config, so a matching limit names the request's budget field. A caller-budget
+ * cut may also come from an export, so it never names one; neither does any other kind.
  */
-function consequenceLines(value: ImpactValue, detail: RenderDetail, owner: ImpactOwner, selectable: boolean, narrowable: boolean): string[] {
-  const listed = [...impactedSymbols(value, detail), ...(value.modules === undefined ? [] : moduleLines(value.modules, detail, owner, selectable))];
-  const symbols = consequenceSymbols(value);
-  const areas = detail === "summary" && narrowable && value.mergeBase !== undefined && symbols.length > 0
-    ? changeAreas([...value.seeds.map((seed) => seed.file), ...(value.modules?.origins.map((origin) => origin.file) ?? [])])
-    : undefined;
-  if (areas === undefined) return listed;
-  const counted = [...areaLines(value, areas, symbols), ...(value.modules === undefined ? [] : moduleLines(value.modules, detail, owner, selectable, true))];
-  return size(counted) <= size(listed) ? counted : listed;
-}
-
-function moduleLines(value: ModuleImpactValue, detail: RenderDetail, owner: ImpactOwner, selectable = true, countedByArea = false): string[] {
-  const originListing = value.origins.map((origin) => `  ${origin.file} (${origin.change})`);
-  const counts = [...Map.groupBy(value.origins, (origin) => origin.change)].map(([change, group]) => `${group.length} ${change}`).join(", ");
-  const originCount = [`  ${value.origins.length} origins (${counts}); ${categoryRecovery({ answerJson: "includes every origin" })}`];
-  const origins = value.origins.length > 0 && size(originCount) < size(originListing) ? originCount : originListing;
-  const nearest = value.modules.reduce((depth, module) => module.depth > 0 ? Math.min(depth, module.depth) : depth, Infinity);
-  const shown = value.modules.filter((module) => module.depth === 0 || module.depth === nearest);
-  type Module = ModuleImpactValue["modules"][number];
-  const context = (module: Module): string => {
-    const count = module.origins.length;
-    const first = value.origins[module.origins[0] ?? -1];
-    const example = detail === "details" && first !== undefined ? `; origin ${first.file} (${first.change})` : "";
-    return `${count} origin ${count === 1 ? "association" : "associations"}${example}`;
-  };
-  const line = (module: Module, includeContext: boolean, compact: boolean): string =>
-    `  ${compact ? `${module.snapshot} ${module.file}` : `[lookup example: ${literalSelection({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}]`} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at line ${module.via.line} in this module${module.via.typeOnly ? " (type-only)" : ""}`}`;
-  const grouped = (modules: readonly Module[], compact = !selectable): string[] => {
-    const lines: string[] = [];
-    for (let start = 0; start < modules.length;) {
-      const first = modules[start]!;
-      const key = JSON.stringify(first.origins);
-      let end = start + 1;
-      while (end < modules.length && JSON.stringify(modules[end]!.origins) === key) end++;
-      const run = modules.slice(start, end);
-      const separate = run.map((module) => line(module, true, compact));
-      const shared = [`  shared ${context(first)}:`, ...run.map((module) => `  ${line(module, false, compact)}`)];
-      lines.push(...(run.length > 1 && size(shared) < size(separate) ? shared : separate));
-      start = end;
-    }
-    return lines;
-  };
-  const listing = grouped(value.modules);
-  const omitted = value.modules.length - shown.length;
-  const omittedNote = omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; answer.json includes their recorded evidence.`];
-  const nearestListing = [...grouped(shown), ...omittedNote];
-  const useNearest = omitted > 0 && size(nearestListing) < size(listing);
-  const selectedModules = useNearest ? shown : value.modules;
-  const selected = useNearest ? nearestListing : listing;
-  const first = selectedModules[0];
-  const lookupShared = first === undefined || !selectable ? selected : [
-    sharedLookup("Module", "<snapshot> <file>", "module snapshot and file", { kind: "module-origins", owner, module: { file: first.file, snapshot: first.snapshot } }),
-    ...grouped(selectedModules, true),
-    ...(useNearest ? omittedNote : []),
-  ];
-  if (countedByArea) {
-    return [
-      `module origins (${value.origins.length}):`, ...origins,
-      `module dependencies (${value.modules.length}, not symbol or entrypoint impact): counted per changed area above; ${categoryRecovery({ answerJson: "includes every module" })}`,
-      `module expansions: ${value.cost.expansionsUsed}`,
-    ];
-  }
-  return [
-    `module origins (${value.origins.length}):`, ...origins,
-    `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`,
-    ...(value.modules.some((module) => module.origins.length > (detail === "details" ? 1 : 0)) ? [selectedModules.length === 1
-      ? `  ${categoryRecovery({ answerJson: "has all origins." })}`
-      : `  Origin counts/examples below belong to each module; ${categoryRecovery({ answerJson: "includes all" })} recorded associations for this owner.`] : []), ...(size(lookupShared) < size(selected) ? lookupShared : selected),
-    `module expansions: ${value.cost.expansionsUsed}`,
-  ];
-}
-
-/** The ranges and hunks a query set aside (ADR-0043 decisions 3 and 5): one summary count per basis, or one line per entry. */
-function impactSettled(value: ImpactValue, detail: RenderDetail): string[] {
-  const settled = value.settled ?? [];
-  if (settled.length === 0) return [];
-  if (detail === "summary") {
-    const hunks = settled.filter((change) => change.basis === "hunk").length;
-    const ranges = settled.length - hunks;
-    return [...(hunks === 0 ? [] : [`${hunks} changed hunks alter no token`]), ...(ranges === 0 ? [] : [`${ranges} requested ranges hold no token`])];
-  }
-  return settled.map((change) => {
-    if (change.basis === "range") return `  ${change.file} ${spanText(change.start, change.end)} (${change.reason})`;
-    const sides = [change.base === undefined ? undefined : `base ${spanText(change.base.start, change.base.end)}`, change.head === undefined ? undefined : `head ${spanText(change.head.start, change.head.end)}`].filter((side) => side !== undefined);
-    return `  ${change.file} ${sides.join(" -> ")} (${change.reason})`;
-  });
-}
-
-function impactSeeds(value: ImpactValue, detail: RenderDetail): string[] {
-  if (detail === "summary") return [`seeds (${value.seeds.length}):`, ...groupedSeeds(value.seeds)];
-  const dependencies = new Set(investigationSymbols(value).flatMap((symbol) => symbol.via === undefined ? [] : [`${symbol.via.file}\0${symbol.via.symbol}`]));
-  const shown: Seed[] = [];
-  const omitted: Seed[] = [];
-  for (const seed of value.seeds) {
-    (seed.basis === "requested" || dependencies.has(`${seed.file}\0${seed.symbol}`) ? shown : omitted).push(seed);
-  }
-  const evidence = [...seedListing(shown), ...seedSummary(omitted)];
-  const literal = seedListing(value.seeds);
-  return [`seeds (${value.seeds.length}):`, ...(size(evidence) <= size(literal) ? evidence : literal)];
-}
-
-/** Keep file and consecutive basis context with the seeds it describes. */
-function seedListing(seeds: readonly Seed[]): string[] {
-  return [...Map.groupBy(seeds, (seed) => seed.file)].flatMap(([file, inFile]) => {
-    const bases = new Set(inFile.map((seed) => seed.basis));
-    const [shared] = bases;
-    if (bases.size === 1 && shared !== undefined) return [`  ${file} (${shared})`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)];
-    const rows: string[] = [`  ${file}`];
-    for (let start = 0; start < inFile.length;) {
-      const first = inFile[start]!;
-      let end = start + 1;
-      while (end < inFile.length && inFile[end]!.basis === first.basis) end++;
-      const run = inFile.slice(start, end);
-      const literal = run.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol} (${seed.basis})`);
-      const grouped = [`    (${first.basis})`, ...run.map((seed) => `      ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)];
-      rows.push(...(size(grouped) < size(literal) ? grouped : literal));
-      start = end;
-    }
-    return rows;
-  });
-}
-
-/** Requested declarations remain explicit; the other origins are counted across the change, by selection basis. */
-function seedSummary(seeds: readonly Seed[]): string[] {
-  const requested = seeds.filter((seed) => seed.basis === "requested");
-  const rest = seeds.filter((seed) => seed.basis !== "requested");
-  const files = new Set(rest.map((seed) => seed.file));
-  const bases = [...Map.groupBy(rest, (seed) => seed.basis)].toSorted(([a], [b]) => compareText(a, b)).map(([basis, group]) => `${basis} ${group.length}`);
-  return [
-    ...seedListing(requested),
-    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); ${categoryRecovery({ answerJson: "includes every seed" })}`]),
-  ];
-}
-
-/** The seeds of a summary: every one up to the listed bound, beyond it the requested ones and a count of the others. */
-function groupedSeeds(seeds: readonly Seed[]): string[] {
-  return seeds.filter((seed) => seed.basis !== "requested").length <= LISTED_ITEMS ? seedListing(seeds) : seedSummary(seeds);
-}
-
 function impactCuts(cuts: readonly Cut[], detail: RenderDetail): string[] {
   if (cuts.length === 0) return [];
   const dependencies = dependencyCutLines(cuts, detail);
@@ -761,11 +337,6 @@ function referencePlacesNote(cuts: readonly Cut[]): string[] {
   return cuts.some((cut) => cut.kind === "unresolved-link") ? ['  reference places counted; answer.json includes every place'] : [];
 }
 
-/**
- * The traversal bound a cut provably came from. Depth and hub cuts come only from symbol and module walks, and a walk
- * records its bounds in its own declared config, so a matching limit names the request's budget field. A caller-budget
- * cut may also come from an export, so it never names one; neither does any other kind.
- */
 function walkBoundRemedies(cuts: readonly Cut[], walk: WalkBounds | undefined): string[] {
   return ([["depth", "depth"], ["hub", "hubFanIn"]] as const).flatMap(([kind, field]) => {
     const limit = walk?.[field];
@@ -773,33 +344,6 @@ function walkBoundRemedies(cuts: readonly Cut[], walk: WalkBounds | undefined): 
       ? [`  ${kind} cuts stopped at the walk bound budget.${field} ${limit}; a new query with a larger budget.${field} walks further at more cost; it does not filter this result.`]
       : [];
   });
-}
-
-/** Bind narrative and selection coordinates once, retaining original cut order and per-cut metadata. */
-function impactCutBlock(cuts: readonly Cut[], detail: RenderDetail, owner: CutOwner, context?: RenderContext, walk?: WalkBounds): string[] {
-  return [...impactCutLayout(cuts, detail, owner, context), ...walkBoundRemedies(cuts, walk)];
-}
-
-function impactCutLayout(cuts: readonly Cut[], detail: RenderDetail, owner: CutOwner, context?: RenderContext): string[] {
-  const literal = [...impactCuts(cuts, detail), ...cutCoordinates(cuts, owner, detail, context)];
-  if (detail !== "details" || cuts.length === 0) return literal;
-  const shared = [CUTS, cutContextLine(owner, 0, context)];
-  let previous: Cut | undefined;
-  for (const [cutIndex, cut] of cuts.entries()) {
-    if (cut.kind !== previous?.kind) shared.push(`  ${cut.kind}:`);
-    const coordinate = `cutIndex ${cutIndex}`;
-    if (cut.kind === "unresolved-link") {
-      if (previous?.kind !== cut.kind || previous.at[0] !== cut.at[0]) shared.push(`    anchor ${JSON.stringify(cut.at[0])}:`);
-      const places = Math.max(0, cut.at.length - 1);
-      const reasons = placeReasons(cut);
-      shared.push(`      ${coordinate}; ${cutReasonText(cut)}; ${places} reference ${places === 1 ? "place" : "places"}${cut.limit === undefined ? "" : `; limit ${cut.limit}`}${reasons.length === 0 ? "" : `; spellings ${JSON.stringify(reasons)}`}${reassignedAt([cut])}`);
-    } else {
-      shared.push(`    ${coordinate}; ${cutRowLabel(cut) === cut.kind ? "" : `${cutReasonText(cut)}; `}${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`);
-    }
-    previous = cut;
-  }
-  shared.push(...referencePlacesNote(cuts));
-  return size(shared) < size(literal) ? shared : literal;
 }
 
 function impactLookups(value: ImpactValue, path: string, context?: RenderContext): string[] {
@@ -936,10 +480,9 @@ function textModeGuide(coordinates: readonly string[]): string[] {
 
 export function renderImpact(fact: Fact<ImpactValue>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : localImpactGuide(fact, context)).join("\n");
-  const lines = headerLines(fact);
+  const lines = [write(presentImpact(fact, fact.status !== "unknown" && literalHandlers(fact.value, { kind: "local" }, context)), detail).text];
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
-  const hasOmissions = fact.status === "partial" || fact.value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) || consequenceSymbols(fact.value).length > investigationSymbols(fact.value).length || fact.value.modules !== undefined;
-  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactSettled(fact.value, detail), ...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context, fact.inputs.declaredConfig.walk), ...(hasOmissions ? textModeGuide(localQueryCoordinates(fact, context, detail)) : []));
+  lines.push(...impactGuidance(fact.value, { kind: "local" }, context), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context), ...walkBoundRemedies(cutsOf(fact), fact.inputs.declaredConfig.walk), ...(fact.status === "partial" || fact.value.modules !== undefined || fact.value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) || fact.value.symbols.some((symbol) => symbol.depth > 1 || symbol.via?.basis === "contains" || symbol.via?.basis === "dispatch") ? textModeGuide(localQueryCoordinates(fact, context, detail)) : []));
   return lines.join("\n");
 }
 
@@ -1293,14 +836,13 @@ function unrelatedText({ unmatched, external, unresolved }: NonNullable<RepoImpa
   return [["unmatched", unmatched], ["external", external], ["unresolved", unresolved]].filter(([, count]) => count !== 0).map(([label, count]) => `${count} ${label}`).join(", ");
 }
 
-function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: RenderDetail, bound: string, context?: RenderContext): string[] {
+function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: RenderDetail, context?: RenderContext): string[] {
   if (section.status === "unknown") return [`  ${repo}: unknown (${section.reason})`];
   const { value } = section;
   return [
     `  ${repo}: ${section.status}`,
     ...value.reads.flatMap(({ kind, fact }) => fact.status === "unknown" ? [`    ${kind}: unknown (${fact.reason})`] : []),
     ...callSiteBlock("call sites that land in what the walk reached", value.callSites),
-    ...(value.impact === undefined || repo === bound ? [] : impactBody(value.impact, detail, { kind: "section", repo }, context, false).map((line) => `    ${line}`)),
     ...callSiteBlock("unmatched", value.unmatched),
     ...callSiteBlock("external", value.external),
     ...(value.unrelated === undefined ? [] : [`    not in this question: ${unrelatedText(value.unrelated)}; ye_ast_workspace lists them`]),
@@ -1311,36 +853,34 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Render
 
 export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : [...workspaceImpactGuide(fact, context), REQUEST_SITE_GUIDE]).join("\n");
-  const lines = headerLines(fact, fact.status === "unknown" ? {} : { unknownSection: unknownSectionIn(fact.value.sections) });
+  const literalOwners = new Set(fact.status === "unknown" ? [] : Object.entries(fact.value.sections).flatMap(([repo, section]) => section.status !== "unknown" && section.value.impact !== undefined && literalHandlers(section.value.impact, { kind: "section", repo }, context) ? [repo] : []));
+  const lines = [write(presentWorkspace(fact, literalOwners), detail).text];
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
   const { value } = fact;
-  const trigger = value.sections[value.trigger.repo];
+  if (context?.recovery?.status === "unavailable") lines.push(`Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`);
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   lines.push(sourceLine(value.workspace.source));
   lines.push(`bound repository: ${value.trigger.repo}`);
   lines.push(`gateway prefixes (${value.workspace.gateways.length}):`, ...value.workspace.gateways.map(({ prefix, repo, basis }) => `  - ${prefix} -> ${repo} (${basis})`));
   const stale = value.workspace.unmatchedGateways;
   if (stale.length > 0) lines.push(`declared gateways that matched nothing (${stale.length}):`, ...stale.map(({ prefix, repo }) => `  - ${prefix} -> ${repo}`));
-  if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail, { kind: "section", repo: value.trigger.repo }, context));
+
   const linkIndexes = new Map(value.links.map(({ link }, index) => [link.id, index + 1]));
   if (value.links.some(({ direction }) => direction === "downstream")) lines.push("Downstream links identify invoked destinations; a destination is not necessarily affected by the change.");
   lines.push(`links across and inside repositories (${value.links.length}):${value.links.some(({ reach }) => reach.length > 0) ? " reach lists link numbers nearest to the change first" : ""}`, ...value.links.map((link) => impactedLinkLine(link, linkIndexes)));
-  lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo, context))));
+  lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, context))));
   const unserved = counted("no local repository serves", value.workspace.unserved);
   const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): ${categoryRecovery({ answerJson: "includes all" })} names`;
   lines.push(value.workspace.unserved.length > 0 && size([unservedSummary]) <= size([unserved]) ? unservedSummary : unserved);
   if (value.workspace.unserved.length > 0 || stale.length > 0) lines.push(DECISIONS_HINT);
-  lines.push("walk origins:", ...value.workspace.repos.flatMap((repo) => {
-    const section = value.sections[repo];
-    if (section === undefined || section.status === "unknown" || section.value.impact === undefined) return [];
-    return [`  ${repo}:`, ...impactSeeds(section.value.impact, detail).map((line) => `    ${line}`)];
-  }));
-  lines.push(...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context, fact.inputs.declaredConfig.walk));
+  lines.push(...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context), ...walkBoundRemedies(cutsOf(fact), fact.inputs.declaredConfig.walk));
   for (const repo of value.workspace.repos) {
     const section = value.sections[repo];
     if (section === undefined || section.status === "unknown") continue;
-    if (section.status === "partial") lines.push(`cuts for repository ${repo}:`, ...impactCutBlock(section.cuts, detail, { kind: "section", repo }, context, section.inputs.declaredConfig.walk).slice(1));
+    if (section.value.impact !== undefined) lines.push(...impactGuidance(section.value.impact, { kind: "section", repo }, context));
+    lines.push(...cutCoordinates(cutsOf(section), { kind: "section", repo }, detail, context), ...walkBoundRemedies(cutsOf(section), section.inputs.declaredConfig.walk));
   }
+
   const recorded = value.links.length > 0 || Object.values(value.sections).some((section) => section.status !== "unknown" && section.value.impact !== undefined && impactHasRecords(section.value.impact));
   if (fact.status === "partial" || recorded) lines.push(...textModeGuide([...(crossRepository(value) ? [workspaceOwnerGuide(detail)] : []), ...workspaceBaseModuleGuides(value, detail), workspaceSnapshotGuide(fact, context)]));
   return lines.join("\n");

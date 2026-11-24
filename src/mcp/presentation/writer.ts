@@ -18,7 +18,7 @@ export interface WriteOptions {
 }
 
 interface Rendered { lines: string[]; printed: PrintedRow[]; elided: ElidedRows[] }
-interface Context { section: Section; mode: ResponseMode; seen: Set<string>; printed: PrintedRow[]; numbers: ReadonlyMap<Row, number> }
+interface Context { section: Section; mode: ResponseMode; previousFile?: string; printed: PrintedRow[]; numbers: ReadonlyMap<Row, number> }
 
 const ROLE_ORDER: readonly SectionRole[] = ["answer", "completeness", "context"];
 const indent = (level: number) => "  ".repeat(level);
@@ -59,12 +59,11 @@ function hiddenRows(section: Section, listed: number): readonly Row[] {
 
 function layoutSection(section: Section, rows: readonly Row[], mode: ResponseMode, hidden: readonly Row[]): Rendered {
   const numbers = new Map(section.numbered === true ? section.rows.map((row, position) => [row, position] as const) : []);
-  const context: Context = { section, mode, seen: new Set(), printed: [], numbers };
+  const context: Context = { section, mode, printed: [], numbers };
   const lines = [`${section.title}:`];
   if (section.layout === "by-file") {
     for (const [group, inGroup] of Map.groupBy(rows, (row) => row.place === undefined ? undefined : fileKey(row.place))) {
       if (group !== undefined) {
-        context.seen.add(group);
         lines.push(`${indent(1)}${fileText(inGroup[0]!.place!)}`);
       }
       lines.push(...sequence(inGroup, group === undefined ? 1 : 2, context, group));
@@ -128,11 +127,12 @@ function block(row: Row, level: number, context: Context, group?: string): { hea
 }
 
 function placeText(place: Place | undefined, context: Context, group: string | undefined): string {
-  if (place === undefined) return "";
+  if (place === undefined) { delete context.previousFile; return ""; }
   const file = fileKey(place);
   if (file === group) return spanText(place);
-  if (context.seen.has(file)) return place.line === undefined ? "" : `:${spanText(place)}`;
-  context.seen.add(file);
+  const previous = context.previousFile;
+  context.previousFile = file;
+  if (previous === file) return place.line === undefined ? "" : `:${spanText(place)}`;
   return place.line === undefined ? fileText(place) : `${fileText(place)}:${spanText(place)}`;
 }
 

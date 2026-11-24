@@ -170,8 +170,8 @@ test("handler and module examples obey the same registered-tool capability polic
   for (const mode of ["summary", "details"] as const) {
     const unsupported = renderImpact(fact, mode, { tool: "entrypoints" });
     assert.doesNotMatch(unsupported, /"kind":"handler-origins"|"kind":"module-origins"/);
-    assert.match(unsupported, /-> src\/h\.ts:7-12 run \(depth/);
-    assert.match(unsupported, /base src\/m.ts/);
+    assert.match(unsupported, /src\/h\.ts\n {4}7-12 job job -> run \(depth/);
+    assert.match(unsupported, /src\/m.ts base/);
     const callers = renderImpact(fact, mode, { tool: "callers" });
     assert.match(callers, /"kind":"handler-origins"/);
     assert.doesNotMatch(callers, /"kind":"module-origins"/);

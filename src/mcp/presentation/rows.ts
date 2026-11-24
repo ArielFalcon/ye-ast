@@ -42,7 +42,7 @@ function cutRow(cut: Cut): Row {
   const places = cut.kind === "section" ? [] : [...cut.at, ...(cut.cause ?? [])];
   return {
     key,
-    label: cut.kind === "section" ? `${cutRowLabel(cut)}: ${cut.at.join(", ")}` : cutRowLabel(cut),
+    label: `${cut.kind === "section" ? `${cutRowLabel(cut)}: ${cut.at.join(", ")}` : cutRowLabel(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`,
     ...(places.length === 0 ? {} : { children: places.map((at) => ({ key: `${key}\0${at}`, label: at })) }),
   };
 }
@@ -114,11 +114,15 @@ function foundRow(finding: Extract<Finding<Entrypoint>, { status: "complete" }>,
   };
 }
 
-function reachedRow(reached: ReachedEntrypoint, repo?: string): Row {
+export interface ReachedOptions { seeds?: readonly Seed[]; handlerSelector?: string }
+
+function reachedRow(reached: ReachedEntrypoint, repo: string | undefined, options: ReachedOptions): Row {
   const place = placeOfHandler(reached.handler);
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const qualifiers: Qualifier[] = [
     { name: "depth", value: String(reached.depth) },
+    ...(reached.seeds.length === 0 ? [] : [{ name: "origins", value: reached.seeds.join(", ") }]),
+    ...(options.handlerSelector === undefined ? [] : [{ name: "lookup example:", value: options.handlerSelector }]),
     ...(reached.confidence < 1 ? [{ name: "confidence", value: String(reached.confidence) }] : []),
     ...(reached.declaredAt === undefined ? [] : [{ name: "at", value: spanOf(reached.declaredAt) }]),
   ];
@@ -128,7 +132,8 @@ function reachedRow(reached: ReachedEntrypoint, repo?: string): Row {
     place,
     label: `${name} -> ${reached.handler.symbol}`,
     qualifiers,
-    ...(observations.length === 0 ? {} : { children: observations }),
+    ...(observations.length === 0 ? {} : { children: observations, childrenAreAnswer: true }),
+    ...(options.seeds === undefined ? {} : { evidence: reached.seeds.flatMap((index) => { const seed = options.seeds![index]; return seed === undefined ? [] : [{ path: seed.file, line: seed.line, ...(seed.endLine === undefined ? {} : { endLine: seed.endLine }) }]; }) }),
   };
 }
 
@@ -137,7 +142,16 @@ function reachedRow(reached: ReachedEntrypoint, repo?: string): Row {
  * repository, kind, name and place, so the same entrypoint has one key whichever family states it. A UI route's guards
  * are its children, and the place its route entry is declared at is a qualifier.
  */
-export function entrypointRow(source: Finding<Entrypoint> | ReachedEntrypoint, repo?: string): Row {
-  if ("depth" in source) return reachedRow(source, repo);
-  return source.status === "unknown" ? unknownRow(source, repo) : foundRow(source, repo);
+export function entrypointRow(source: Finding<Entrypoint> | ReachedEntrypoint, repo?: string, options: ReachedOptions = {}): Row {
+  const row = "depth" in source ? reachedRow(source, repo, options) : source.status === "unknown" ? unknownRow(source, repo) : foundRow(source, repo);
+  return repo === undefined ? row : repositoryRow(row, repo);
+}
+
+function repositoryRow(row: Row, repo: string): Row {
+  return {
+    ...row,
+    ...(row.place === undefined ? {} : { place: { ...row.place, repo } }),
+    ...(row.evidence === undefined ? {} : { evidence: row.evidence.map((place) => ({ ...place, repo })) }),
+    ...(row.children === undefined ? {} : { children: row.children.map((child) => repositoryRow(child, repo)) }),
+  };
 }
