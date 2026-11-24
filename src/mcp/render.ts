@@ -15,12 +15,10 @@ import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineUse, Out
 import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
 import type { ExternalCalls, IssuingPlace, TraceLinked, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
-import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import { FUNCTION_VALUE_AWAITS_JDK, type Cut, type Fact, type SnapshotRef, type WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
-import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
@@ -35,6 +33,8 @@ import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { blockBytes as size, preferShorterText, shareExactContext } from "./presentation-sharing.ts";
 import { LISTED_ITEMS } from "./render-budget.ts";
 import { present as presentEntrypoints } from "./presentation/families/entrypoints.ts";
+import { present as presentWorkspace } from "./presentation/families/workspace.ts";
+import { present as presentDecisions } from "./presentation/families/decisions.ts";
 import { write } from "./presentation/writer.ts";
 
 const NONE = "  (none)";
@@ -1371,143 +1371,6 @@ export function renderRefresh(refresh: WorkspaceRefresh): string[] {
   return [...refresh.freshness.map(remoteLine), ...refresh.resolution.map(pinnedLine)];
 }
 
-/** The links of the two lists a workspace answer prints, and whether each list prints its links one by one. */
-interface PrintedLinks {
-  across: { links: readonly Link[]; listed: boolean };
-  inside: { links: readonly Link[]; listed: boolean };
-}
-
-const linkPlaceKey = (repo: string, path: string, line: number): string => JSON.stringify([repo, path, line]);
-
-/**
- * The links a `link` candidate is served through, as positions in each list: those into its repository that start at a
- * place of its evidence. `undefined` unless every place of the evidence starts one of them, so a place no link accounts
- * for is never dropped.
- */
-function servingLinks(candidate: NameCandidate, { across, inside }: PrintedLinks): { across: number[]; inside: number[] } | undefined {
-  if (candidate.basis !== "link" || candidate.evidence.length === 0) return undefined;
-  const places = new Set(candidate.evidence.map(({ repo, path, line }) => linkPlaceKey(repo, path, line)));
-  const served = (links: readonly Link[]) => links.flatMap((link, index) => link.to.repo === candidate.repo && places.has(linkPlaceKey(link.from.repo, link.from.file, link.from.line)) ? [index] : []);
-  const through = { across: served(across.links), inside: served(inside.links) };
-  const starts = new Set([...through.across.map((index) => across.links[index]!), ...through.inside.map((index) => inside.links[index]!)].map(({ from }) => linkPlaceKey(from.repo, from.file, from.line)));
-  return [...places].every((place) => starts.has(place)) ? through : undefined;
-}
-
-/** Positions as the link lines number them: one-based, runs of consecutive numbers as `first-last`. */
-function numberRuns(positions: readonly number[]): string {
-  const runs: string[] = [];
-  for (let start = 0; start < positions.length;) {
-    let end = start;
-    while (end + 1 < positions.length && positions[end + 1] === positions[end]! + 1) end++;
-    runs.push(end === start ? `${positions[start]! + 1}` : `${positions[start]! + 1}-${positions[end]! + 1}`);
-    start = end + 1;
-  }
-  return runs.join(", ");
-}
-
-/** A candidate says which printed links serve it, or how many when the list is counted, instead of repeating their places. */
-function candidateLine(candidate: NameCandidate, printed: PrintedLinks): string {
-  const through = servingLinks(candidate, printed);
-  const said = through === undefined ? undefined : [
-    ...(through.across.length === 0 ? [] : [printed.across.listed ? `links ${numberRuns(through.across)}` : plural(through.across.length, "link")]),
-    ...(through.inside.length === 0 ? [] : [printed.inside.listed ? `inside links ${numberRuns(through.inside)}` : `${plural(through.inside.length, "link")} inside one repository`]),
-  ].join("; ");
-  const places = candidate.evidence.length === 0 ? "" : `; ${candidate.evidence.map(repositoryEvidenceText).join(", ")}`;
-  return `  - ${candidate.name} -> ${candidate.repo} (${candidate.basis}${said === undefined ? places : `; ${said}`})`;
-}
-
-/** The order the text lists outward kinds in: what the repository calls first, what it consumes last. */
-const OUTWARD_ORDER: Readonly<Record<OutwardKind, number>> = {
-  "path-prefix": 0,
-  "http-host": 1,
-  "configuration-url": 2,
-  destination: 3,
-  registry: 4,
-  remote: 5,
-  dependency: 6,
-};
-
-/** The order the text lists decisions in: a form is filled top-down by what blocks the answer, then by what locates a clone. */
-const DECISION_ORDER: Readonly<Record<DecisionKind, number>> = {
-  trust: 0,
-  gateway: 1,
-  library: 2,
-  repository: 3,
-  membership: 4,
-  remote: 5,
-  revision: 6,
-};
-
-/** The items grouped by the rank their key holds in `order`, the groups in that order. */
-function groupedByRank<T, K extends string>(items: readonly T[], keyOf: (item: T) => K, order: Readonly<Record<K, number>>): [K, T[]][] {
-  return [...Map.groupBy(items, keyOf)].toSorted(([a], [b]) => order[a] - order[b]);
-}
-
-/** The names of one repository under their kind: a summary lists a dependency only when a repository given serves it,
- * and counts the rest, since a dependency is what the repository consumes and not what it calls. */
-function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: RenderDetail, indexed: false | "complete" | "locations" = false): string[] {
-  const entries = names.map((name, index) => ({ name, index }));
-  const ranked = groupedByRank(entries, (entry) => entry.name.kind, OUTWARD_ORDER);
-  const firstWriting = new Map<string, OutwardName>();
-  for (const { name } of ranked.filter(([kind]) => detail === "details" || kind !== "dependency").flatMap(([, ofKind]) => ofKind)) {
-    const key = canonicalJson(name.evidence);
-    if (name.evidence.length > 0 && !firstWriting.has(key)) firstWriting.set(key, name);
-  }
-  /** The host and the prefix of one base write the same calls: the places are said once, under the first name that writes them. */
-  const placesOrSame = (name: OutwardName): string => {
-    const places = name.evidence.map(evidenceText).join(", ");
-    const first = firstWriting.get(canonicalJson(name.evidence));
-    const same = first === undefined || first === name || indexed === "locations" ? undefined : `same places as ${first.name}`;
-    return same !== undefined && same.length < places.length ? same : places;
-  };
-  return ranked.flatMap(([kind, ofKind]) => {
-    const listed = detail === "details" || kind !== "dependency" ? ofKind : ofKind.filter(({ name }) => served.has(name.name));
-    const counted = ofKind.length - listed.length;
-    const head =
-      counted === 0 ? `    ${kind} (${ofKind.length}):`
-      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; ${categoryRecovery({ details: "lists them", answerJson: "retains all recorded names" })}`
-      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; ${categoryRecovery({ details: "lists them", answerJson: "retains all recorded names" })}`;
-    const line = ({ name, index }: { name: OutwardName; index: number }): string => `      - ${indexed ? `[${index}] ` : ""}${name.name} (${indexed === "complete" ? JSON.stringify(name.evidence) : placesOrSame(name)})`;
-    const listing = [head, ...ofKind.map(line)];
-    const summarized = [head, ...listed.map(line)];
-    return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
-  });
-}
-
-/** The names no repository given serves: a summary lists what the repository could call and counts the coordinates it consumes. */
-function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: RenderDetail): string[] {
-  if (unserved.length === 0) return ["no local repository serves (0):", NONE];
-  const listed = detail === "details" ? unserved : unserved.filter((name) => name.kind !== "dependency");
-  const counted = unserved.length - listed.length;
-  const head = `no local repository serves (${unserved.length}):`;
-  const listing = [head, ...unserved.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
-  if (counted === 0) return listing;
-  const summarized = [`${head} ${counted} dependency counted; ${categoryRecovery({ details: "lists them", answerJson: "retains all recorded names" })}`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
-  return size(summarized) <= size(listing) ? summarized : listing;
-}
-
-/**
- * The names written only after an undecided base that no repository serves (ADR-0107): not unserved and no decision, so a
- * summary counts each name's places, details lists them, and names that share the same places say them once.
- */
-function undecidedBaseBlock(names: readonly RepositoryOutwardName[] | undefined, detail: RenderDetail): string[] {
-  if (names === undefined || names.length === 0) return [];
-  const head = `names whose base is undecided (${names.length}): written only after an undecided base, so none is called unserved and none is a decision${detail === "details" ? "" : `; ${categoryRecovery({ details: "lists the places" })}`}`;
-  const firstWriting = new Map<number, RepositoryOutwardName>();
-  const lines = shareExactContext(names, (name) => name.evidence).rows.map(({ value: name, contextIndex }) => {
-    const label = `  - ${name.kind} ${name.name}`;
-    if (detail !== "details") {
-      const repos = [...new Set(name.evidence.map(({ repo }) => repo))];
-      return `${label} (${name.evidence.length} ${name.evidence.length === 1 ? "place" : "places"} in ${repos.join(", ")})`;
-    }
-    const places = name.evidence.map(repositoryEvidenceText).join(", ");
-    const first = firstWriting.get(contextIndex);
-    if (first === undefined) firstWriting.set(contextIndex, name);
-    return `${label} (${first === undefined ? places : preferShorterText(places, `same places as ${first.name}`)})`;
-  });
-  return [head, ...lines];
-}
-
 const REQUEST_SITE_GUIDE = "A wrapper request is sited at the call supplying its parameters; the stated request names the path written in code. For a suffix-only match, inspect the gateway prefix or server configuration that would declare the full path.";
 
 /** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
@@ -1526,51 +1389,6 @@ function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: RenderD
   return [...unresolvedFiles(sites, detail), ...(sites.length === 0 ? [] : [`    ${REQUEST_SITE_GUIDE}`])];
 }
 
-/** The causes a summary lists first, the ones closest to a request; any other cause follows, sorted. */
-const UNRESOLVED_CAUSE_ORDER: readonly string[] = ["destination-undecidable", "recursive", "dispatch-disagreement", "source-not-read", "request-not-found"];
-
-function unresolvedCause(site: UnresolvedCallSite): string {
-  return site.diagnostic?.cause ?? site.reason;
-}
-
-function compareUnresolvedCauses(a: string, b: string): number {
-  const rank = (cause: string): number => { const index = UNRESOLVED_CAUSE_ORDER.indexOf(cause); return index < 0 ? UNRESOLVED_CAUSE_ORDER.length : index; };
-  return rank(a) - rank(b) || compareText(a, b);
-}
-
-/**
- * The summary of the unresolved sites by cause: a site is listed when its code states the request or it sits in a file
- * a link or an unlinked call site starts from; the others are counted with their files and repositories.
- */
-function unresolvedByCause(sections: readonly (readonly [string, readonly UnresolvedCallSite[]])[], total: number, anchors: ReadonlySet<string>): string[] {
-  const entries = sections.flatMap(([repo, sites]) => sites.map((site) => ({ repo, site })));
-  const causes = [...Map.groupBy(entries, ({ site }) => unresolvedCause(site))].toSorted(([a], [b]) => compareUnresolvedCauses(a, b));
-  return [
-    `unresolved call sites (${total}): ${causes.map(([cause, inCause]) => `${cause} ${inCause.length}`).join(", ")}`,
-    ...causes.flatMap(([cause, inCause]) => {
-      const shown = ({ repo, site }: (typeof entries)[number]): boolean => site.stated !== undefined || anchors.has(JSON.stringify([repo, site.path]));
-      const omitted = inCause.filter((entry) => !shown(entry));
-      const perRepo = sections.map(([repo]) => [repo, omitted.filter((entry) => entry.repo === repo).length] as const).filter(([, count]) => count > 0);
-      const files = new Set(omitted.map(({ repo, site }) => JSON.stringify([repo, site.path])));
-      return [
-        `  ${cause} (${inCause.length}${throughLibraries(inCause.map(({ site }) => site))}):`,
-        ...sections.flatMap(([repo]) => {
-          const listed = inCause.filter((entry) => entry.repo === repo && shown(entry));
-          return listed.length === 0 ? [] : [`    ${repo}:`, ...unresolvedFiles(listed.map(({ site }) => site), "summary").map((line) => `  ${line}`)];
-        }),
-        ...(omitted.length === 0 ? [] : [`    not listed: ${omitted.length} in ${files.size} ${files.size === 1 ? "file" : "files"} (${perRepo.map(([repo, count]) => `${repo} ${count}`).join(", ")}); ${categoryRecovery({ details: "lists them", answerJson: "retains all recorded sites" })}`]),
-      ];
-    }),
-    `  ${REQUEST_SITE_GUIDE}`,
-  ];
-}
-
-/** The libraries the sites of a cause go through, with their counts: what the code calls and the workspace does not serve. */
-function throughLibraries(sites: readonly UnresolvedCallSite[]): string {
-  const counts = [...Map.groupBy(sites.flatMap((site) => (site.via === undefined ? [] : [site.via])), (via) => via)].toSorted(([a], [b]) => compareText(a, b));
-  return counts.length === 0 ? "" : `; through ${counts.map(([via, group]) => `${via} ${group.length}`).join(", ")}`;
-}
-
 function unresolvedLine(site: UnresolvedCallSite, detail: RenderDetail): string {
   const through = site.via === undefined ? "" : `, through ${site.via}`;
   const stated = site.stated === undefined ? "" : ` ${statedRequestText(site)}`;
@@ -1582,11 +1400,6 @@ function inheritedCallerLine({ path, line, endLine, symbol, stated, deferred, th
   const request = stated === undefined ? "" : ` ${statedRequestText({ stated, transport, symbol })}`;
   const via = detail === "details" && through !== undefined ? ` <- ${through.map(evidenceText).join(", ")}` : "";
   return `${placeText(path, line, endLine)} ${symbol}${deferred === true ? " (deferred)" : ""}${request}${via}`;
-}
-
-/** The undecided call sites of a section: its own gaps, and every caller of a gap it inherits. */
-function undecidedCount({ unresolved, inherited }: { unresolved: readonly UnresolvedCallSite[]; inherited?: readonly InheritedGap[] }): number {
-  return unresolved.length + inheritedCallerCount(inherited ?? []);
 }
 
 /**
@@ -1615,207 +1428,19 @@ function inheritedCauses(gaps: readonly InheritedGap[], detail: RenderDetail, in
   ];
 }
 
-/** The call sites no repository given decides, so the caller settles each one by reading its declaration, never the file. */
-function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: RenderDetail): string[] {
-  const inherited = value.workspace.repos.flatMap((repo) => {
-    const section = value.sections[repo];
-    return section === undefined || section.status === "unknown" || section.value.inherited === undefined ? [] : [[repo, section.value.inherited] as const];
-  });
-  const inheritedLines = inherited.length === 0 ? [] : [
-    `inherited gaps (${inherited.reduce((count, [, gaps]) => count + inheritedCallerCount(gaps), 0)} calls from ${inherited.reduce((count, [, gaps]) => count + gaps.length, 0)} causes):`,
-    ...inherited.flatMap(([repo, gaps]) => [`  ${repo}:`, ...inheritedCauses(gaps, detail, "    ")]),
-  ];
-  const sections = value.workspace.repos.flatMap((repo) => {
-    const section = value.sections[repo];
-    return section === undefined || section.status === "unknown" || section.value.unresolved.length === 0 ? [] : [[repo, section.value.unresolved] as const];
-  });
-  if (sections.length === 0) return inheritedLines;
-  const total = sections.reduce((count, [, sites]) => count + sites.length, 0);
-  const literal = [
-    `unresolved call sites (${total}):`,
-    ...sections.flatMap(([repo, sites]) => [`  ${repo}:`, ...unresolvedListing(sites, detail)]),
-  ];
-  if (detail !== "summary") return [...literal, ...inheritedLines];
-  const anchors = new Set([...value.links.map((link) => link.from), ...value.unlinked.map(({ from }) => from)].map(({ repo, file }) => JSON.stringify([repo, file])));
-  const grouped = unresolvedByCause(sections, total, anchors);
-  return [...(size(grouped) < size(literal) ? grouped : literal), ...inheritedLines];
-}
-
 export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.undecidedBase for the names written only after an undecided base, value.links for the links between repositories, value.internalLinks for those inside one repository and value.unlinked for the call sites without one. " + REQUEST_SITE_GUIDE;
-  const lines = headerLines(fact, fact.status === "unknown" ? {} : {
-    undecided: Object.values(fact.value.sections).reduce((total, section) => total + (section.status === "unknown" ? 0 : undecidedCount(section.value)), 0),
-    unknownSection: unknownSectionIn(fact.value.sections),
-  });
-  if (fact.status === "unknown") return lines.join("\n");
-  const { value } = fact;
-  const served = new Set(value.candidates.map((candidate) => candidate.name));
-  const sections = value.workspace.repos.flatMap((repo) => {
-    const section = value.sections[repo];
-    return section === undefined || section.status === "unknown" ? [] : [[repo, section.value.names] as const];
-  });
-  lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
-  lines.push(sourceLine(value.workspace.source, "repos"));
-  for (const repo of value.workspace.repos) {
-    const section = value.sections[repo];
-    if (section?.status === "unknown") lines.push(`  ${repo}: unknown (${section.reason})`);
-  }
-  const heading = `outward names (${sections.reduce((total, [, names]) => total + names.length, 0)}):`;
-  const printed: PrintedLinks = { across: { links: value.links, listed: linksListed(value.links, detail) }, inside: { links: value.internalLinks, listed: linksListed(value.internalLinks, detail) } };
-  const candidates = [`served by a local repository (${value.candidates.length}):`, ...value.candidates.map((candidate) => candidateLine(candidate, printed))];
-  const literalNames = [heading, ...sections.flatMap(([repo, names]) => [`  ${repo}:`, ...namesBlock(names, served, detail)])];
-  const literalUnserved = unservedBlock(value.unserved, detail);
-  const repos = value.workspace.repos;
-  const validOwner = (repo: string): boolean => {
-    const section = value.sections[repo];
-    const snapshots = value.repositorySnapshots.filter((item) => item.repo === repo);
-    return repos.filter((item) => item === repo).length === 1 && section !== undefined && section.status !== "unknown" && section.snapshot.repo === repo && snapshots.length === 1 && snapshots[0]!.snapshot.repo === repo && canonicalJson(section.snapshot) === canonicalJson(snapshots[0]!.snapshot);
-  };
-  const qualified = sections.flatMap(([repo, names]) => names.map((name, index) => ({ repo, index, name: { ...name, evidence: name.evidence.map((evidence) => ({ ...evidence, repo })) } })));
-  const ordered = sections.flatMap(([repo, names]) => groupedByRank(names, (name) => name.kind, OUTWARD_ORDER).flatMap(([, group]) => group.map((name) => ({ ...name, evidence: name.evidence.map((evidence) => ({ ...evidence, repo })) }))));
-  const exact = repos.length > 0 && repos.every(validOwner) && qualified.length > 0 && qualified.every(({ name }) => name.evidence.length > 0 && name.evidence.every((evidence) => evidence.via === undefined && evidence.confidence === undefined))
-    && (detail === "details" || qualified.every(({ name }) => name.kind !== "dependency" || served.has(name.name)))
-    && canonicalJson(ordered) === canonicalJson(value.unserved);
-  const reference = [`no local repository serves (${value.unserved.length}): all recorded outward names are unserved; see ${repos.length === 1 ? repos[0] : "the repository sections"} above.`];
-  const normal = [...literalNames, ...candidates, ...(exact && size(reference) < size(literalUnserved) ? reference : literalUnserved)];
-  const indexedNames = [heading, ...sections.flatMap(([repo, names]) => [`  ${repo}:`, ...namesBlock(names, served, "details", "complete")])];
-  const available = new Map<string, (typeof qualified)[number]>();
-  for (const item of qualified) {
-    if (item.name.evidence.length === 0 || !validOwner(item.repo)) continue;
-    const key = canonicalJson(item.name);
-    if (!available.has(key)) available.set(key, item);
-  }
-  const refs = value.unserved.map((name) => name.evidence.length === 0 ? undefined : available.get(canonicalJson(name)));
-  const mixed = [
-    ...indexedNames, ...candidates,
-    `no local repository serves (${value.unserved.length}): outward references identify the repository and name index above, in unserved order.`,
-    ...value.unserved.map((name, index) => {
-      const ref = refs[index];
-      return ref === undefined ? `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}` : `  - outward ${JSON.stringify(ref.repo)}[${ref.index}]`;
-    }),
-  ];
-  let best = refs.some((ref) => ref !== undefined) && size(mixed) < size(normal) ? mixed : normal;
-  // Location-only rows can be referenced without repeating evidence metadata only when no metadata is present.
-  if (detail === "details" && refs.length > 0 && refs.every((ref) => ref !== undefined) && qualified.every(({ name }) => name.evidence.every((evidence) => evidence.via === undefined && evidence.confidence === undefined))) {
-    const order: { repo: string; indexes: number[] }[] = [];
-    for (const ref of refs) {
-      const previous = order.at(-1);
-      if (previous?.repo === ref!.repo) previous.indexes.push(ref!.index);
-      else order.push({ repo: ref!.repo, indexes: [ref!.index] });
-    }
-    const permutation = [
-      heading, ...sections.flatMap(([repo, names]) => [`  ${repo}:`, ...namesBlock(names, served, "details", "locations")]), ...candidates,
-      `no local repository serves (${value.unserved.length}): outward indexes identify the name rows above, in unserved order.`,
-      ...order.map(({ repo, indexes }) => `  outward ${JSON.stringify(repo)} indexes ${JSON.stringify(indexes)}`),
-    ];
-    if (size(permutation) < size(best)) best = permutation;
-  }
-  lines.push(...best);
-  lines.push(...undecidedBaseBlock(value.undecidedBase, detail));
-  if (value.unserved.length > 0) lines.push(DECISIONS_HINT);
-  lines.push(...linkMapLines(value.links, value.unlinked, detail));
-  if (value.internalLinks.length > 0) lines.push(...linkMapLines(value.internalLinks, [], detail, "links inside one repository"));
-  lines.push(...unresolvedBlock(value, detail));
-  lines.push(...cutsBlock(cutsOf(fact), detail));
-  for (const [repo, section] of Object.entries(value.sections)) {
-    if (section.status !== "partial") continue;
-    const unresolved = section.cuts.filter((cut) => cut.kind === "unresolved-link");
-    const other = section.cuts.filter((cut) => cut.kind !== "unresolved-link");
-    lines.push(`cuts for repository ${repo}:`, ...cutsBlock(other, detail).slice(1), ...impactCuts(unresolved, detail).slice(1));
-  }
-  return lines.join("\n");
+  return [write(presentWorkspace(fact), detail).text, ...(fact.status === "unknown" ? [] : [...(fact.value.unserved.length === 0 ? [] : [DECISIONS_HINT]), REQUEST_SITE_GUIDE])].join("\n");
 }
 
 function repositoryEvidenceText(evidence: RepositoryEvidence): string {
   return `${evidence.repo}:${evidenceText(evidence)}`;
 }
 
-const SAME_AS_DECISION = "same places as the decision";
-
-/** An option that rests on the places its decision already prints says so instead of printing them again. */
-function optionLine(option: DecisionOption, decision: Decision): string {
-  const places = option.evidence.map(repositoryEvidenceText).join(", ");
-  const said = option.evidence.length > 1 && canonicalJson(option.evidence) === canonicalJson(decision.evidence) && SAME_AS_DECISION.length < places.length ? SAME_AS_DECISION : places;
-  const facts = [...(option.basis === undefined ? [] : [option.basis]), ...(option.recommended ? ["recommended"] : []), ...(said === "" ? [] : [said])];
-  return `      - ${option.value}${facts.length === 0 ? "" : ` (${facts.join(", ")})`}`;
-}
-
-/** One gap: what is missing, the places that motivated it, every option, and whether a value no fact states answers it. */
-function decisionLines(decision: Decision): string[] {
-  return [
-    `    ${decision.subject}`,
-    ...(decision.evidence.length === 0 ? [] : [`      evidence: ${decision.evidence.map(repositoryEvidenceText).join(", ")}`]),
-    ...decision.options.map((option) => optionLine(option, decision)),
-    ...(decision.allowsFreeText ? ["      free text: an answer no fact states is accepted"] : []),
-  ];
-}
-
-/** Whether a decision is a dependency coordinate no repository given serves: free text only, so a summary counts it. */
-function dependencyGap(decision: Decision): boolean {
-  const kinds = decision.outwardKinds ?? [];
-  return decision.kind === "repository" && decision.options.length === 0 && kinds.length > 0 && kinds.every((kind) => kind === "dependency");
-}
-
-/** The gaps under their kind, the ones that block first: a summary counts the dependency coordinates a form cannot answer. */
-function decisionsBlock(decisions: readonly Decision[], detail: RenderDetail): string[] {
-  const groups = groupedByRank(decisions, (decision) => decision.kind, DECISION_ORDER);
-  const literal = groups.flatMap(([kind, ofKind]) => {
-    const listed = detail === "details" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
-    const counted = ofKind.length - listed.length;
-    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); ${categoryRecovery({ details: "lists them" })}`;
-    const listing = [head, ...ofKind.flatMap(decisionLines)];
-    const summarized = [head, ...listed.flatMap(decisionLines)];
-    return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
-  });
-  const visible = groups.flatMap(([, ofKind]) => {
-    const listed = detail === "details" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
-    const listing = ofKind.flatMap(decisionLines);
-    const summarized = listed.flatMap(decisionLines);
-    return listed.length === ofKind.length || size(summarized) <= size(listing) ? listed : ofKind;
-  });
-  const counts = new Map<string, number>();
-  for (const decision of visible) if (decision.evidence.length) {
-    const key = canonicalJson(decision.evidence);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  const shared = new Map<string, number>();
-  const definitions: string[] = [];
-  for (const decision of visible) {
-    const key = canonicalJson(decision.evidence);
-    if ((counts.get(key) ?? 0) > 1 && !shared.has(key)) {
-      shared.set(key, shared.size + 1);
-      definitions.push(`  evidence ${shared.size}: ${decision.evidence.map(repositoryEvidenceText).join(", ")}`);
-    }
-  }
-  const shareFreeText = visible.filter((decision) => decision.allowsFreeText).length > 1;
-  if (definitions.length === 0 && !shareFreeText) return literal;
-  if (shareFreeText) definitions.push("  free text allowed: an answer no fact states is accepted for each marked decision.");
-  const expanded = groups.flatMap(([kind, ofKind]) => {
-    const shown = visible.filter((decision) => ofKind.includes(decision));
-    const counted = ofKind.length - shown.length;
-    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); ${categoryRecovery({ details: "lists them" })}`;
-    return [head, ...shown.flatMap((decision) => {
-      const reference = shared.get(canonicalJson(decision.evidence));
-      return [`    ${decision.subject}`, ...(decision.evidence.length === 0 ? [] : [reference === undefined ? `      evidence: ${decision.evidence.map(repositoryEvidenceText).join(", ")}` : `      evidence ${reference}`]), ...decision.options.map((option) => optionLine(option, decision)), ...(decision.allowsFreeText ? [shareFreeText ? "      free text allowed" : "      free text: an answer no fact states is accepted"] : [])];
-    })];
-  });
-  const compact = [...definitions, ...expanded];
-  return size(compact) < size(literal) ? compact : literal;
-}
-
 export function renderDecisions(fact: Fact<DecisionValue>, detail: RenderDetail = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended; value.undecidedBase lists the names written only after an undecided base, which raise no decision. Match evidence repositories to value.repositories snapshots.";
-  const lines = headerLines(fact);
-  if (fact.status === "unknown") return lines.join("\n");
-  const { value } = fact;
-  lines.push(counted("repositories", value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
-  lines.push(sourceLine(value.source, "repos"));
-  lines.push(`decisions (${value.decisions.length}):`, ...decisionsBlock(value.decisions, detail));
-  lines.push(...undecidedBaseBlock(value.undecidedBase, detail));
-  lines.push(...cutsBlock(cutsOf(fact), detail));
-  return lines.join("\n");
+  return write(presentDecisions(fact), detail).text;
 }
-
 
 const CONSEQUENCES_FULL_GUIDE = "Match value.answers by index (the order asked, or sorted by operation and property for a change) and check each answer's status, reason and cuts; findings[].value.chain and verdict.witness hold the chains and witnesses, and an unknown finding carries its reason and places. A change's value.change.derivation holds every classified difference (rule, level, operation, property, places) and the derivation frontiers; answers[].derivedFrom.rules names the rules a derived answer follows; value.repositorySnapshots names the snapshot of every repository read.";
 

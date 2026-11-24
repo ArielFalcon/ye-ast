@@ -141,3 +141,76 @@ export function entrypointRow(source: Finding<Entrypoint> | ReachedEntrypoint, r
   if ("depth" in source) return reachedRow(source, repo);
   return source.status === "unknown" ? unknownRow(source, repo) : foundRow(source, repo);
 }
+
+import type { Decision } from "../../core/domain/decisions/decision.ts";
+import type { OutwardName } from "../../core/domain/topology/outward-name.ts";
+import { linkIdentity, type Link, type UnlinkedCallSite } from "../../core/domain/topology/link.ts";
+import type { UnresolvedCallSite } from "../../core/domain/topology/call-site.ts";
+import { canonicalJson } from "../../core/domain/shared/canonical-json.ts";
+import { driftText, statedRequestText, unresolvedLabel } from "../presentation.ts";
+
+export function qualifiedEvidence(evidence: Evidence, repo?: string): Place {
+  const owner = "repo" in evidence && typeof evidence.repo === "string" ? evidence.repo : repo;
+  return { ...evidencePlace(evidence), ...(owner === undefined ? {} : { repo: owner }) };
+}
+
+export function nameRow(source: OutwardName | Decision, repo?: string): Row {
+  const decision = "subject" in source ? source : undefined;
+  const evidence = source.evidence.map(place => qualifiedEvidence(place, repo));
+  const key = decision === undefined ? [repo ?? canonicalJson(source.evidence), source.kind, (source as OutwardName).name].join("\0") : decision.id;
+  return {
+    key,
+    label: `${source.kind} ${decision?.subject ?? (source as OutwardName).name}`,
+    evidence,
+    qualifiers: [
+      ...(repo === undefined ? [] : [{ name: "repository", value: repo }]),
+      ...(evidence.length === 0 ? [] : [{ name: evidence.length === 1 ? "1 place" : `${evidence.length} places` }]),
+      ...(decision === undefined ? [] : [...(decision.required ? [{ name: "required" }] : []), ...(decision.allowsFreeText ? [{ name: "free text allowed" }] : [])]),
+    ],
+    ...(decision === undefined ? {} : { childrenAreAnswer: true, children: decision.options.map(option => ({
+      key: [key, "option", option.value].join("\0"), label: option.value,
+      qualifiers: [...(option.basis === undefined ? [] : [{ name: option.basis }]), ...(option.recommended ? [{ name: "recommended" }] : [])],
+      evidence: canonicalJson(option.evidence) === canonicalJson(decision.evidence) ? [] : option.evidence.map(place => qualifiedEvidence(place)),
+    })) }),
+  };
+}
+
+export function linkRow(link: Link): Row {
+  const key = linkIdentity(link);
+  const drift = driftText(link.drift);
+  return {
+    key, tier: 0,
+    place: { repo: link.from.repo, path: link.from.file, line: link.from.line },
+    label: `${link.from.symbol} -> ${link.to.repo} ${link.to.name}`,
+    qualifiers: [{ name: link.transport }, { name: link.basis }, ...(link.confidence < 1 ? [{ name: "confidence", value: String(link.confidence) }] : []), ...(link.profiles === undefined ? [] : [{ name: "under", value: link.profiles.join(", ") }]), ...(link.authority === undefined ? [] : [{ name: "base URL undecided" }]), ...(drift === "" ? [] : [{ name: drift }])],
+    childrenAreAnswer: true,
+    children: [{ key: `${key}\0handler`, place: { ...link.to.handler, repo: link.to.repo }, label: `-> ${link.to.handler.symbol}` }],
+    evidence: (link.propagatedThrough ?? []).map(place => ({ repo: link.from.repo, path: place.file, line: place.line, via: place.kind })),
+  };
+}
+
+export function callSiteRow(site: UnlinkedCallSite | UnresolvedCallSite, repo?: string): Row {
+  if ("from" in site) return {
+    key: canonicalJson([site.from, site.transport, site.method, site.name, site.outcome]),
+    place: { repo: site.from.repo, path: site.from.file, line: site.from.line },
+    label: `${site.from.symbol} ${site.transport}${site.method === undefined ? "" : ` ${site.method}`} ${site.name}: ${site.outcome}`,
+    qualifiers: [...(site.repos === undefined ? [] : [{ name: "repositories", value: site.repos.join(", ") }]), ...(site.routes === undefined ? [] : [{ name: "routes", value: site.routes.join(", ") }])],
+    evidence: (site.propagatedThrough ?? []).map(place => ({ repo: site.from.repo, path: place.file, line: place.line, via: place.kind })),
+  };
+  return {
+    key: canonicalJson([repo, site.path, site.line, site.symbol, site.transport, site.reason, site.diagnostic]),
+    place: { ...(repo === undefined ? {} : { repo }), path: site.path, line: site.line, ...(site.endLine === undefined ? {} : { endLine: site.endLine }) },
+    label: `${site.symbol} (${site.transport}${site.via === undefined ? "" : `, through ${site.via}`})${site.stated === undefined ? "" : ` ${statedRequestText(site)}`} ${unresolvedLabel(site)}`,
+    qualifiers: [{ name: site.reason + (site.diagnostic === undefined ? "" : `/${site.diagnostic.cause}`) }, ...(site.diagnostic?.source === undefined ? [] : [{ name: site.diagnostic.source }]), ...(site.deferred ? [{ name: "deferred" }] : []), ...(site.diagnostic?.alternatives === undefined ? [] : [{ name: "declared alternatives", value: site.diagnostic.alternatives.join(", ") }])],
+    evidence: [...site.evidence, ...(site.diagnostic?.unreadableSources ?? [])].map(place => qualifiedEvidence(place, repo)),
+  };
+}
+
+import type { WorkspaceSource } from "../../core/ports/workspace-repos.port.ts";
+import { FIXED_LAYER_DIRECTORY } from "../../core/ports/fixed-layer-store.port.ts";
+import { WORKSPACE_MANIFEST_FILE } from "../../core/ports/workspace-defaults.port.ts";
+
+export function repositorySourceLine(source: WorkspaceSource): string {
+  const label = { request: "the request", persisted: `${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}`, none: "nothing: this answer covers the bound repository alone" }[source];
+  return `repositories declared by: ${label}${source === "none" ? " (pass repos, or persist a declaration with ye-ast init --workspace)" : ""}`;
+}

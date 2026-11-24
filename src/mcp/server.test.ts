@@ -2721,10 +2721,12 @@ test("the decisions tool asks the decision family with the repositories and gate
   assert.deepEqual(fieldsOf(resultFields(result)), envelopeOf(decisionFact()));
   const text = textOf(result);
   assert.match(text, /^status: complete\n/);
-  assert.match(text, /repositories \(1\): shop@a{40}/);
+  assert.match(text, /snapshot: shop @ a{40}/);
   assert.match(text, /decisions \(2\):/);
-  assert.match(text, /\n {2}membership \(1\):\n {4}orders-api\n {6}evidence: shop-web:src\/app\/order\.api\.ts:7\n {6}- orders \(exact-name, recommended, shop-web:src\/app\/order\.api\.ts:7\)\n {6}- orders-core \(artifact\)\n {6}free text/);
-  assert.match(text, /\n {2}repository \(1\):\n {4}geo\.example\.com\n {6}evidence: shop-web:src\/app\/geo\.api\.ts:11\n {6}free text/);
+  assert.match(text, /membership orders-api \(1 place, free text allowed\)/);
+  assert.match(text, /orders \(exact-name, recommended\)/);
+  assert.match(text, /orders-core \(artifact\)/);
+  assert.match(text, /repository geo\.example\.com \(1 place, free text allowed\)/);
   await session.close();
 });
 
@@ -2741,7 +2743,7 @@ test("the decisions tool reads the bound repository alone when no clones are pas
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /^repositories declared by: nothing: this answer covers the bound repository alone/m);
-  assert.match(text, /^decisions \(0\):$/m);
+  assert.doesNotMatch(text, /^decisions/m);
   assert.doesNotMatch(text, /\(none\)/);
   await session.close();
 });
@@ -2764,31 +2766,28 @@ test("an answer with names no local repository serves points to ye_ast_decisions
   await session.close();
 });
 
-test("a workspace summary groups the outward names by kind and counts the dependency coordinates no repository serves", async () => {
+test("a workspace summary identifies outward names and references every unserved dependency", async () => {
   const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
 
   const text = textOf(await session.callTool("ye_ast_workspace", {}));
 
-  assert.match(text, /^outward names \(4\):$/m);
-  assert.match(text, / {2}shop:\n {4}path-prefix \(1\):\n {6}- orders-api \(src\/app\/order\.api\.ts:7\)\n {4}dependency \(3\): no repository given serves them; mode "details" lists them/);
-  assert.match(text, /^no local repository serves \(4\): 3 dependency counted; mode "details" lists them/m);
-  const namesLine = text.split("\n").find((line) => line.includes("dependency (3): no repository given serves")) ?? "";
-  const unservedLine = text.split("\n").find((line) => line.startsWith("no local repository serves (4):")) ?? "";
-  for (const line of [namesLine, unservedLine]) {
-    assert.match(line, /mode "details"/);
-    assert.match(line, /answer\.json/);
-  }
-  assert.doesNotMatch(text, /- dependency @angular\/core/);
+  assert.match(text, /^outward names in shop:$/m);
+  for (const name of ["orders-api", "@angular/core", "@capacitor/core", "rxjs"]) assert.ok(text.includes(name));
+  for (let index = 0; index < 4; index++) assert.ok(text.includes(`outward shop[${index}]`));
+  assert.doesNotMatch(text, /mode "details"/);
   await session.close();
 });
 
-test("a workspace full answer lists the dependency coordinates its summary counts", async () => {
+test("workspace details retain the evidence of every dependency coordinate", async () => {
   const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
 
   const text = textOf(await session.callTool("ye_ast_workspace", { mode: "details" }));
 
-  assert.match(text, / {4}dependency \(3\):\n {6}- @angular\/core \(package\.json:36\)\n {6}- @capacitor\/core \(package\.json:49\)\n {6}- rxjs \(package\.json:74\)/);
-  assert.match(text, /^no local repository serves \(4\): all recorded outward names are unserved; see shop above\.$/m);
+  for (const [name, line] of [["@angular/core", 36], ["@capacitor/core", 49], ["rxjs", 74]] as const) {
+    assert.ok(text.includes(`dependency ${name}`));
+    assert.ok(text.includes(`shop:package.json:${line}`));
+  }
+  for (let index = 0; index < 4; index++) assert.ok(text.includes(`outward shop[${index}]`));
   await session.close();
 });
 
@@ -2797,31 +2796,30 @@ test("a workspace answer names each unresolved call site with its declaration, i
 
   const text = textOf(await session.callTool("ye_ast_workspace", {}));
 
-  assert.match(text, /^unresolved call sites \(1\):$/m);
-  assert.match(text, / {2}shop:\n {4}src\/app\/order\.api\.ts\n {6}9-12 OrderApi\.create \(http\) GET \/orders/);
+  assert.match(text, /^unresolved call sites in shop:$/m);
+  assert.match(text, /shop:src\/app\/order\.api\.ts\n +9-12 OrderApi\.create \(http\) GET \/orders/);
   assert.doesNotMatch(text, /\(the file itself\)/);
-  assert.match(text, /cuts for repository shop:[\s\S]*unresolved-link \(1\)/);
+  assert.match(text, /cuts for repository shop:[\s\S]*unresolved-link/);
   await session.close();
 });
 
-test("a decisions summary groups the gaps by kind and counts the free-text-only dependency gaps", async () => {
+test("a decisions summary names dependency gaps and their free-text policy", async () => {
   const { session } = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
 
   const text = textOf(await session.callTool("ye_ast_decisions", {}));
 
   assert.match(text, /^decisions \(3\):$/m);
-  assert.match(text, / {2}repository \(2\): 1 dependency counted \(free text only\); mode "details" lists them/);
-  assert.match(text, / {4}geo\.example\.com/);
-  assert.doesNotMatch(text, /@angular\/core/);
+  assert.match(text, /repository geo\.example\.com/);
+  assert.match(text, /repository @angular\/core \(1 place, free text allowed\)/);
   await session.close();
 });
 
-test("a decisions full answer lists the dependency gaps its summary counts", async () => {
+test("decisions details retain dependency evidence beside its free-text policy", async () => {
   const { session } = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
 
   const text = textOf(await session.callTool("ye_ast_decisions", { mode: "details" }));
 
-  assert.match(text, / {4}@angular\/core\n {6}evidence: shop:package\.json:36\n {6}free text/);
+  assert.match(text, /repository @angular\/core \(1 place, free text allowed\)\n +evidence: shop:package\.json:36/);
   await session.close();
 });
 
@@ -2940,9 +2938,9 @@ test("the counted elision of a summary never renders longer than listing what it
   await session.close();
 });
 
-test("workspace summary retains its counted elision and decisions summary remains shorter", async () => {
+test("workspace summary names dependencies and decisions summary remains shorter", async () => {
   const workspace = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
-  assert.match(textOf(await workspace.session.callTool("ye_ast_workspace", {})), /dependency \(3\): no repository given serves/);
+  assert.match(textOf(await workspace.session.callTool("ye_ast_workspace", {})), /dependency @angular\/core/);
   await workspace.session.close();
 
   const decisions = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
@@ -3237,8 +3235,8 @@ test("workspace details attribute repository-local cuts to the owning snapshot",
   const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact } }) });
   try {
     const text = textOf(await session.callTool("ye_ast_workspace", { mode: "details" }));
-    assert.match(text, /other@c{40}/);
-    assert.match(text, /cuts for repository other:[\s\S]*no-extractor.*src\/same\.ts/);
+    assert.match(text, /snapshot: other @ c{40}/);
+    assert.match(text, /cuts for repository other:[\s\S]*no-extractor[\s\S]*src\/same\.ts/);
   } finally { await session.close(); }
 });
 

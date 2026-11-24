@@ -75,9 +75,9 @@ test("workspace references outward names only when qualified records match exact
   const snapshot = { ...base.snapshot, repo: "a" };
   const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot }], candidates: [], links: [], internalLinks: [], unlinked: [], sections: { a: { ...base, snapshot, status: "complete", value: { names, unresolved: [] } } }, unserved };
   const render = (v: typeof value) => renderWorkspace({ ...base, status: "complete", value: v } as never, "details");
-  assert.match(render(value), /all recorded outward names are unserved/);
-  assert.doesNotMatch(render({ ...value, unserved: unserved.slice(1) }), /all recorded outward names are unserved/);
-  assert.doesNotMatch(render({ ...value, unserved: [{ ...unserved[0]!, evidence: [{ ...unserved[0]!.evidence[0]!, line: 100 }] }, ...unserved.slice(1)] }), /all recorded outward names are unserved/);
+  assert.match(render(value), /outward a\[0\]/);
+  assert.doesNotMatch(render({ ...value, unserved: unserved.slice(1) }), /outward a\[0\]/);
+  assert.match(render({ ...value, unserved: [{ ...unserved[0]!, evidence: [{ ...unserved[0]!.evidence[0]!, line: 100 }] }, ...unserved.slice(1)] }), /long-service-file.ts:100/);
 });
 
 test("decision evidence and free text sharing keeps each option and policy association", async () => {
@@ -101,10 +101,10 @@ test("a decisions answer prints the names whose base is undecided beside its dec
   const value = { repositories: [], source: "request", decisions: [], undecidedBase };
 
   const summary = renderDecisions({ ...base, status: "complete", value } as never, "summary");
-  assert.match(summary, /decisions \(0\):/);
-  assert.match(summary, /names whose base is undecided \(1\):/);
-  assert.match(summary, /^ {2}- path-prefix auth \(2 places in shop\)$/m);
-  assert.match(renderDecisions({ ...base, status: "complete", value } as never, "details"), /^ {2}- path-prefix auth \(shop:src\/app\/auth\.api\.ts:3, shop:src\/app\/auth\.api\.ts:4\)$/m);
+  assert.doesNotMatch(summary, /^decisions/m);
+  assert.match(summary, /names whose base is undecided:/);
+  assert.match(summary, /path-prefix auth \(2 places\)/);
+  assert.match(renderDecisions({ ...base, status: "complete", value } as never, "details"), /evidence: shop:src\/app\/auth\.api\.ts:3,4/);
   assert.doesNotMatch(renderDecisions({ ...base, status: "complete", value: { ...value, undecidedBase: undefined } } as never, "summary"), /undecided/);
 });
 
@@ -115,17 +115,17 @@ test("an option resting on exactly the places its decision prints says so once, 
   const decisions = [{ id: "membership:name:orders", kind: "membership", subject: "orders", evidence, options: [{ value: "orders", basis: "link", evidence, recommended: false }, { value: "orders-core", basis: "artifact", evidence: [place(11)], recommended: false }], allowsFreeText: false, required: false }];
   const text = renderDecisions({ ...base, status: "complete", value: { repositories: [], source: "request", decisions } } as never, "details");
   assert.equal(text.split("evidence-location.ts:7").length - 1, 1);
-  assert.match(text, /- orders \(link, same places as the decision\)/);
-  assert.match(text, /- orders-core \(artifact, shop:src\/a-long-repeated-supporting-evidence-location\.ts:11\)/);
+  assert.match(text, /orders \(link\)/);
+  assert.match(text, /orders-core \(artifact\)\n +evidence: shop:src\/a-long-repeated-supporting-evidence-location\.ts:11/);
 });
 
 test("repeated free-text policy applies only to decisions that allow it", async () => {
   const { renderDecisions } = await import("./render.ts");
   const decisions = Array.from({ length: 8 }, (_, i) => ({ id: `gateway:${i}`, kind: "gateway", subject: `subject-${i}`, evidence: [], options: [], allowsFreeText: i !== 3, required: i === 0 }));
   const text = renderDecisions({ ...base, status: "complete", value: { repositories: [], source: "request", decisions } } as never, "details");
-  assert.equal((text.match(/an answer no fact states is accepted/g) ?? []).length, 1);
-  assert.equal((text.match(/^      free text allowed$/gm) ?? []).length, 7);
-  assert.doesNotMatch(text, /subject-3\n\s+free text allowed/);
+  assert.equal((text.match(/free text allowed/g) ?? []).length, 7);
+  assert.match(text, /subject-0 \(required, free text allowed\)/);
+  assert.doesNotMatch(text, /subject-3[^\n]*free text allowed/);
 });
 
 test("workspace exact matching preserves multiple owners in the shared listing", async () => {
@@ -134,8 +134,9 @@ test("workspace exact matching preserves multiple owners in the shared listing",
   const name = (repo: string) => ({ name: `service-${repo}`, kind: "http-host" as const, evidence: [{ path: "src/shared.ts", line: 1 }] });
   const value = { workspace: { repos: ["a", "b"], source: "request" }, repositorySnapshots: ["a", "b"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: Object.fromEntries(["a", "b"].map(repo => [repo, { ...base, snapshot: snapshot(repo), status: "complete", value: { names: [name(repo)], unresolved: [] } }])), candidates: [], links: [], internalLinks: [], unlinked: [], unserved: ["a", "b"].map(repo => ({ ...name(repo), evidence: [{ ...name(repo).evidence[0]!, repo }] })) };
   const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
-  assert.match(text, /all recorded outward names are unserved/);
-  assert.match(text, /\n  a:[\s\S]*service-a[\s\S]*\n  b:[\s\S]*service-b/);
+  assert.match(text, /outward a\[0\]/);
+  assert.match(text, /outward b\[0\]/);
+  assert.match(text, /outward names in a:[\s\S]*service-a[\s\S]*outward names in b:[\s\S]*service-b/);
 });
 
 test("workspace does not infer the owner of evidence-free names", async () => {
@@ -144,7 +145,7 @@ test("workspace does not infer the owner of evidence-free names", async () => {
   const name = { name: "same-service-with-an-extremely-long-name-to-demonstrate-unqualified-ownership.example", kind: "http-host" as const, evidence: [] };
   const value = { workspace: { repos: ["a", "b"], source: "request" }, repositorySnapshots: ["a", "b"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: Object.fromEntries(["a", "b"].map(repo => [repo, { ...base, snapshot: snapshot(repo), status: "complete", value: { names: [name], unresolved: [] } }])), candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [name, name] };
   const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
-  assert.doesNotMatch(text, /all recorded outward names are unserved/);
+  assert.doesNotMatch(text, /outward [ab]\[/);
 });
 
 test("entrypoint guidance does not advertise selection when recovery is unavailable", () => {

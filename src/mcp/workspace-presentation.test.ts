@@ -1,347 +1,114 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderWorkspace } from "./render.ts";
+import { present } from "./presentation/families/workspace.ts";
+import { workspaceFixture } from "./presentation/families/workspace.fixtures.testing.ts";
 import { LISTED_ITEMS } from "./render-budget.ts";
+import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
+import type { Fact } from "../core/domain/shared/fact.ts";
 
-const base = { schema: "0.12.0", snapshot: { repo: "a", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "1" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [] };
+type Value = Omit<WorkspaceValue, "repositories">;
+const original = workspaceFixture.status === "unknown" ? undefined! : workspaceFixture.value;
+function fact(value: Partial<Value> = {}): Fact<Value> { return { ...workspaceFixture, status: "complete", value: { ...original, ...value } }; }
+const rows = (value: Partial<Value>, section: string) => present(fact(value)).sections.find(item => item.id === section)!.rows;
 
-test("mixed unserved references reconstruct original order, multiplicity and qualified ownership", () => {
-  const snapshot = (repo: string) => ({ ...base.snapshot, repo });
-  const name = (i: number) => ({ kind: "http-host", name: `a-long-service-name-${i}.example`, evidence: [{ path: "src/a-long-shared-location.ts", line: i + 1, ...(i === 1 ? { via: "client", confidence: 0.75 } : {}) }] });
-  const names = Array.from({ length: 20 }, (_, i) => name(i));
-  const section = (repo: string, status: string) => ({ ...base, snapshot: snapshot(repo), status, ...(status === "partial" ? { cuts: [] } : {}), value: { names, unresolved: [{ reason: "unresolved", evidence: [{ path: "src/shared.ts", line: 4 }], path: "src/shared.ts", line: 4, symbol: "call", transport: "http", via: "client", stated: { method: "GET", path: "/route" } }] } });
-  const qualified = (repo: string, i: number) => ({ ...names[i]!, evidence: names[i]!.evidence.map(e => ({ ...e, repo })) });
-  const unserved = [qualified("b", 1), qualified("a", 0), qualified("b", 1), ...names.slice(2).map((_, i) => qualified("a", i + 2)), { ...qualified("a", 1), evidence: [{ path: "different.ts", line: 88, repo: "a" }] }, { ...name(0), evidence: [] }];
-  const value = { workspace: { repos: ["a", "b", "unknown"], source: "request" }, repositorySnapshots: ["a", "b", "unknown"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: { a: section("a", "partial"), b: section("b", "complete"), unknown: { ...base, snapshot: snapshot("unknown"), status: "unknown", reason: "unavailable" } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved };
-  const fact = { ...base, status: "complete", value } as never;
-  const before = JSON.stringify(fact);
-  const text = renderWorkspace(fact, "details");
-  const rows = text.split("no local repository serves (")[1]!.split("\nunresolved call sites")[0]!.split("\ncuts for repository")[0]!;
-  const refs = [...rows.matchAll(/^  - outward ("[^"]+")\[(\d+)\]$/gm)].map(m => [JSON.parse(m[1]!), Number(m[2])]);
-  assert.deepEqual(refs, [["b", 1], ["a", 0], ["b", 1], ...names.slice(2).map((_, i) => ["a", i + 2])]);
-  assert.match(text, /"via":"client","confidence":0\.75/);
-  assert.match(rows, /different\.ts:88/);
-  assert.match(rows, /http-host a-long-service-name-0\.example/);
-  assert.match(text, /unknown: unknown \(unavailable\)/);
-  assert.match(text, /unresolved call sites \(2\):[\s\S]*  a:[\s\S]*src\/shared.ts[\s\S]*call \(http, through client\) GET \/route[\s\S]*  b:/);
-  const invalid = { ...value, repositorySnapshots: value.repositorySnapshots.map(item => item.repo === "b" ? { ...item, snapshot: snapshot("wrong") } : item) };
-  const invalidText = renderWorkspace({ ...base, status: "complete", value: invalid } as never, "details");
-  assert.doesNotMatch(invalidText, /  - outward "b"\[/);
-  assert.match(invalidText, /b:src\/a-long-shared-location.ts:2/);
-  const wrongSnapshot = snapshot("wrong");
-  const bothWrong = { ...value, sections: { ...value.sections, b: { ...value.sections.b, snapshot: wrongSnapshot } }, repositorySnapshots: value.repositorySnapshots.map(item => item.repo === "b" ? { ...item, snapshot: wrongSnapshot } : item) };
-  const wrongOwnerText = renderWorkspace({ ...base, status: "complete", value: bothWrong } as never, "details");
-  assert.doesNotMatch(wrongOwnerText, /  - outward "b"\[/);
-  assert.match(wrongOwnerText, /b:src\/a-long-shared-location.ts:2/);
-  assert.equal(JSON.stringify(fact), before);
-});
-
-test("whole-category reference requires the same order as the displayed names", () => {
-  const names = Array.from({ length: 12 }, (_, i) => ({ kind: "http-host", name: `long-service-${i}.example`, evidence: [{ path: "src/a-very-long-shared-evidence-file.ts", line: i + 1 }] }));
-  const unserved = names.map(name => ({ ...name, evidence: name.evidence.map(e => ({ ...e, repo: "a" })) }));
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names, unresolved: [] } } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [...unserved].reverse() };
-  const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
-  assert.doesNotMatch(text, /all recorded outward names are unserved/);
-  const runs = [...text.matchAll(/^  outward ("[^"]+") indexes (\[[^\n]+\])$/gm)];
-  assert.equal(runs.length, 1);
-  assert.equal(JSON.parse(runs[0]![1]!), "a");
-  const indexes = JSON.parse(runs[0]![2]!);
-  assert.deepEqual(indexes, names.map((_, i) => names.length - i - 1));
-  for (const name of names) assert.equal(text.split(name.name).length - 1, 1);
-  for (let i = 0; i < names.length; i++) assert.ok(text.includes(`- [${i}] ${names[i]!.name} (`));
-  const bSnapshot = { ...base.snapshot, repo: "b" };
-  const bNames = unserved.map(name => ({ ...name, evidence: name.evidence.map(evidence => ({ ...evidence, repo: "b" })) }));
-  const multi = { ...value, workspace: { repos: ["a", "b"], source: "request" }, repositorySnapshots: [...value.repositorySnapshots, { repo: "b", snapshot: bSnapshot }], sections: { ...value.sections, b: { ...value.sections.a, snapshot: bSnapshot } }, unserved: [...unserved, ...bNames, ...unserved] };
-  const multiText = renderWorkspace({ ...base, status: "complete", value: multi } as never, "details");
-  const multiRuns = [...multiText.matchAll(/^  outward ("[^"]+") indexes (\[[^\n]+\])$/gm)].map(m => ({ repo: JSON.parse(m[1]!), indexes: JSON.parse(m[2]!) }));
-  const forward = names.map((_, index) => index);
-  assert.deepEqual(multiRuns, [{ repo: "a", indexes: forward }, { repo: "b", indexes: forward }, { repo: "a", indexes: forward }]);
-});
-
-test("invalid snapshot ownership and tiny results retain literal rows", () => {
-  const name = { kind: "http-host", name: "host", evidence: [{ path: "a.ts", line: 1 }] };
-  const snapshot = { ...base.snapshot, sha: "b".repeat(40) };
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot }], sections: { a: { ...base, status: "complete", value: { names: [name], unresolved: [] } } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [{ ...name, evidence: [{ ...name.evidence[0]!, repo: "a" }] }] };
-  for (const v of [value, { ...value, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }] }]) {
-    const text = renderWorkspace({ ...base, status: "complete", value: v } as never, "details");
-    assert.match(text, /  - http-host host \(a:a\.ts:1\)/);
-    assert.doesNotMatch(text, /  - outward /);
+test("unserved references preserve order and multiplicity only for exact qualified names with valid snapshot owners", () => {
+  const section = original.sections["web"]!;
+  if (section.status === "unknown") throw Error("fixture section is unknown");
+  const qualified = section.value.names.map(name => ({ ...name, evidence: name.evidence.map(place => ({ ...place, repo: "web" })) }));
+  const unserved = [qualified[1]!, qualified[0]!, qualified[1]!, { ...qualified[0]!, evidence: [{ repo: "web", path: "different.ts", line: 88 }] }, { ...qualified[0]!, evidence: [] }];
+  const mapped = rows({ unserved }, "value.unserved");
+  assert.deepEqual(mapped.slice(0, 3).map(row => row.label), ["outward web[1]", "outward web[0]", "outward web[1]"]);
+  assert.equal(mapped[3]!.evidence![0]!.path, "different.ts");
+  assert.equal(mapped[4]!.label, "http-host orders.example");
+  for (const repositorySnapshots of [original.repositorySnapshots.map(item => ({ ...item, snapshot: { ...item.snapshot, repo: "wrong" } })), []]) {
+    assert.ok(rows({ unserved, repositorySnapshots }, "value.unserved").every(row => !row.label.startsWith("outward ")));
   }
-  const empty = { ...value, unserved: [], sections: { a: { ...base, status: "complete", value: { names: [], unresolved: [] } } } };
-  assert.match(renderWorkspace({ ...base, status: "complete", value: empty } as never, "details"), /no local repository serves \(0\)/);
+  const before = JSON.stringify(original);
+  renderWorkspace(fact({ unserved }), "details");
+  assert.equal(JSON.stringify(original), before);
 });
 
-test("index permutations cannot hide evidence relationship metadata", () => {
-  const names = Array.from({ length: 20 }, (_, i) => ({ kind: "http-host", name: `service-with-a-long-name-${i}.example`, evidence: [{ path: "src/long-evidence-path.ts", line: i + 1, via: "fetch", confidence: 0.6 }] }));
-  const unserved = names.map(name => ({ ...name, evidence: name.evidence.map(evidence => ({ ...evidence, repo: "a" })) })).reverse();
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names, unresolved: [] } } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved };
-  const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
-  assert.match(text, /"via":"fetch","confidence":0\.6/);
+test("outward evidence preserves repository ownership and relationship metadata and shares equal places", () => {
+  const section = original.sections["web"]!;
+  if (section.status === "unknown") throw Error("fixture section is unknown");
+  const evidence = [{ path: "src/shared.ts", line: 9, via: "fetch", confidence: 0.6 }];
+  const sections = { web: { ...section, value: { ...section.value, names: [{ kind: "http-host" as const, name: "host", evidence }, { kind: "path-prefix" as const, name: "prefix", evidence }] } } };
+  const mapped = rows({ sections }, "value.sections.web.value.names");
+  assert.deepEqual(mapped[0]!.evidence, [{ ...evidence[0], repo: "web" }]);
+  const text = renderWorkspace(fact({ sections }), "details");
+  assert.equal(text.split("shared.ts:9").length - 1, 1);
+  assert.match(text, /via fetch confidence 0\.6/);
 });
 
-function linkOf(line: number, to = "orders", transport: "http" | "event" = "http") {
-  return { id: `link-${line}`, from: { repo: "shop-web", file: "src/app/orders-client.service.ts", line, symbol: `OrdersClient.call${line}` }, to: { repo: to, kind: "http-route", name: "POST /orders/{}/confirmations", handler: { path: "src/main/java/app/OrdersController.java", symbol: "OrdersController.confirm", line: 40 } }, transport, basis: "exact", confidence: 1 };
-}
-
-function mapValue(links: readonly ReturnType<typeof linkOf>[], unlinked: readonly unknown[] = [], internalLinks: readonly ReturnType<typeof linkOf>[] = []) {
-  return { workspace: { repos: ["shop-web"], gateways: [], source: "request" }, repositorySnapshots: [{ repo: "shop-web", snapshot: base.snapshot }], sections: {}, candidates: [], unserved: [], links, internalLinks, unlinked };
-}
-
-test("a workspace summary names each link up to the listed bound and counts them per caller, callee and transport beyond it; details lists each one", () => {
-  const within = renderWorkspace({ ...base, status: "complete", value: mapValue(Array.from({ length: LISTED_ITEMS }, (_, index) => linkOf(index + 1))) } as never, "summary");
-  assert.ok(within.includes(`OrdersClient.call${LISTED_ITEMS}`));
-  assert.doesNotMatch(within, /shop-web -> orders http: /);
-
-  const value = mapValue([...Array.from({ length: LISTED_ITEMS }, (_, index) => linkOf(index + 1)), linkOf(LISTED_ITEMS + 1, "billing", "event")]);
-  const summary = renderWorkspace({ ...base, status: "complete", value } as never, "summary");
-  const details = renderWorkspace({ ...base, status: "complete", value } as never, "details");
-
-  assert.match(summary, new RegExp(`links between the repositories read \\(${LISTED_ITEMS + 1}\\):\\n  - shop-web -> orders http: ${LISTED_ITEMS}\\n  - shop-web -> billing event: 1\\n  mode "details" lists each link`));
-  assert.doesNotMatch(summary, /OrdersClient\.call7\b/);
-  assert.match(details, /\n  - 7\. shop-web:src\/app\/orders-client\.service\.ts:7 OrdersClient\.call7 -> orders POST \/orders\/\{\}\/confirmations -> src\/main\/java\/app\/OrdersController\.java:40 OrdersController\.confirm \(exact\)\n/);
-  assert.equal(details.split("\n").filter((line) => line.includes("OrdersClient.call")).length, LISTED_ITEMS + 1);
-});
-
-test("a workspace summary keeps the link list within the bound, and lists the call sites the join reached without a link", () => {
-  const short = { ...linkOf(7), from: { repo: "a", file: "x.ts", line: 7, symbol: "f" }, to: { repo: "b", kind: "http-route", name: "GET /", handler: { path: "y.java", symbol: "g", line: 1 } } };
-  const value = mapValue([short], [{ from: { repo: "a", file: "x.ts", line: 9, symbol: "h" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["b", "c"], routes: ["GET /shared"] }]);
-
-  const summary = renderWorkspace({ ...base, status: "complete", value } as never, "summary");
-
-  assert.match(summary, /links between the repositories read \(1\):\n  - 1\. a:x\.ts:7 f -> b GET \/ -> y\.java:1 g \(exact\)\n/);
-  assert.match(summary, /call sites the join reached without a link \(1\):\n  - a:x\.ts:9 h http shared: ambiguous \(b, c\) routes GET \/shared$/m);
-});
-
-test("a workspace names the method of an unlinked call site that states one, and prints none for one that does not", () => {
-  const site = (line: number, method?: string) => ({ from: { repo: "a", file: "x.ts", line, symbol: "h" }, transport: "http", ...(method === undefined ? {} : { method }), outcome: "unmatched", name: `/api/gone/${line}` });
-
-  const summary = renderWorkspace({ ...base, status: "complete", value: mapValue([], [site(9, "DELETE"), site(10)]) } as never, "summary");
-
-  assert.match(summary, /a:x\.ts:9 h http DELETE \/api\/gone\/9: unmatched\n/);
-  assert.match(summary, /a:x\.ts:10 h http \/api\/gone\/10: unmatched$/m);
-});
-
-test("a workspace lists the links inside one repository in their own block, apart from the links between repositories", () => {
-  const inside = { ...linkOf(7, "shop-web"), id: "inside" };
-  const value = mapValue([linkOf(9)], [], [inside]);
-
-  const details = renderWorkspace({ ...base, status: "complete", value } as never, "details");
-
-  assert.match(details, /links between the repositories read \(1\):\n  - 1\. shop-web:[^\n]*OrdersClient\.call9 -> orders POST/);
-  assert.match(details, /links inside one repository \(1\):\n  - 1\. shop-web:[^\n]*OrdersClient\.call7 -> shop-web POST/);
-  assert.doesNotMatch(renderWorkspace({ ...base, status: "complete", value: mapValue([linkOf(9)]) } as never, "details"), /links inside one repository/);
-});
-
-test("a link whose literal segment a producer variable cannot parse is listed with its drift", () => {
-  const drifting = { ...linkOf(7), drift: [{ segment: "daily-menus", parameter: "id", type: "UUID" }] };
-
-  const details = renderWorkspace({ ...base, status: "complete", value: mapValue([drifting, linkOf(9)]) } as never, "details");
-
-  assert.match(details, /OrdersClient\.call7 -> .* \(exact, drift: "daily-menus" fills id \(UUID\)\)\n/);
-  assert.match(details, /OrdersClient\.call9 -> .* \(exact\)$/);
-});
-
-test("unresolved diagnostics stay compact in summaries and retain causal evidence in details", () => {
-  const sites = [
-    { path: "src/Calls.java", line: 4, symbol: "Calls.send", transport: "event", reason: "unresolved", evidence: [{ path: "src/Calls.java", line: 4 }], diagnostic: { cause: "source-not-read", source: "not-read" }, via: "com.acme.Messenger" },
-    { path: "src/Calls.java", line: 8, symbol: "Calls.load", transport: "http", reason: "unresolved", evidence: [{ path: "src/Calls.java", line: 8 }, { path: "(library)/lib/Client.java", line: 12 }], diagnostic: { cause: "destination-undecidable", source: "read", alternatives: ["https://images.example"] }, via: "com.acme.RestClient" },
-    { path: "src/Calls.java", line: 10, symbol: "Calls.dispatch", transport: "http", reason: "unresolved", evidence: [], diagnostic: { cause: "dispatch-disagreement" } },
-    { path: "src/Calls.java", line: 11, symbol: "Calls.loop", transport: "http", reason: "unresolved", evidence: [], diagnostic: { cause: "recursive" } },
-    { path: "src/Calls.java", line: 12, symbol: "Calls.bad", transport: "http", reason: "source-unreadable", evidence: [] },
-  ];
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names: [], unresolved: sites } } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [] };
-  const fact = { ...base, status: "complete", value } as never;
-  const summary = renderWorkspace(fact, "summary");
-  const details = renderWorkspace(fact, "details");
-  assert.match(summary, /Calls.send .* missing$/m);
-  assert.match(summary, /Calls.load .* target$/m);
-  assert.match(summary, /Calls.dispatch .* conflict$/m);
-  assert.match(summary, /Calls.loop .* cycle$/m);
-  assert.match(summary, /Calls.bad .* parse$/m);
-  assert.doesNotMatch(summary, /Client.java:12|source-not-read|destination-undecidable/);
-  assert.match(details, /unresolved\/source-not-read.*not-read/);
-  assert.match(details, /unresolved\/destination-undecidable.*read/);
-  assert.match(details, /\(library\)\/lib\/Client.java:12/);
-  assert.match(details, /Calls.load .*chosen at run time, declared alternatives: https:\/\/images\.example/);
-  assert.doesNotMatch(summary, /images\.example/);
-});
-
-test("inherited gaps print their cause once with their callers, and count as undecided exactly as the flat rows did", () => {
-  const cause = { path: "src/app/offline.service.ts", line: 86 };
-  const own = { path: "src/app/auth.service.ts", line: 30, symbol: "AuthService.own", transport: "http", reason: "unresolved", evidence: [{ path: "src/app/auth.service.ts", line: 30 }], diagnostic: { cause: "source-not-read" } };
-  const callers = [{ path: "src/app/auth.service.ts", line: 10, symbol: "AuthService.a" }, { path: "src/app/auth.service.ts", line: 20, symbol: "AuthService.b", through: [{ path: "src/app/token.service.ts", line: 5 }] }, { path: "src/app/user.service.ts", line: 7, symbol: "UserService.c", stated: { method: "GET", path: "/users" } }];
-  const flat = callers.map(({ through, ...caller }) => ({ ...caller, transport: "http", reason: "unresolved", evidence: [{ path: caller.path, line: caller.line }, ...(through ?? []), cause], diagnostic: { cause: "source-not-read" } }));
-  const render = (value: object, mode: "summary" | "details") => renderWorkspace({ ...base, status: "complete", value: { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [] } } as never, mode);
-  const grouped = { names: [], unresolved: [own], inherited: [{ causePlace: cause, reason: "unresolved", transport: "http", diagnostic: { cause: "source-not-read" }, callers }] };
-  const status = (text: string) => text.split("\n").find((line) => line.startsWith("status:"));
-
-  assert.equal(status(render(grouped, "summary")), "status: complete (4 undecided)");
-  assert.equal(status(render(grouped, "summary")), status(render({ names: [], unresolved: [own, ...flat] }, "summary")));
-  const summary = render(grouped, "summary");
-  assert.equal(summary.split("src/app/offline.service.ts:86").length - 1, 1);
-  assert.match(summary, /3 calls in 2 files/);
-  assert.match(summary, /UserService\.c GET \/users/);
-  assert.doesNotMatch(summary, /AuthService\.a/);
-  const details = render(grouped, "details");
-  assert.equal(details.split("src/app/offline.service.ts:86").length - 1, 1);
-  assert.match(details, /AuthService\.b <- src\/app\/token\.service\.ts:5/);
-  assert.match(details, /AuthService\.a/);
-});
-
-test("dependency ambiguity remains visible with its candidates in both workspace text modes", () => {
-  const cut = { kind: "unresolved-link", reason: "unresolved", at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } };
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "partial", cuts: [cut], value: { names: [], unresolved: [] } } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [] };
+test("summary lists every cross-repository tier-0 link beyond LISTED_ITEMS and keeps internal links separate", () => {
+  const links = Array.from({ length: LISTED_ITEMS + 1 }, (_, index) => ({ ...original.links[0]!, id: `link-${index}`, from: { ...original.links[0]!.from, line: index + 1, symbol: `call${index}` } }));
+  assert.ok(links.length > LISTED_ITEMS);
+  const value = { links, internalLinks: [links[0]!] };
   for (const mode of ["summary", "details"] as const) {
-    const text = renderWorkspace({ ...base, status: "complete", value } as never, mode);
-    assert.match(text, /com.acme:clients.*ambiguous.*one, two/);
-    if (mode === "details") assert.match(text, /pom.xml.*4/);
+    const text = renderWorkspace(fact(value), mode);
+    for (const link of links) assert.ok(text.includes(link.from.symbol));
+    assert.match(text, /links inside one repository:/);
+    assert.doesNotMatch(text, /mode "details"/);
+  }
+  assert.equal(rows(value, "value.links").length, links.length);
+});
+
+test("links preserve both endpoints, matching qualifications and drift", () => {
+  const link = { ...original.links[0]!, confidence: 0.7, authority: "undecided" as const, profiles: ["prod"], drift: [{ segment: "daily-menus", parameter: "id", type: "UUID" as const }] };
+  const row = rows({ links: [link] }, "value.links")[0]!;
+  assert.deepEqual(row.place, { repo: "web", path: "src/client.ts", line: 1 });
+  assert.equal(row.children![0]!.place!.repo, "api");
+  for (const mode of ["summary", "details"] as const) {
+    const text = renderWorkspace(fact({ links: [link] }), mode);
+    for (const token of ["Controller.get", "GET /orders", "confidence 0.7", "under prod", "base URL undecided", '"daily-menus" fills id (UUID)']) assert.ok(text.includes(token), token);
   }
 });
 
-type Site = { path: string; line: number; symbol: string; transport: string; reason: string; evidence: unknown[]; diagnostic?: { cause: string }; stated?: { method: string; path?: string }; via?: string };
-
-function unresolvedWorkspace(perRepo: Record<string, Site[]>, anchors: { links?: { repo: string; file: string }[]; unlinked?: { repo: string; file: string }[] } = {}): never {
-  const repos = Object.keys(perRepo);
-  const snapshot = (repo: string) => ({ ...base.snapshot, repo });
-  const from = ({ repo, file }: { repo: string; file: string }) => ({ repo, file, line: 1, symbol: "caller" });
-  const sections = Object.fromEntries(repos.map((repo) => [repo, { ...base, snapshot: snapshot(repo), status: "complete", value: { names: [], unresolved: perRepo[repo] } }]));
-  const links = (anchors.links ?? []).map((place) => ({ id: `link-${place.file}`, from: from(place), to: { repo: "z", kind: "http", name: "GET /x", handler: { path: "h.ts", line: 1, symbol: "h" } }, transport: "http", basis: "exact", confidence: 1 }));
-  const unlinked = (anchors.unlinked ?? []).map((place) => ({ from: from(place), transport: "http", outcome: "unmatched", name: "/x" }));
-  const value = { workspace: { repos, source: "request" }, repositorySnapshots: repos.map((repo) => ({ repo, snapshot: snapshot(repo) })), sections, candidates: [], links, internalLinks: [], unlinked, unserved: [] };
-  return { ...base, status: "complete", value } as never;
-}
-
-const site = (path: string, line: number, cause: string | undefined, extra: Partial<Site> = {}): Site => ({ path, line, symbol: `Symbol.method${line}`, transport: "http", reason: "unresolved", evidence: [{ path, line }], ...(cause === undefined ? {} : { diagnostic: { cause } }), ...extra });
-
-function unresolvedSection(text: string): string {
-  return text.slice(text.indexOf("unresolved call sites ("));
-}
-
-test("a summary lists the unresolved sites that show a request and counts the rest by cause, file and repository", () => {
-  const fact = unresolvedWorkspace({
-    alpha: [
-      ...Array.from({ length: 12 }, (_, i) => site("src/very/long/path/to/an/unstated/file.ts", i + 1, "source-not-read")),
-      ...Array.from({ length: 12 }, (_, i) => site(`src/very/long/path/to/an/other/file${i % 2}.ts`, i + 1, "dispatch-disagreement")),
-      site("src/stated.ts", 7, "destination-undecidable", { stated: { method: "GET", path: "/orders" } }),
-      site("src/linked.ts", 8, "destination-undecidable"),
-      site("src/unlinked.ts", 9, "destination-undecidable"),
-      site("src/plain.ts", 10, "destination-undecidable"),
-    ],
-    beta: [site("src/very/long/path/to/an/unstated/file.ts", 3, "source-not-read"), site("src/other.ts", 4, "unknown-extra"), site("src/r.ts", 5, "recursive", { stated: { method: "GET" } })],
-  }, { links: [{ repo: "alpha", file: "src/linked.ts" }], unlinked: [{ repo: "alpha", file: "src/unlinked.ts" }] });
-  const text = renderWorkspace(fact, "summary");
-  const block = unresolvedSection(text);
-  assert.match(block, /^unresolved call sites \(31\): destination-undecidable 4, recursive 1, dispatch-disagreement 12, source-not-read 13, unknown-extra 1$/m);
-  const listed = block.split("\n").filter((line) => /^ {8}\d+ Symbol/.test(line));
-  assert.deepEqual(listed.map((line) => line.trim().split(" ")[0]), ["8", "7", "9", "5"]);
-  assert.match(block, /destination-undecidable \(4\):\n {4}alpha:\n {6}src\/linked\.ts/);
-  assert.match(block, /not listed: 1 in 1 file \(alpha 1\); mode "details" lists them; answer\.json retains all recorded sites/);
-  assert.match(block, /not listed: 12 in 2 files \(alpha 12\)/);
-  assert.match(block, /not listed: 13 in 2 files \(alpha 12, beta 1\)/);
-  assert.match(block, /unknown-extra \(1\):\n {2} {2}not listed: 1 in 1 file \(beta 1\)/);
-  assert.equal(block.split("A wrapper request is sited").length - 1, 1);
-  assert.ok(block.length < unresolvedSection(renderWorkspace(fact, "details")).length);
+test("unlinked sites keep methods, outcomes, competing repositories and routes", () => {
+  const one = original.unlinked[0]!;
+  const { method: _method, ...two } = one;
+  const mapped = rows({ unlinked: [one, { ...two, name: "/other" }] }, "value.unlinked");
+  assert.match(mapped[0]!.label, /http DELETE \/gone: ambiguous/);
+  assert.match(mapped[1]!.label, /http \/other: ambiguous/);
+  assert.deepEqual(mapped[0]!.qualifiers, [{ name: "repositories", value: "api, other" }, { name: "routes", value: "DELETE /gone" }]);
 });
 
-test("a summary names the libraries an unresolved cause goes through, with their counts, even for the sites it does not list", () => {
-  const fact = unresolvedWorkspace({ alpha: [
-    ...Array.from({ length: 3 }, (_, i) => site("src/a.ts", i + 1, "source-not-read", { via: "com.acme.rest.Client" })),
-    site("src/b.ts", 9, "source-not-read", { via: "com.acme.bus.Bus" }),
-    site("src/c.ts", 10, "source-not-read"),
-  ] });
-  assert.match(unresolvedSection(renderWorkspace(fact, "summary")), /^ {2}source-not-read \(5; through com\.acme\.bus\.Bus 1, com\.acme\.rest\.Client 3\):$/m);
+test("unresolved and inherited gaps retain cause, libraries, requests, causal evidence and undecided count", () => {
+  const section = original.sections["web"]!;
+  if (section.status === "unknown") throw Error("fixture section is unknown");
+  const callers = [{ path: "src/a.ts", line: 1, symbol: "a", through: [{ path: "src/through.ts", line: 2 }] }, { path: "src/b.ts", line: 3, symbol: "b", stated: { method: "GET" as const, path: "/users" } }];
+  const value = { sections: { web: { ...section, value: { ...section.value, inherited: [{ causePlace: { path: "src/cause.ts", line: 10 }, reason: "unresolved" as const, transport: "http" as const, diagnostic: { cause: "source-not-read" as const }, via: "Client", callers }] } } } };
+  const details = renderWorkspace(fact(value), "details");
+  assert.match(details, /status: complete \(3 undecided\)/);
+  for (const token of ["source-not-read", "destination-undecidable", "Client", "GET /users", "through.ts:2", "https://api.example"]) assert.ok(details.includes(token), token);
+  assert.equal(details.split("cause.ts").length - 1, 1);
+  assert.match(renderWorkspace(fact(value), "summary"), /GET \/users/);
 });
 
-test("details keeps every unresolved site under its repository", () => {
-  const fact = unresolvedWorkspace({ alpha: Array.from({ length: 12 }, (_, i) => site("src/a-long-file-name-here.ts", i + 1, "source-not-read")), beta: [site("src/b.ts", 1, "recursive")] });
-  const text = renderWorkspace(fact, "details");
-  assert.match(text, /^unresolved call sites \(13\):$/m);
-  assert.doesNotMatch(text, /not listed/);
-  assert.equal([...text.matchAll(/^ {6}\d+ Symbol/gm)].length, 13);
+test("cuts retain dependency ambiguity and candidates in both modes", () => {
+  const section = original.sections["web"]!;
+  if (section.status === "unknown") throw Error("fixture section is unknown");
+  const cut = { kind: "unresolved-link" as const, reason: "join-unsettled" as const, at: ["pom.xml", "pom.xml:4"], reach: { kind: "anything" as const }, dependency: { name: "com.acme:clients", reason: "ambiguous" as const, candidates: ["one", "two"] } };
+  for (const mode of ["summary", "details"] as const) assert.match(renderWorkspace(fact({ sections: { web: { ...section, status: "partial", cuts: [cut] } } }), mode), /com.acme:clients.*ambiguous.*one, two/);
 });
 
-test("a summary keeps the literal listing when counting is not shorter", () => {
-  const fact = unresolvedWorkspace({ alpha: [site("src/a.ts", 1, "source-not-read")] });
-  const block = unresolvedSection(renderWorkspace(fact, "summary"));
-  assert.match(block, /^unresolved call sites \(1\):$/m);
-  assert.doesNotMatch(block, /not listed/);
-  assert.match(block, /alpha:\n {4}src\/a\.ts\n {6}1 Symbol/);
-  assert.equal(block.split("A wrapper request is sited").length - 1, 1);
+test("names after an undecided base are context, retain places in details and raise no unserved row", () => {
+  const presentation = present(fact({ unserved: [] }));
+  const section = presentation.sections.find(item => item.id === "value.undecidedBase")!;
+  assert.equal(section.role, "context");
+  assert.equal(section.rows[0]!.evidence!.length, 16);
+  assert.equal(presentation.sections.find(item => item.id === "value.unserved")!.rows.length, 0);
+  assert.doesNotMatch(renderWorkspace(fact({ undecidedBase: [] }), "summary"), /names whose base is undecided/);
 });
 
-test("the grouped summary does not depend on the order the sites arrive in", () => {
-  const sites = [...Array.from({ length: 10 }, (_, i) => site(`src/long/directory/name/file${i % 3}.ts`, i + 1, i % 2 === 0 ? "source-not-read" : "recursive")), site("src/s.ts", 99, "recursive", { stated: { method: "POST" } })];
-  const render = (alpha: Site[]) => renderWorkspace(unresolvedWorkspace({ alpha, beta: [site("src/long/directory/name/file0.ts", 1, "source-not-read")] }), "summary");
-  const forward = render(sites);
-  assert.match(forward, /not listed/);
-  assert.equal(render([...sites].reverse()), forward);
-});
-
-const CALLS_FILE = "src/app/orders-client.service.ts";
-const HANDLER_PLACE = { path: "src/main/java/app/OrdersController.java", line: 40, repo: "orders" };
-const callPlace = (line: number) => ({ path: CALLS_FILE, line, repo: "shop-web" });
-const candidateOf = (name: string, lines: readonly number[], extra: readonly object[] = []) => ({ name, repo: "orders", basis: "link", evidence: [...lines.map(callPlace), ...extra] });
-const candidateLineOf = (text: string, name: string) => text.split("\n").find((line) => line.startsWith(`  - ${name} -> orders`)) ?? "";
-
-test("a candidate served through links the answer lists points to them instead of repeating their places", () => {
-  const value = { ...mapValue([linkOf(7), linkOf(9)]), candidates: [candidateOf("api", [7, 9]), candidateOf("http://localhost:9966", [7, 9]), candidateOf("stray", [7], [{ path: "src/elsewhere.ts", line: 3, repo: "shop-web" }])] };
-  for (const detail of ["summary", "details"] as const) {
-    const text = renderWorkspace({ ...base, status: "complete", value } as never, detail);
-    for (const name of ["api", "http://localhost:9966"]) {
-      const line = candidateLineOf(text, name);
-      assert.ok(line.includes(name), `${detail} ${name}`);
-      assert.ok(!line.includes(CALLS_FILE) && !line.includes(HANDLER_PLACE.path), `${detail} ${name}: ${line}`);
-    }
-    assert.equal(text.split(`${CALLS_FILE}:7`).length - 1, 2, "the call is said once in the link line and once in the stray candidate");
-    assert.ok(candidateLineOf(text, "stray").includes("src/elsewhere.ts:3"), "a place no listed link ends at keeps every place of its candidate");
-  }
-});
-
-test("a candidate whose links the summary only counts carries their count, and details names them", () => {
-  const lines = Array.from({ length: LISTED_ITEMS + 1 }, (_, index) => index + 1);
-  const value = { ...mapValue(lines.map((line) => linkOf(line))), candidates: [candidateOf("api", lines)] };
-  const summary = candidateLineOf(renderWorkspace({ ...base, status: "complete", value } as never, "summary"), "api");
-  assert.ok(summary.includes(String(LISTED_ITEMS + 1)) && !summary.includes(CALLS_FILE), summary);
-  const details = candidateLineOf(renderWorkspace({ ...base, status: "complete", value } as never, "details"), "api");
-  assert.ok(details.includes(`1-${LISTED_ITEMS + 1}`) && !details.includes(CALLS_FILE), details);
-});
-
-test("the host and the prefix of one base write the same calls: a workspace says those places once, under the first name", () => {
-  const places = (...lines: number[]) => lines.map((line) => ({ path: "src/app/orders-client.service.ts", line }));
-  const names = [
-    { kind: "http-host", name: "http://localhost:9966", evidence: places(7, 9, 11) },
-    { kind: "path-prefix", name: "api", evidence: places(7, 9, 11) },
-    { kind: "path-prefix", name: "other", evidence: places(7, 9) },
-  ];
-  const value = { ...mapValue([]), sections: { "shop-web": { ...base, status: "complete", value: { names, unresolved: [] } } } };
-  for (const detail of ["summary", "details"] as const) {
-    const text = renderWorkspace({ ...base, status: "complete", value } as never, detail);
-    assert.equal(text.split("orders-client.service.ts:11").length - 1, 1, `${detail}: the three places are listed once`);
-    assert.match(text, /- http:\/\/localhost:9966 \(same places as api\)/, detail);
-    assert.match(text, /- other \(src\/app\/orders-client\.service\.ts:7, src\/app\/orders-client\.service\.ts:9\)/, detail);
-  }
-});
-
-test("names whose base is undecided print once as their own group: a summary counts each one's places, details lists them and says shared places once; none is called unserved", () => {
-  const place = (line: number) => ({ repo: "shop-web", path: "src/app/address.api.ts", line });
-  const undecidedBase = [
-    { kind: "path-prefix", name: "auth", evidence: [place(3), place(4)] },
-    { kind: "path-prefix", name: "name-geo-api", evidence: [place(26)] },
-    { kind: "path-prefix", name: "protocol", evidence: [place(26)] },
-  ];
-  const render = (detail: "summary" | "details", names: unknown) => renderWorkspace({ ...base, status: "complete", value: { ...mapValue([]), ...(names === undefined ? {} : { undecidedBase: names }) } } as never, detail);
-
-  const summary = render("summary", undecidedBase);
-  assert.match(summary, /names whose base is undecided \(3\):/);
-  assert.match(summary, /^ {2}- path-prefix auth \(2 places in shop-web\)$/m);
-  assert.match(summary, /^ {2}- path-prefix name-geo-api \(1 place in shop-web\)$/m);
-  assert.doesNotMatch(summary, /address\.api\.ts/);
-  assert.match(summary, /no local repository serves \(0\)/);
-
-  const details = render("details", undecidedBase);
-  assert.match(details, /^ {2}- path-prefix auth \(shop-web:src\/app\/address\.api\.ts:3, shop-web:src\/app\/address\.api\.ts:4\)$/m);
-  assert.equal(details.split("address.api.ts:26").length - 1, 1, "the places two names share are said once");
-  assert.match(details, /^ {2}- path-prefix protocol \(same places as name-geo-api\)$/m);
-
-  assert.doesNotMatch(render("summary", undefined), /names whose base is undecided/);
+test("candidates refer to serving link rows only when every evidence place is represented without losing metadata", () => {
+  const from = original.links[0]!.from;
+  const evidence = [{ repo: from.repo, path: from.file, line: from.line }];
+  const candidate = { name: "api", repo: "api", basis: "link" as const, evidence };
+  const mapped = rows({ candidates: [candidate, { ...candidate, name: "extra", evidence: [...evidence, { repo: "web", path: "src/extra.ts", line: 7 }] }, { ...candidate, name: "metadata", evidence: [{ ...evidence[0]!, via: "fetch" }] }] }, "value.candidates");
+  assert.deepEqual(mapped[0]!.evidence, []);
+  assert.ok(mapped[0]!.qualifiers!.some(item => item.name === "links" && item.value === "0"));
+  assert.equal(mapped[1]!.evidence!.length, 2);
+  assert.equal(mapped[2]!.evidence![0]!.via, "fetch");
 });
