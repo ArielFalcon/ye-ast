@@ -33,7 +33,7 @@ import { present as presentEntrypoints } from "./presentation/families/entrypoin
 import { present as presentWorkspace } from "./presentation/families/workspace.ts";
 import { present as presentDecisions } from "./presentation/families/decisions.ts";
 import { write } from "./presentation/writer.ts";
-import { present as presentImpact, presentWorkspace } from "./presentation/families/impact.ts";
+import { present as presentImpact, presentWorkspace as presentWorkspaceImpact } from "./presentation/families/impact.ts";
 import { cutSection } from "./presentation/rows.ts";
 
 const NONE = "  (none)";
@@ -854,7 +854,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Render
 export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : [...workspaceImpactGuide(fact, context), REQUEST_SITE_GUIDE]).join("\n");
   const literalOwners = new Set(fact.status === "unknown" ? [] : Object.entries(fact.value.sections).flatMap(([repo, section]) => section.status !== "unknown" && section.value.impact !== undefined && literalHandlers(section.value.impact, { kind: "section", repo }, context) ? [repo] : []));
-  const lines = [write(presentWorkspace(fact, literalOwners), detail).text];
+  const lines = [write(presentWorkspaceImpact(fact, literalOwners), detail).text];
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
   const { value } = fact;
   if (context?.recovery?.status === "unavailable") lines.push(`Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`);
