@@ -95,15 +95,14 @@ function usage(): never {
 }
 
 /**
- * Every occurrence of the cache directory, under each spelling the process may print, and the answer-file path line. A
- * live fact's `origin` (a sync or a full build, ADR-0015) and the result identity derived from it are replaced too: which
- * process built the store a fact read depends on timing; every other byte must be equal.
+ * Every occurrence of the cache directory, under each spelling the process may print. A live fact's `origin` (a sync or
+ * a full build, ADR-0015) and the result identity derived from it are replaced too: which process built the store a fact
+ * read depends on timing; every other byte must be equal.
  */
 function normalized(text: string, cache: string): string {
   const spellings = [...new Set([cache, realpathSync(cache)])].sort((a, b) => b.length - a.length);
   return spellings
     .reduce((out, spelling) => out.split(spelling).join("<cache>"), text)
-    .replace(/^answer files: \S+/gmu, "answer files: <path>")
     .replace(/"origin":\{"kind":"(?:sync|full)"(?:,"base":"[0-9a-f]+")?\}/gu, '"origin":<origin>')
     .replace(/mcp-r1:[0-9a-f]+/gu, "mcp-r1:<identity>");
 }
