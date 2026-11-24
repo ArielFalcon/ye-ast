@@ -854,7 +854,8 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Render
 export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: RenderDetail = "summary", context?: RenderContext): string {
   if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : [...workspaceImpactGuide(fact, context), REQUEST_SITE_GUIDE]).join("\n");
   const literalOwners = new Set(fact.status === "unknown" ? [] : Object.entries(fact.value.sections).flatMap(([repo, section]) => section.status !== "unknown" && section.value.impact !== undefined && literalHandlers(section.value.impact, { kind: "section", repo }, context) ? [repo] : []));
-  const lines = [write(presentWorkspaceImpact(fact, literalOwners), detail).text];
+  const presentation = presentWorkspaceImpact(fact, literalOwners);
+  const lines = [write({ ...presentation, sections: presentation.sections.filter((section) => section.role === "answer") }, detail).text];
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
   const { value } = fact;
   if (context?.recovery?.status === "unavailable") lines.push(`Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`);
@@ -872,6 +873,8 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   const unserved = counted("no local repository serves", value.workspace.unserved);
   const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): ${categoryRecovery({ answerJson: "includes all" })} names`;
   lines.push(value.workspace.unserved.length > 0 && size([unservedSummary]) <= size([unserved]) ? unservedSummary : unserved);
+  const remainingText = write({ status: [], snapshots: [], sections: presentation.sections.filter((section) => section.role !== "answer") }, detail).text;
+  if (remainingText !== "") lines.push(remainingText);
   if (value.workspace.unserved.length > 0 || stale.length > 0) lines.push(DECISIONS_HINT);
   lines.push(...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context), ...walkBoundRemedies(cutsOf(fact), fact.inputs.declaredConfig.walk));
   for (const repo of value.workspace.repos) {

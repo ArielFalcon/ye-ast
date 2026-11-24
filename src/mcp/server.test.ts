@@ -88,8 +88,8 @@ test("impact and callers expose reached unknown causes and source evidence in te
   try {
     for (const [tool, args, schema] of [["ye_ast_callers", { targets: [{ file: "src/handler.ts", symbol: "run" }] }, CALLERS_OUTPUT], ["ye_ast_impact", { base: "main" }, IMPACT_OUTPUT]] as const) {
       const summary = textOf(await session.callTool(tool, args));
-      assert.match(summary, /unresolved.*src\/handler\.ts:5/);
-      assert.match(summary, /no-extractor.*src\/handler\.ts:7/);
+      assert.match(summary, /src\/handler\.ts\n {4}2 unknown -> run[^\n]*\n {6}5 unknown \(unresolved\)/);
+      assert.match(summary, /^ {6}7 unknown \(no-extractor\)$/m);
       const full = resultFields(await session.callFull(tool, { ...args }));
       assert.deepEqual(full.value.entrypoints[0].observations, reached.observations);
       const validate = validatorOf(schema["~standard"].jsonSchema.output({ target: "draft-07" }));
@@ -1139,8 +1139,8 @@ test("handler and module rows print one compact coordinate each that rebuilds a 
       assert.equal(text.split('"file":').length - 1, 1, mode);
       const handlerExample = JSON.parse(text.match(/Handler lookup:.*select example: (\{[^\n]+\})/)![1]!);
       const moduleExample = JSON.parse(text.match(/Module lookup:.*select example: (\{[^\n]+\})/)![1]!);
-      const handlers = [...text.matchAll(/^\s+- .* -> (.+):(\d+)(?:-\d+)? (\S+) \(depth/gm)].map(([, path, line, symbol]) => ({ path, symbol, line: Number(line) }));
-      const listed = [...text.matchAll(/^\s+(base|head) (.+) \(depth/gm)].map(([, snapshot, file]) => ({ file, snapshot }));
+      const handlers = [...text.matchAll(/^ {2}(.+)\n {4}(\d+)(?:-\d+)? http-route [^\n]+ -> (\S+) \(depth/gm)].map(([, path, line, symbol]) => ({ path, symbol, line: Number(line) }));
+      const listed = [...text.matchAll(/^ {2}(.+) (base|head) \(depth/gm)].map(([, file, snapshot]) => ({ file, snapshot }));
       assert.deepEqual(handlers, entrypoints.map(({ handler: { path, symbol, line } }) => ({ path, symbol, line })), mode);
       assert.deepEqual(listed, modules.map(({ file, snapshot }) => ({ file, snapshot })), mode);
       for (const handler of handlers) assert.equal(schema({ base: "main", select: { ...handlerExample, handler }, page: { limit: 1 } }).valid, true, mode);
@@ -1455,7 +1455,7 @@ test("module dependencies have separate provenance and summary never masquerades
     const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
     assert.match(summary, /module dependencies/);
     assert.match(summary, /not symbol or entrypoint impact/);
-    assert.doesNotMatch(summary, /src\/consumer-9.ts/);
+    assert.match(summary, /src\/consumer-9\.ts head \(depth 10, origins 0/);
     const result = await session.callFull("ye_ast_impact", { base: "main" });
     assert.deepEqual(((resultFields(result) as { value: ImpactValue }).value).modules, value.modules);
     assert.match(textOf(result), /value\.modules/);
@@ -1472,10 +1472,11 @@ test("impact reads a change of the bound repository, head defaulting to HEAD, an
   assert.deepEqual(withoutRecovery(resultFields(result)), envelopeOf(impactFact(), "details"));
   const text = textOf(result);
   assert.match(text, /status: complete/);
-  assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java \(lines\)\n {4}31 OrderService\.find$/m);
-  assert.match(text, /src\/OrderController\.java\n {4}17 OrderController\.one \[method\] \(depth 2, confidence 0\.75, fan-in 3, via src\/OrderService\.java:OrderService\.find at 44\)/);
-  assert.match(text, /added http-route POST \/orders.*src\/OrderController\.java:40/);
-  assert.match(text, /GET \/orders\/\{id\}.*depth 2.*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
+  assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java\n {4}0\. 31 OrderService\.find \(lines\)$/m);
+  assert.match(text, /src\/OrderController\.java\n {4}17 OrderController\.one \[method\] \(depth 2, confidence 0\.75, fan-in 3, via src\/OrderService\.java:OrderService\.find at 44 \(call\)\)/);
+  assert.match(text, /changed entrypoints \(1\):\n {2}src\/OrderController\.java\n {4}40 http-route POST \/orders -> OrderController\.create \(added\)/);
+  assert.match(text, /GET \/orders\/\{id\} -> OrderController\.one \(depth 2, origins 0/);
+  assert.match(text, /lookup example:.*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
   await session.close();
 });
 
@@ -1638,8 +1639,8 @@ test("a partial answer counts its cuts in the status line and keeps applicable l
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   const lines = text.split("\n");
   assert.equal(lines[0], "status: partial (cuts: 1 depth, 1 hub)");
-  assert.match(text, /depth \(1\); limit 3/);
-  assert.match(text, /hub \(1\)/);
+  assert.match(text, /^ {2}depth \(limit 3\)$/m);
+  assert.match(text, /^ {2}hub$/m);
   assert.ok(text.indexOf("\ncuts:") > text.indexOf("impacted symbols"), "the cut list closes the answer");
   await session.close();
 });
@@ -1680,10 +1681,10 @@ test("an impact summary counts every cut kind and keeps its bound regardless of 
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /^status: partial \(cuts: 8 depth, 1 hub, 1 no-extractor not-indexed, 1 unresolved-link hidden-caller\)$/m);
-  assert.match(text, /depth \(8\); limit 5/);
-  assert.match(text, /hub \(1\)/);
-  assert.match(text, /no-extractor \(1\)/);
-  assert.match(text, /unresolved-link \(1\)/);
+  assert.match(text, /^ {2}8 depth \(limit 5\)$/m);
+  assert.match(text, /^ {2}hub$/m);
+  assert.match(text, /^ {2}no-extractor not-indexed$/m);
+  assert.match(text, /^ {2}unresolved-link hidden-caller$/m);
   assert.doesNotMatch(text, /src\/x\.ts/);
   await session.close();
 });
@@ -1709,9 +1710,9 @@ test("impact detail localizes every cut anchor while full JSON retains every ref
   const result = await session.callFull("ye_ast_impact", { base: "main" });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
   assert.deepEqual(withoutRecovery(resultFields(result)), { ...deep, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
-  assert.match(text, /anchor "src\/b\.ts::B\.user":\n\s+cutIndex 0; hidden-caller; 2 reference places/);
-  assert.doesNotMatch(text, /src\/y\.ts/);
-  assert.match(text, /depth:\n\s+cutIndex 1; src\/c\.ts::C\.top \(limit 5\)/);
+  assert.match(text, /unresolved-link hidden-caller\n {4}src\/b\.ts::B\.user\n {4}src\/y\.ts:7\n {4}src\/y\.ts:9/);
+  assert.equal((text.match(/src\/y\.ts:/g) ?? []).length, 2);
+  assert.match(text, /depth \(limit 5\)\n {4}src\/c\.ts::C\.top/);
   assert.doesNotMatch(text, /summarized/);
   await session.close();
 });
@@ -1728,7 +1729,7 @@ test("a workspace summary attributes counted cuts to their repository", async ()
   const fact = { ...built, value: { ...value, sections: { ...value.sections, shop: section } } } as Fact<WorkspaceImpactValue>;
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE }));
-  assert.match(text, /cuts for repository shop:[\s\S]*unresolved-link \(1\)/);
+  assert.match(text, /cuts for repository shop:\n {2}unresolved-link hidden-caller/);
   assert.doesNotMatch(text, /src\/app\/page\.ts/);
   await session.close();
 });
@@ -1860,17 +1861,23 @@ test("workspace unknown repository reason is visible in summary and full text", 
   await session.close();
 });
 
-test("both impact text levels count unselected change origins while full JSON preserves them", async () => {
+test("impact summary bounds change origins while details and full JSON preserve them", async () => {
   const seeds = Array.from({ length: LISTED_ITEMS + 1 }, (_, index) => ({ file: `src/feature-${index}.ts`, symbol: `a${index}`, line: index + 1, basis: index % 2 === 0 ? "lines" as const : "top-level" as const }));
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, new RegExp(`^seeds \\(${LISTED_ITEMS + 1}\\):\\n {2}change origins: ${LISTED_ITEMS + 1} declarations across ${LISTED_ITEMS + 1} files \\(lines ${(LISTED_ITEMS + 1) / 2}, top-level ${(LISTED_ITEMS + 1) / 2}\\); answer\\.json includes every seed$`, "m"));
-  assert.doesNotMatch(summary, /src\/feature-/);
+  assert.match(summary, /0\. 1 a0 \(lines\)/);
+  assert.match(summary, /\+1 more: answer\.json value\.seeds/);
+  assert.doesNotMatch(summary, new RegExp(`src/feature-${LISTED_ITEMS}\\.ts`));
   const full = await session.callFull("ye_ast_impact", { base: "main" });
   assert.deepEqual(withoutRecovery(resultFields(full)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.doesNotMatch(textOf(full), /src\/feature-/);
-  assert.match(textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" })), new RegExp(`change origins: ${LISTED_ITEMS + 1} declarations across ${LISTED_ITEMS + 1} files`));
+  const details = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
+  for (const [index, seed] of seeds.entries()) {
+    assert.ok(details.includes(seed.file));
+    assert.ok(details.includes(`${index}. ${seed.line} ${seed.symbol} (${seed.basis})`));
+  }
+  assert.doesNotMatch(details, /\+\d+ more/);
   await session.close();
 });
 
@@ -1878,11 +1885,11 @@ test("impact text names each changed contract operation with the side of the exc
   const changedContracts = [{ change: "altered" as const, method: "GET" as const, path: "/orders", operationId: "getOrders", document: "openapi/api.yaml", line: 6, parts: ["response" as const] }];
   const fact = impactFact({ value: { ...IMPACT, changedContracts } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
-  assert.match(textOf(await session.callTool("ye_ast_impact", { base: "main" })), /^changed contracts \(1\):\n {2}- altered GET \/orders \(getOrders\) response at openapi\/api\.yaml:6$/m);
+  assert.match(textOf(await session.callTool("ye_ast_impact", { base: "main" })), /^changed contracts \(1\):\n {2}openapi\/api\.yaml\n {4}6 altered GET \/orders \(getOrders\) response$/m);
   await session.close();
 });
 
-test("a summary lists the seeds a caller asked for and counts the change seeds beside them", async () => {
+test("a summary lists requested seeds and counts change seeds beyond the context bound", async () => {
   const seeds = [
     { file: "src/a.ts", symbol: "asked", line: 1, basis: "requested" as const },
     ...Array.from({ length: LISTED_ITEMS + 1 }, (_, index) => ({ file: "src/a.ts", symbol: `a${index}`, line: index + 2, basis: "lines" as const })),
@@ -1890,11 +1897,14 @@ test("a summary lists the seeds a caller asked for and counts the change seeds b
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, new RegExp(`^seeds \\(${LISTED_ITEMS + 2}\\):\\n {2}src/a\\.ts \\(requested\\)\\n {4}1 asked\\n {2}change origins: ${LISTED_ITEMS + 1} declarations across 1 file \\(lines ${LISTED_ITEMS + 1}\\); answer\\.json includes every seed$`, "m"));
+  assert.ok(summary.includes(`seeds (${seeds.length}):`));
+  assert.match(summary, /^ {2}src\/a\.ts\n {4}0\. 1 asked \(requested\)$/m);
+  assert.ok(summary.includes(`${LISTED_ITEMS - 1}. ${LISTED_ITEMS} a${LISTED_ITEMS - 2} (lines)`));
+  assert.match(summary, /\+2 more: answer\.json value\.seeds/);
   await session.close();
 });
 
-test("the seeds of an impact answer are grouped under their file, with the basis printed once when the file shares it", async () => {
+test("the seeds of an impact answer are grouped under their file with indexed bases", async () => {
   const seeds = [
     { file: "src/a.ts", symbol: "a", line: 3, basis: "lines" as const },
     { file: "src/a.ts", symbol: "b", line: 9, basis: "top-level" as const },
@@ -1903,7 +1913,7 @@ test("the seeds of an impact answer are grouped under their file, with the basis
   const fact = impactFact({ value: { ...IMPACT, seeds, entrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
-  assert.match(text, /^seeds \(3\):\n {2}src\/a\.ts\n {4}3 a \(lines\)\n {4}9 b \(top-level\)\n {2}src\/b\.ts \(requested\)\n {4}2 c$/m);
+  assert.match(text, /^seeds \(3\):\n {2}src\/a\.ts\n {4}0\. 3 a \(lines\)\n {4}1\. 9 b \(top-level\)\n {2}src\/b\.ts\n {4}2\. 2 c \(requested\)$/m);
   assert.equal(text.split("src/a.ts").length - 1, 1, "the path of a grouped file is printed once");
   await session.close();
 });
@@ -1922,8 +1932,8 @@ test("a symbol prints the span it covers and the place inside itself where it de
   const fact = impactFact({ value } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
-  assert.match(text, /^seeds \(1\):\n {2}src\/a\.ts \(requested\)\n {4}3-9 A\.seed$/m);
-  assert.match(text, /^ {2}src\/b\.ts\n {4}40-58 B\.user \[function\] \(depth 1, via src\/a\.ts:A\.seed at 44, 51, 63\)$/m);
+  assert.match(text, /^seeds \(1\):\n {2}src\/a\.ts\n {4}0\. 3-9 A\.seed \(requested\)$/m);
+  assert.match(text, /^ {2}src\/b\.ts\n {4}40-58 B\.user \[function\] \(depth 1, via src\/a\.ts:A\.seed at 44, 51, 63 \(call\)\)$/m);
   assert.match(text, /^ {4}7 C\.one \[constant\] \(depth 2, via src\/b\.ts:B\.user \(dispatch\)\)$/m);
   assert.match(text, /^ {4}9 D\.type \[class\] \(depth 2, via src\/b\.ts:B\.user at 12 \(reference\)\)$/m);
   await session.close();
@@ -1939,13 +1949,13 @@ test("a one-line declaration prints one line and a handler prints its span", asy
   const fact = impactFact({ value } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /^ {4}3 A\.seed$/m);
-  assert.match(text, /-> src\/OrderController\.java:17-31 OrderController\.one \(depth 1/m);
+  assert.match(text, /^ {4}0\. 3 A\.seed \(requested\)$/m);
+  assert.match(text, /src\/OrderController\.java\n {4}17-31 http-route GET \/orders\/\{id\} -> OrderController\.one \(depth 1/m);
   assert.doesNotMatch(text, /3-3/);
   await session.close();
 });
 
-test("impacted symbols are grouped under their file, a seed at depth 0 is not printed twice and only a confidence below 1 or a fan-in above 0 is printed", async () => {
+test("impacted symbols retain depth-zero declaration facts beside seed origins and omit default qualifiers", async () => {
   const grouped = impactFact({
     value: {
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
@@ -1961,14 +1971,16 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: grouped }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
-  assert.match(text, /impacted symbols \(3\):\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts\n {4}9 B\.user \[function\] \(depth 2, confidence 0\.5, fan-in 2, via src\/a\.ts:A\.other at 44\)\n {4}2 B\.helper \[function\] \(depth 2, confidence 0\.5, fan-in 1, via B\.user at 7\)/);
-  assert.doesNotMatch(text, /A\.seed \[method\]/);
+  assert.match(text, /impacted symbols \(4\):\n {2}src\/a\.ts\n {4}1 A\.seed \[method\] \(depth 0\)\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts\n {4}9 B\.user \[function\] \(depth 2, confidence 0\.5, fan-in 2, via src\/a\.ts:A\.other at 44 \(call\)\)\n {4}2 B\.helper \[function\] \(depth 2, confidence 0\.5, fan-in 1, via B\.user at 7 \(call\)\)/);
+  assert.equal((text.match(/A\.seed \[method\]/g) ?? []).length, 1);
+  assert.equal((text.match(/0\. 1 A\.seed \(requested\)/g) ?? []).length, 1);
+  assert.doesNotMatch(text, /confidence 1|fan-in 0/);
   await session.close();
 });
 
 const deeperPadding = (): ImpactValue["symbols"] => Array.from({ length: LISTED_ITEMS }, (_, index) => ({ file: `src/pad-${index}.ts`, symbol: `Pad${index}.top`, kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 }));
 
-test("callers summary counts dependency depths and detail identifies the nearest evidence frontier", async () => {
+test("callers summary counts upper tiers and details lists the complete evidence frontier", async () => {
   const deep = impactFact({
     value: {
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
@@ -1991,14 +2003,14 @@ test("callers summary counts dependency depths and detail identifies the nearest
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] });
   const text = textOf(result);
-  assert.match(text, new RegExp(`impacted symbols \\(${9 + LISTED_ITEMS}\\):\\n {2}src/a\\.ts\\n {4}4 A\\.other \\[method\\] \\(depth 1\\)\\n {2}by depth: 2: ${7 + LISTED_ITEMS}, 3: 1;`));
+  assert.match(text, new RegExp(`impacted symbols \\(${9 + LISTED_ITEMS}\\):\\n {2}src/a\\.ts\\n {4}4 A\\.other \\[method\\] \\(depth 1\\)\\n {2}\\+${8 + LISTED_ITEMS} more \\(tier 1: ${7 + LISTED_ITEMS}, tier 2: 1\\): answer\\.json value\\.symbols`));
   assert.doesNotMatch(text, /B\.user|C\.top/);
   const { recovery: _recovery, ...receipt } = fieldsOf(resultFields(result));
   assert.deepEqual(receipt, envelopeOf(deep));
   const full = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }], mode: "details" }));
   assert.match(full, /4 A\.other/);
-  assert.match(full, new RegExp(`${8 + LISTED_ITEMS} other symbols; answer\\.json`));
-  assert.doesNotMatch(full, /B\.user|C\.top/);
+  for (const symbol of deep.status === "unknown" ? [] : deep.value.symbols) assert.ok(full.includes(`${symbol.line} ${symbol.symbol} [${symbol.kind}]`));
+  assert.doesNotMatch(full, /\+\d+ more/);
   await session.close();
 });
 
@@ -2022,7 +2034,7 @@ test("callers summary retains requested targets while counting deeper consequenc
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const text = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] }));
-  assert.match(text, new RegExp(`by depth: 2: ${7 + LISTED_ITEMS}`));
+  assert.match(text, new RegExp(`\\+${7 + LISTED_ITEMS} more \\(tier 1: ${7 + LISTED_ITEMS}\\): answer\\.json value\\.symbols`));
   assert.match(text, /1 A\.seed/);
   await session.close();
 });
@@ -2039,8 +2051,8 @@ test("reached entrypoints print their confidence only when it is below 1", async
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: entrypoints }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /GET \/sure \(depth 1, 1 origin\); lookup example:.*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
-  assert.match(text, /GET \/maybe \(depth 2, confidence 0\.4, 1 origin\).*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
+  assert.match(text, /GET \/sure -> OrderController\.one \(depth 1, origins 0, 1 place\)/);
+  assert.match(text, /GET \/maybe -> OrderController\.one \(depth 2, origins 0, confidence 0\.4, 1 place\)/);
   await session.close();
 });
 
@@ -2091,14 +2103,14 @@ test("an unknown entrypoint item is rendered unknown next to the routes found", 
   await session.close();
 });
 
-test("a verified-empty complete answer counts its empty lists instead of spelling none", async () => {
+test("a verified-empty complete answer states no dependent and retains changed entrypoints", async () => {
   const empty = impactFact({ value: { ...IMPACT, seeds: [], symbols: [], entrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: empty }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /status: complete/);
-  assert.match(text, /^seeds \(0\):$/m);
-  assert.match(text, /^reached entrypoints \(0\):$/m);
-  assert.match(text, /^impacted symbols \(0\):$/m);
+  assert.match(text, /no dependent recorded/);
+  assert.match(text, /40 http-route POST \/orders -> OrderController\.create \(added\)/);
+  assert.doesNotMatch(text, /seeds \(|reached entrypoints \(|impacted symbols \(/);
   assert.doesNotMatch(text, /\(none\)/);
   await session.close();
 });
@@ -2370,7 +2382,7 @@ test("an answer read within a caller's scope says so under its status, and one w
   const scoped = impactFact({ inputs: { ...base().inputs, declaredScope } });
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: scoped }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /^status: complete\ndeclared scope: languages java; frameworks spring\nscope: include src\/app\/\*\*; exclude \*\*\/\*\.spec\.ts, src\/legacy\/\*\* \(the content it selects; the configuration that interprets it is read too\)\nsnapshot: /);
+  assert.match(text, /^status: complete\nsnapshot: [^\n]+\ndeclared scope: languages java; frameworks spring\nscope: include src\/app\/\*\*; exclude \*\*\/\*\.spec\.ts, src\/legacy\/\*\* \(the content it selects; the configuration that interprets it is read too\)\n/);
   const plain = textOf(await session.callTool("ye_ast_importers", { files: ["src/a.ts"] }));
   assert.doesNotMatch(plain, /^scope:/m);
   await session.close();
@@ -2966,7 +2978,7 @@ test("impact text presents consequences before seeds", async () => {
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
   const positions = ["changed entrypoints (", "reached entrypoints (", "impacted symbols (", "seeds ("].map((label) => text.indexOf(label));
   assert.ok(positions.every((position) => position >= 0));
-  assert.deepEqual(positions, positions.toSorted((a, b) => a - b));
+  assert.ok(Math.max(...positions.slice(0, 3)) < positions[3]!);
   await session.close();
 });
 
@@ -2998,12 +3010,13 @@ test("workspace impact text presents every repository's consequences before any 
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   for (const detail of ["summary", "details"] as const) {
     const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: detail }));
-    const consequences = [...text.matchAll(/^\s*(?:changed entrypoints|reached entrypoints|impacted symbols|call sites that land in what the walk reached|links across and inside repositories) \(/gm)].map((match) => match.index);
-    const seeds = [...text.matchAll(/^\s*seeds \(/gm)].map((match) => match.index);
+    const consequences = [...text.matchAll(/^\s*(?:(?:shop(?:-mobile|-web)? )?(?:changed entrypoints|reached entrypoints|impacted symbols)|call sites that land in what the walk reached|links across and inside repositories) \(/gm)].map((match) => match.index);
+    const seeds = [...text.matchAll(/^shop(?:-mobile|-web)? seeds \(/gm)].map((match) => match.index);
     assert.equal(seeds.length, 3);
     assert.ok(Math.max(...consequences) < Math.min(...seeds), text);
     assert.ok(text.indexOf("per repository:") < Math.min(...seeds));
-    assert.ok(text.lastIndexOf("no-extractor ") > Math.max(...seeds));
+    assert.ok(Math.max(...consequences) < text.indexOf("\ncuts:"), text);
+    assert.ok(text.indexOf("\ncuts:") < Math.min(...seeds));
     assert.match(text, /shop-mobile/);
     assert.match(text, /shop-web/);
   }
@@ -3055,12 +3068,12 @@ test("impact detail retains a selected origin association while both text modes 
   const full = await session.callTool("ye_ast_impact", { base: "main", mode: "details" });
   const structured = await session.callFull("ye_ast_impact", { base: "main" });
   assert.deepEqual(withoutRecovery(resultFields(structured)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
-  assert.doesNotMatch(textOf(summary), /one verified origin/);
-  assert.match(textOf(full), /one verified origin: src\/pages\/checkout\.component\.ts:30-45 Checkout \(resource\)/);
-  assert.match(textOf(full), /1 other origin/);
-  assert.match(textOf(full), /answer\.json (?:includes|has) all.*origin/);
-  assert.doesNotMatch(textOf(summary), /src\/unrelated\/unrelated\.service\.ts/);
-  assert.doesNotMatch(textOf(full), /src\/unrelated\/unrelated\.service\.ts/);
+  assert.match(textOf(summary), /origins 2, 1/);
+  assert.match(textOf(full), /origins 2, 1[^\n]*\n {6}evidence: src\/pages\/checkout\.component\.ts:30-45, src\/services\/checkout\.service\.ts:12-20/);
+  assert.match(textOf(full), /2\. 30-45 Checkout \(resource\)/);
+  assert.match(textOf(full), /1\. 12-20 checkout \(lines\)/);
+  assert.doesNotMatch(textOf(full).split("seeds (")[0]!, /src\/unrelated/);
+  for (const seed of seeds) assert.ok(textOf(full).includes(seed.file));
   await session.close();
 });
 
@@ -3126,7 +3139,8 @@ test("small resolved impact details identify association without forcing JSON na
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: small }) });
   try {
     const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
-    assert.match(text, /one verified origin/);
+    assert.match(text, /origins 0[^\n]*\n {6}evidence: src\/OrderService\.java:31/);
+    assert.match(text, /0\. 31 OrderService\.find \(lines\)/);
     assert.match(text, /association.*not.*(?:call chain|dependency chain)/i);
     assert.doesNotMatch(text, /Investigation guide:|Full JSON navigation|ye_ast_callers/);
   } finally { await session.close(); }

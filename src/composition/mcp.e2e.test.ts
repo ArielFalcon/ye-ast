@@ -434,10 +434,16 @@ test("selected callers pages replay real pinned origins and reject a changed liv
   const exampleText = detailText.match(/complete select example: (\{[^\n]+\})/)?.[1];
   assert.ok(exampleText, detailText);
   const example = JSON.parse(exampleText);
-  const rowText = detailText.split("\n").find((row) => row.includes(` -> ${path}:${line}`) && row.includes(` ${symbol} (depth`));
-  assert.ok(rowText, detailText);
-  const [, rowPath, rowLine, rowSymbol] = rowText.match(/ -> (.+):(\d+)(?:-\d+)? (\S+) \(depth/)!;
-  const handler = { path: rowPath!, symbol: rowSymbol!, line: Number(rowLine) };
+  const entrypointBlock = detailText.split("reached entrypoints (")[1]?.split("seeds (")[0] ?? "";
+  let rowPath: string | undefined;
+  const handlers = entrypointBlock.split("\n").flatMap((row) => {
+    const file = row.match(/^ {2}(\S.*)$/);
+    if (file) rowPath = file[1];
+    const handler = row.match(/^ {4}(\d+)(?:-\d+)? http-route [^\n]+ -> (\S+) \(depth/);
+    return handler === null ? [] : [{ path: rowPath, symbol: handler[2]!, line: Number(handler[1]) }];
+  });
+  const handler = handlers.find((item) => item.path === path && item.line === line && item.symbol === symbol);
+  assert.ok(handler, detailText);
   const select = { kind: example.kind, owner: example.owner, handler };
   const args = { ...recovery.query.arguments, select, page: { limit: 1 }, expect: recovery.resultIdentity };
   const first = await call(args);
