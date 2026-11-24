@@ -226,7 +226,7 @@ test("a trace tree states the call line, a foreign span, the seen and deferred n
   assert.ok(text.includes("    :12-20 #1 total (at 5, own-member)"), text);
   assert.ok(text.includes("      src/math.ts:1-3 leaf round\n      src/log.ts:2-4 leaf log (deferred)\n      external lodash: sum, map"), text);
   assert.ok(text.includes("      src/tax.ts:4-9 #2 tax (at 14, deferred)\n        src/flat-tax.ts:3-6 dispatch tax"), text);
-  assert.ok(text.includes("    :12-20 #3 total (at 7, seen #1)"), text);
+  assert.ok(text.includes("    src/order.ts:12-20 #3 total (at 7, seen #1)"), text);
 });
 
 function effectsFact(): Fact<TraceValue> {

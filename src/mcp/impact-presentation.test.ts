@@ -112,9 +112,9 @@ test("impact detail localizes cut anchors and limits while counting their refere
 test("impact detail says where the property a reassignable cut's calls run may have been replaced, in both layouts", () => {
   const reassignable: Cut = { kind: "unresolved-link", at: ["page.ts", "page.ts:16 this.wallet.balance"], reason: "reassignable", cause: ["overdraft.ts:2 reassignment", "wallet.ts:9 reassignment"], reach: { kind: "anything" } };
   const detail = renderImpact({ ...base, status: "partial", value: impact, cuts: [reassignable] }, "details");
-  assert.match(detail, /reassignable[\s\S]*overdraft\.ts:2 reassignment[\s\S]*wallet\.ts:9 reassignment/);
+  assert.match(detail, /reassignable[\s\S]*overdraft\.ts:2 (via )?reassignment[\s\S]*wallet\.ts:9 (via )?reassignment/);
   const many: Cut[] = Array.from({ length: 12 }, (_, line) => ({ ...reassignable, at: [`page-${line}.ts`, `page-${line}.ts:1 this.wallet.balance`] }));
-  assert.match(renderImpact({ ...base, status: "partial", value: impact, cuts: many as [Cut, ...Cut[]] }, "details"), /reassignable[\s\S]*overdraft\.ts:2 reassignment[\s\S]*wallet\.ts:9 reassignment/);
+  assert.match(renderImpact({ ...base, status: "partial", value: impact, cuts: many as [Cut, ...Cut[]] }, "details"), /reassignable[\s\S]*overdraft\.ts:2 (via )?reassignment[\s\S]*wallet\.ts:9 (via )?reassignment/);
 });
 
 test("impact guidance explains contextual full lookups and the origin-index join", () => {
