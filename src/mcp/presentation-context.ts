@@ -1,5 +1,6 @@
 import { mountOf } from "../core/domain/shared/build-outputs.ts";
-import type { Cut, Evidence, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
+import type { Cut, DeclaredScope, Evidence, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
+import { declaredScope as engineScope } from "../core/domain/map/entrypoint-map.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { SourceSummary } from "./select-evidence.ts";
 
@@ -86,14 +87,22 @@ function scopeLines(fact: Fact<unknown>): string[] {
   return lines;
 }
 
-/** The languages and frameworks a status is relative to. */
+/** The languages and frameworks the server instructions state for every repository (the engine's own declaration). */
+export const SESSION_SCOPE = engineScope();
+
+/** The languages and frameworks a status is relative to, unless they are the ones the server instructions state. */
 function declaredScopeLines(fact: Fact<unknown>): string[] {
   const { declaredScope } = contextOf(fact);
+  if (sameScope(declaredScope, SESSION_SCOPE)) return [];
   const named = [
     declaredScope.languages.length === 0 ? undefined : `languages ${declaredScope.languages.join(", ")}`,
     declaredScope.frameworks.length === 0 ? undefined : `frameworks ${declaredScope.frameworks.join(", ")}`,
   ].filter((part) => part !== undefined);
   return named.length === 0 ? [] : [`declared scope: ${named.join("; ")}`];
+}
+
+function sameScope(a: Pick<DeclaredScope, "languages" | "frameworks">, b: Pick<DeclaredScope, "languages" | "frameworks">): boolean {
+  return JSON.stringify([a.languages, a.frameworks]) === JSON.stringify([b.languages, b.frameworks]);
 }
 
 function changedLines(fact: Fact<unknown>): string[] {

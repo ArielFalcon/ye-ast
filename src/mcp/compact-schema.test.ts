@@ -46,8 +46,7 @@ test("catalogue advertises useful guides within budget", async () => {
     assert.ok((session.instructions?.length ?? Infinity) <= 4200);
     assert.match(session.instructions!, /supply select and page together/);
     for (const rule of [
-      /Content carries presentation text[^\n]*result JSON/,
-      /Recovery is the recovery field/,
+      /answer: answers\/<tool>\/<key>\/answer\.json[^\n]*jq[^\n]*_meta "ye-ast\/result"/,
       /unknown never means no impact/,
       /head and stateId/,
       /merge-base commit/,

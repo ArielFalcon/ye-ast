@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "../src/core/domain/shared/canonical-json.ts";
-import { createMcpServer, RESULT_JSON_LABEL, type McpDeps } from "../src/mcp/server.ts";
+import { createMcpServer, RESULT_META, type McpDeps } from "../src/mcp/server.ts";
 import { openSession, type Session, type ToolResult } from "../src/mcp/test-session.testing.ts";
 import { fullReply, memoryAnswerFiles } from "../src/mcp/answer-files.testing.ts";
 import { repositoryCatalog } from "../src/mcp/repository-targeting.ts";
@@ -154,16 +154,16 @@ type ComposeSurface = "public-tool" | "coordinator-direct";
 const bytes = (value: string) => Buffer.byteLength(value, "utf8");
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const textOf = (result: ToolResult) => result.content.map(part => part.text).join("\n");
-/** The content block as delivered: presentation, then the result JSON line when there are result fields. */
-const wireOf = (channels: Channels) => channels.structured === undefined ? channels.text : `${channels.text}\n${RESULT_JSON_LABEL}${JSON.stringify(channels.structured)}`;
+/** The reply as delivered: presentation, and the result fields when there are any. */
+const wireOf = (channels: Channels) => channels.structured === undefined ? channels.text : `${channels.text}\n${JSON.stringify(channels.structured)}`;
 
-/** Splits a successful content block at the server's result JSON label into presentation and result fields. */
+/** A successful result as its presentation text and the result fields in `_meta`. */
 function channelsOf(result: ToolResult): Channels {
   const text = textOf(result);
   if (result.isError === true) return { text, structured: undefined, isError: true };
-  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  if (at === -1) throw new Error("A successful result carries no result JSON line");
-  return { text: text.slice(0, at), structured: JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)), isError: false };
+  const structured = result._meta?.[RESULT_META];
+  if (structured === undefined) throw new Error("A successful result carries no result fields in _meta");
+  return { text, structured, isError: false };
 }
 
 /** Replaces private machine paths in stored artifacts; measurements are taken before this. */

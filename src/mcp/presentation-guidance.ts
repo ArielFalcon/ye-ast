@@ -1,6 +1,5 @@
 import { validRecoveryControls } from "./evidence-schema.ts";
 import type { EvidenceSelection } from "./select-evidence.ts";
-import type { Recovery } from "./recovery.ts";
 
 /** Families decide category membership and what `details` and `answer.json` can recover. */
 export function categoryRecovery(input: { details?: string; answerJson?: string }): string {
@@ -8,12 +7,6 @@ export function categoryRecovery(input: { details?: string; answerJson?: string 
     ...(input.details === undefined ? [] : [`mode "details" ${input.details}`]),
     ...(input.answerJson === undefined ? [] : [`answer.json ${input.answerJson}`]),
   ].join("; ");
-}
-
-export function recoveryReference(recovery: Recovery): string {
-  return recovery.status === "available"
-    ? "Recovery recipe and resultIdentity: recovery in the result JSON."
-    : `Recovery unavailable (${recovery.reason}); see recovery in the result JSON.`;
 }
 
 /** A literal public selector; never abbreviate or infer its owner or coordinates. */

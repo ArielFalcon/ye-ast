@@ -1,17 +1,14 @@
 import { renderSourceContext } from "./presentation-context.ts";
-import { recoveryReference } from "./presentation-guidance.ts";
 import type { EvidenceSelection, EvidenceSelectionResult } from "./select-evidence.ts";
-import type { Recovery } from "./recovery.ts";
 
 export type EvidencePage = { limit: number; offset: number; returned: number; total: number; nextCursor?: string };
 
 export function renderEvidenceSelection(input: {
   select: EvidenceSelection;
   records: EvidenceSelectionResult;
-  recovery: Recovery;
   page?: EvidencePage;
 }): string {
-  const { select, records, recovery, page } = input;
+  const { select, records, page } = input;
   const lines = [
     `Selection: ${JSON.stringify(select)}`,
     ...renderSourceContext(records.source),
@@ -24,7 +21,6 @@ export function renderEvidenceSelection(input: {
     if (page) lines.push(...pageLines(page));
     lines.push(`Records: ${JSON.stringify(records.items)}`);
   }
-  lines.push(recoveryReference(recovery));
   return lines.join("\n");
 }
 

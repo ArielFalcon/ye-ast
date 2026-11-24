@@ -50,8 +50,8 @@ test("compose honors the host text bound while keeping complete structured field
       assert.ok(Buffer.byteLength(textOf(result)) <= bound);
       if (result.isError) assert.equal(result._meta?.kind, "answer-over-bound");
       else {
-        assert.ok(result.structuredContent !== undefined);
-        assert.match(textOf(result), /structuredContent/);
+        assert.equal(result.structuredContent, undefined);
+        assert.ok(result._meta?.["ye-ast/result"] !== undefined);
       }
     } finally { await session.close(); }
   }
@@ -155,7 +155,7 @@ test("compose writes its full composition and both texts to an answer folder its
     const details = await session.callTool("ye_ast_compose", { queries, mode: "details" });
     const folder = summary._meta?.[ANSWER_FILES_META] as string;
     assert.equal(details._meta?.[ANSWER_FILES_META], folder);
-    for (const reply of [summary, details]) assert.match(lastLine(reply), new RegExp(`^answer files: ${folder} — answer\\.json \\(the full result, queryable with jq\\); summary\\.txt, details\\.txt$`));
+    for (const reply of [summary, details]) assert.equal(lastLine(reply), "answer: answers/compose/0/answer.json");
     const written = folders.get(folder)!;
     const { guide, ...composition } = JSON.parse(written["answer.json"]) as { guide: string; kind: string; mode: string; graph: { sources: unknown[] } };
     assert.equal(composition.kind, "composition");

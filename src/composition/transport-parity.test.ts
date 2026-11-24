@@ -19,7 +19,7 @@ import type { ChangeRequest, ContractConsequencesQueries, HypothesesRequest } fr
 import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
 import type { Install } from "../core/ports/install.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
-import { createMcpServer, RESULT_JSON_LABEL } from "../mcp/server.ts";
+import { createMcpServer, RESULT_META } from "../mcp/server.ts";
 import { openSession, type ToolResult } from "../mcp/test-session.testing.ts";
 import { serveQueries } from "../protocol/query-server.ts";
 import { expandFull } from "../mcp/full-projection.testing.ts";
@@ -374,8 +374,8 @@ async function consequencesThroughMcp(subject: Subject, fact: Fact<ConsequencesV
   try {
     const result = await session.callTool("ye_ast_contract_consequences", subject) as ToolResult;
     if (result.isError === true) return { accepted: false, requests };
-    const text = (fullReply(result, answers.folders).content as { text: string }[])[0]!.text;
-    return { accepted: true, requests, fact: expandFull("contract_consequences", JSON.parse(text.slice(text.lastIndexOf(`\n${RESULT_JSON_LABEL}`) + 1 + RESULT_JSON_LABEL.length))) };
+    const fields = fullReply(result, answers.folders)._meta?.[RESULT_META];
+    return { accepted: true, requests, fact: expandFull("contract_consequences", fields as never) };
   } finally {
     await session.close();
   }

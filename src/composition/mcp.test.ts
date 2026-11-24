@@ -354,8 +354,8 @@ test("the server writes each answer through the answer files its host hands over
   const unwritten = await alone.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
   assert.equal(kept.length, 1);
   assert.equal(kept[0]!.tool, "entrypoints");
-  assert.match(JSON.stringify(written.result), /answer files: \/cache\/answers\/entrypoints\/key/);
-  assert.doesNotMatch(JSON.stringify(unwritten.result), /answer files:/);
+  assert.match(JSON.stringify(written.result), /\\nanswer: answers\/entrypoints\/key\/answer\.json/);
+  assert.doesNotMatch(JSON.stringify(unwritten.result), /\\nanswer: /);
   for (const h of [handed, alone]) {
     h.stdin.end();
     await h.finished();
@@ -366,16 +366,18 @@ test("a cache directory is resolved against the working directory and the querie
   const kept: AnswerFolder[] = [];
   const named: Parameters<ProcessHost["queries"]>[0][] = [];
   const h = harness({
-    withCache: (directory) => (h.cached.push(directory), { ...h.host, queries: (options) => (named.push(options), composed()), answerFiles: { keep: async (answer) => (kept.push(answer), "/named/answers/entrypoints/key") } }),
+    withCache: (directory) => (h.cached.push(directory), { ...h.host, queries: (options) => (named.push(options), composed()), cacheDirectory: directory, answerFiles: { keep: async (answer) => (kept.push(answer), "/named/answers/entrypoints/key") } }),
   });
   h.start(["--cache", "store"]);
-  await open(h);
+  const initialized = await h.call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } });
+  h.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+  assert.match((initialized.result as { instructions: string }).instructions, /answer: answers\/<tool>\/<key>\/answer\.json" under \/work\/projects\/store/);
   const reply = await h.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
   assert.deepEqual(h.cached, ["/work/projects/store"]);
   assert.equal(named.length, 1);
   assert.equal(h.composed.count, 0);
   assert.equal(kept.length, 1);
-  assert.match(JSON.stringify(reply.result), /answer files: \/named\/answers\/entrypoints\/key/);
+  assert.match(JSON.stringify(reply.result), /\\nanswer: answers\/entrypoints\/key\/answer\.json/);
   h.stdin.end();
   assert.equal(await h.finished(), EXIT_CODE.ok);
 });

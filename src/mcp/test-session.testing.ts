@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { RESULT_JSON_LABEL } from "./server.ts";
+import { RESULT_META } from "./presentation/envelope.ts";
 import { InMemoryTransport, type JSONRPCMessage } from "@modelcontextprotocol/server";
 import type { JsonSchemaType, McpServer } from "@modelcontextprotocol/server";
 
@@ -10,22 +10,20 @@ export interface ToolResult {
   isError?: boolean;
 }
 
-/** Decode the single successful content block into its presentation and result fields. */
+/** Decode a successful reply into its presentation (the content block) and its result fields (`_meta`). */
 export function resultFields(result: ToolResult): Record<string, any> {
   assert.notEqual(result.isError, true);
   assert.equal(result.structuredContent, undefined);
   const text = result.content[0]?.text;
   assert.ok(text);
-  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  assert.notEqual(at, -1);
-  return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
+  const fields = result._meta?.[RESULT_META];
+  assert.ok(fields !== undefined && typeof fields === "object");
+  return { text, ...fields };
 }
 
-/** The presentation text a reader sees: content without its closing result JSON line. */
+/** The presentation text a reader sees: the content blocks. */
 export function textOf(result: { content: { text: string }[] }): string {
-  const whole = result.content.map((block) => block.text).join("\n");
-  const at = whole.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  return at === -1 ? whole : whole.slice(0, at);
+  return result.content.map((block) => block.text).join("\n");
 }
 
 export interface ToolInfo {

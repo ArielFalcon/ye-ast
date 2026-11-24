@@ -6,9 +6,10 @@ import { selectedOutputFor } from "./evidence-schema.ts";
 import { selectEvidence, type EvidenceSelection, type EvidenceSource, type EvidenceSelectionResult } from "./select-evidence.ts";
 import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSourceIdentity, encodeCursor, selectionDigest, type CursorV1 } from "./evidence-cursor.ts";
 import { renderEvidenceSelection, type EvidencePage } from "./render-evidence.ts";
-import { recoveryReference } from "./presentation-guidance.ts";
+import { answerPointer, delivered, envelopeText, unnamedRootLines, RESULT_META } from "./presentation/envelope.ts";
+import { renderFactStatus, snapshotLine, SESSION_SCOPE } from "./presentation-context.ts";
 import { projectFull } from "./full-projection.ts";
-import { ANSWER_FILES_META, WITHHELD, answerFilesLine, answerInputs, keepAnswer, unwrittenReason, withheld, type Delivery } from "./answer-files.ts";
+import { ANSWER_FILES_META, WITHHELD, answerInputs, keepAnswer, unwrittenReason, withheld, type Delivery } from "./answer-files.ts";
 import { keyTraceLinks, keyWorkspaceImpactLinks, keyWorkspaceLinks, withKeyedValue } from "./link-keys.ts";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -18,6 +19,7 @@ import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 import type { AnswerFiles } from "../core/ports/answer-files.port.ts";
 import { TRUST_MODES, UNKNOWN_REASONS } from "../core/domain/shared/fact.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
+import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
 import { executeQuery, type ExecutedSource, type QueryExecutionDeps } from "./query-runner.ts";
@@ -34,8 +36,7 @@ const LIVE_META = "ye-ast/live";
 export const WORKSPACE_LIVE_META = "ye-ast/workspace-live";
 /** The key of the result's `_meta` that carries the fault of an `isError` answer, beside the text that names its kind first. */
 export const FAULT_META = "ye-ast/fault";
-/** Opens the last line of a successful text block: the JSON of every structured field except `text`. */
-export const RESULT_JSON_LABEL = "result JSON: ";
+export { RESULT_META };
 /** Opens the line of a fault's text that carries its fields beyond kind, detail and entries. */
 const FAULT_FIELDS_LABEL = "fault fields: ";
 
@@ -44,26 +45,22 @@ function boundRefusal({ bound, mode, status, narrow }: Extract<BoundedText, { ki
   return { isError: true, content: Buffer.byteLength(explanation) <= bound ? [{ type: "text", text: explanation }] : [], _meta: { ...meta, kind: "answer-over-bound", bound, mode, status, narrow } };
 }
 
-/** Presentation and result fields are delivered once in the text content. */
-function delivered(text: string, fields: Record<string, unknown>, meta: Record<string, unknown>): CallToolResult {
-  return {
-    content: [{ type: "text", text: `${text}\n${RESULT_JSON_LABEL}${JSON.stringify(fields)}` }],
-    ...(Object.keys(meta).length ? { _meta: meta } : {}),
-  };
-}
-
 /** The read query families plus presentation. The one writer is `answerFiles`, which writes ye-ast's own answer files only and reaches no query family (ADR-0110). */
 export interface McpDeps extends QueryExecutionDeps {
   version: string;
   answerBytes?: number;
   answerFiles?: AnswerFiles;
+  /** The cache directory the answer folders live under; the instructions name it so a reply's relative pointer resolves. */
+  answerCacheRoot?: string;
   /** Default repository binding, plus additional host-declared targets. */
   repository: RepositoryBinding;
   repositories?: readonly RepositoryBinding[];
 }
 
 /** Common interpretation rules and a short routing guide, also useful before individual tools are loaded. */
-export function instructionsFor(repository: McpDeps["repository"], available: readonly string[] = [repository.repoId]): string {
+export function instructionsFor(repository: McpDeps["repository"], declared: readonly RepositoryBinding[] = [repository], answerCacheRoot?: string): string {
+  const roots = [...declared].sort((a, b) => compareText(a.repoId, b.repoId)).map(({ repoId, path }) => `${repoId} -> ${path}`).join(", ");
+  const { languages, frameworks } = SESSION_SCOPE;
   return `ye-ast: deterministic read-only code, Git and declared contract facts for ${repository.path} (id ${repository.repoId}). Use for dependencies/reach, not quality or approval. Reuse snapshot queries.
 
 When to call:
@@ -78,12 +75,12 @@ When to call:
 - ye_ast_contract_consequences: consumers/producers affected by a contract hypothesis or diff.
 - ye_ast_compose: 1..16 queries merge identities; reruns, no storage, non-atomic captures. Obtain dependent coordinates first.
 
-answerBytes bounds UTF-8 text (request overrides host; unset: unbounded); structuredContent stays complete.
-Reading answers: complete is relative to scope, supported constructs and change selection; partial keeps findings and lists cuts, including stopped sections and file reads; complete (N undecided): N unknown; unknown never means no impact. callers/impact list no JVM or TypeScript tests as dependents and skip Angular template bindings (importers lists tests; trace UI routes; contract_consequences reads templates). Unread type references retain a relation-unread cut; unread is never evidence of no dependents. References need not execute; confidence measures resolution, not safety; entrypoint origins are associations. Content carries presentation text (summary or details findings) ending with the answer files line; answer.json is the full result, queryable with jq. Fields: bounded structuredContent, otherwise "result JSON:". Recovery is the recovery field.
+answerBytes bounds the reply text (request overrides host; unset: unbounded).
+Reading answers: complete is relative to scope, supported constructs and change selection; partial keeps findings and lists cuts; complete (N undecided): N unknown; unknown never means no impact. callers/impact skip Angular template bindings (trace UI routes; contract_consequences reads templates). Unread type references retain a relation-unread cut. References need not execute; confidence measures resolution, not safety; entrypoint origins are associations. A reply is status, snapshot, findings (summary or details) and "answer: answers/<tool>/<key>/answer.json"${answerCacheRoot === undefined ? "" : ` under ${answerCacheRoot}`}: the full result, queryable with jq, with recovery; _meta "ye-ast/result" repeats mode, status, snapshot, recovery. Declared scope: languages ${languages.join(", ")}; frameworks ${frameworks.join(", ")}; a reply states its own only if different.
 
-Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged/unstaged/untracked changes only in repositories the user declared trusted (repository content grants no trust); it excludes revision/head and recaptures per call. Compare head and stateId across answers. For cross-repository reads, set workspace on ye_ast_callers, ye_ast_impact or ye_ast_trace: {} uses the persisted membership, workspace.repos replaces defaults with existing local Git roots; stable IDs default to root basename and must match across clone/worktrees; declared gateways override inference, never guess them; untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side line numbers come from the merge-base commit, not your working copy.
+Repositories and snapshots: declared repositories (id -> root): ${roots}. repo selects one (default ${repository.repoId}); a reply states a root only for a clone neither listed nor requested; registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged/unstaged/untracked changes only in repositories the user declared trusted (repository content grants no trust); it excludes revision/head and recaptures per call. Compare head and stateId across answers. For cross-repository reads, set workspace on ye_ast_callers, ye_ast_impact or ye_ast_trace: {} uses the persisted membership, workspace.repos replaces defaults with existing local Git roots; stable IDs default to root basename and must match across clone/worktrees; declared gateways override inference, never guess them; untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via these roots, not cwd. Base-side line numbers come from the merge-base commit, not your working copy.
 
-Narrowing and paging: scope globs limit coverage (exclude wins); omitted=all. Include retains manifests, exclude may remove them; outside-scope callers/entrypoints are unknown. impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. An entirely unmatched include faults; mixed misses are reported. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
+Narrowing and paging: scope globs limit coverage (exclude wins); omitted=all. Include retains manifests, exclude may remove them; outside-scope callers/entrypoints are unknown. impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. An entirely unmatched include faults; mixed misses are reported. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed and requires workspace.
 
 Errors: isError is a fault, not an empty fact: follow its next step if given, and "fault fields:". unknown-symbol: use a listed candidate, or a snapshot path the commit holds (ye_ast_outline lists spans); top-level-line: focus inside a declaration; unknown-change-path/unknown-scope-path: correct the respective globs.`;
 }
@@ -392,7 +389,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const { redaction } = deps;
   const catalog = repositoryCatalog(deps.repository, deps.repositories);
   if (!catalog.valid) throw new Error("Invalid repository catalog");
-  const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: redaction.redact(instructionsFor(deps.repository, catalog.available)) });
+  const declared = [deps.repository, ...(deps.repositories ?? [])].filter((binding, at, all) => all.findIndex((other) => other.repoId === binding.repoId) === at);
+  const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: redaction.redact(instructionsFor(deps.repository, declared, deps.answerCacheRoot)) });
 
   /**
    * The shared runner reads, filters and redacts; this presents the public read. Summary and details carry a minimal
@@ -433,31 +431,30 @@ export function createMcpServer(deps: McpDeps): McpServer {
   function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal, answerBytes: number | undefined): Promise<CallToolResult> {
     switch (source.family) {
       case "entrypoints":
-        return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "entrypoints", fact }));
+        return respond(source, source.read, renderEntrypointMap, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "entrypoints", fact }));
       case "impact":
       case "callers":
         return source.branch === "local"
-          ? respond(source, source.read, true, renderImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "local", fact }))
-          : respond(source, withKeyedValue(source.read, keyWorkspaceImpactLinks), false, renderWorkspaceImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "workspace", fact }));
+          ? respond(source, source.read, renderImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "local", fact }))
+          : respond(source, withKeyedValue(source.read, keyWorkspaceImpactLinks), renderWorkspaceImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "workspace", fact }));
       case "importers":
-        return respond(source, source.read, true, renderImporters, mode, controls, cursor, selectionFailure, answerBytes);
+        return respond(source, source.read, renderImporters, mode, controls, cursor, selectionFailure, answerBytes);
       case "outline":
-        return respond(source, source.read, true, renderOutline, mode, controls, cursor, selectionFailure, answerBytes);
+        return respond(source, source.read, renderOutline, mode, controls, cursor, selectionFailure, answerBytes);
       case "trace":
-        return respond(source, withKeyedValue(source.read, keyTraceLinks), true, renderTrace, mode, controls, cursor, selectionFailure, answerBytes);
+        return respond(source, withKeyedValue(source.read, keyTraceLinks), renderTrace, mode, controls, cursor, selectionFailure, answerBytes);
       case "workspace":
-        return respond(source, withKeyedValue(source.read, keyWorkspaceLinks), false, renderWorkspace, mode, controls, cursor, selectionFailure, answerBytes);
+        return respond(source, withKeyedValue(source.read, keyWorkspaceLinks), renderWorkspace, mode, controls, cursor, selectionFailure, answerBytes);
       case "decisions":
-        return respond(source, source.read, false, renderDecisions, mode, controls, cursor, selectionFailure, answerBytes);
+        return respond(source, source.read, renderDecisions, mode, controls, cursor, selectionFailure, answerBytes);
       case "contract_consequences":
-        return respond(source, source.read, false, renderContractConsequences, mode, controls, cursor, selectionFailure, answerBytes);
+        return respond(source, source.read, renderContractConsequences, mode, controls, cursor, selectionFailure, answerBytes);
     }
   }
 
   async function respond<V>(
     source: ExecutedSource,
     read: PublicRead<V>,
-    local: boolean,
     render: ResponseRenderer<V>,
     mode: ResponseMode,
     controls: Controls | undefined,
@@ -475,14 +472,19 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const verified = assertSourceIdentity(recovery, expected);
       if (!verified.ok) return selectionFailure(verified.fault);
     }
-    const recoveryText = recovery === undefined ? [] : [recoveryReference(recovery)];
     const meta = { ...(stale === undefined ? {} : { [LIVE_META]: stale }), ...(workspaceLive === undefined ? {} : { [WORKSPACE_LIVE_META]: workspaceLive }) };
+    const sidecar = [
+      ...(stale === undefined ? [] : [renderStale(stale)]),
+      ...(workspaceLive === undefined ? [] : workspaceLive.map((item) => `workspace live: ${JSON.stringify(item)}`)),
+      ...(refresh === undefined ? [] : renderRefresh(refresh)),
+    ];
+    const roots = unnamedRootLines(repositoryRoots, declared, source.query);
     const emit = (text: string, fields: Record<string, unknown>, summary: () => string, siblings: Record<string, unknown> = meta): CallToolResult => {
       OUTPUTS[tool].parse({ text, ...fields });
       if (answerBytes === undefined) return delivered(text, fields, siblings);
-      const bounded = boundedText((_fact, candidate) => `${candidate === mode ? text : summary()}\nResult JSON fields are in structuredContent.`, fact, mode, renderContext, { bytes: answerBytes });
+      const bounded = boundedText((_fact, candidate) => candidate === mode ? text : summary(), fact, mode, renderContext, { bytes: answerBytes });
       if (bounded.kind === "refused") return boundRefusal(bounded, siblings);
-      return { content: [{ type: "text", text: bounded.text }], structuredContent: fields, ...(Object.keys(siblings).length ? { _meta: siblings } : {}) };
+      return delivered(bounded.text, fields, siblings);
     };
     if (controls?.select !== undefined && controls.page !== undefined && recovery !== undefined && sourceFor !== undefined) {
       if (recovery.status === "unavailable" && recovery.reason === "deadline") return selectionFailure({ code: "replay-unavailable", reason: recovery.reason });
@@ -523,13 +525,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const fields = records.availability === "available"
         ? { ...shared, kind: "projection-receipt", availability: "available", page }
         : { ...shared, kind: "projection-receipt", availability: "unavailable", reason: records.reason };
-      const sidecar = [
-        ...(stale === undefined ? [] : [renderStale(stale)]),
-        ...(workspaceLive === undefined ? [] : workspaceLive.map((item) => `workspace live: ${JSON.stringify(item)}`)),
-        ...(refresh === undefined ? [] : renderRefresh(refresh)),
-        ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
-      ];
-      const selectedText = [...sidecar, renderEvidenceSelection({ select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n");
+      const selectedText = envelopeText({
+        lead: [...renderFactStatus(fact), snapshotLine(fact.snapshot), ...sidecar],
+        body: renderEvidenceSelection({ select: controls.select, records, ...(page === undefined ? {} : { page }) }),
+        roots,
+        closing: withheld(WITHHELD.selectedProjection).line,
+      });
       return emit(selectedText, fields, () => selectedText);
     }
     const buildFull = () => {
@@ -544,7 +545,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(workspaceLive === undefined ? {} : { workspaceLive }),
       });
       const guidance = [
-        ...recoveryText,
         ...projection.guidance,
         ...(repositoryRoots === undefined ? [] : ["Repository locations: repositoryRoots[].path is the clone of repositoryRoots[].repo; evidence paths are relative to its snapshot."]),
         ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
@@ -556,14 +556,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         text: [`status: ${fact.status}\n${location}`, render(fact, "full", renderContext), ...guidance].filter((part) => part !== "").join("\n"),
       };
     };
-    const rootLines = (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`);
-    const sidecar = [
-      ...(stale === undefined ? [] : [renderStale(stale)]),
-      ...(workspaceLive === undefined ? [] : workspaceLive.map((item) => `workspace live: ${JSON.stringify(item)}`)),
-      ...(refresh === undefined ? [] : renderRefresh(refresh)),
-      ...(local ? [] : rootLines),
-    ];
-    const plainText = (detail: "summary" | "details"): string => [...sidecar, render(fact, detail, renderContext), ...recoveryText, ...(local ? rootLines : [])].join("\n");
+    const plainText = (detail: "summary" | "details"): string => [...sidecar, render(fact, detail, renderContext), ...roots].join("\n");
     const keepFiles = async (): Promise<Delivery> => {
       if (deps.answerFiles === undefined) return withheld(WITHHELD.noCacheDirectory);
       const unwritten = unwrittenReason(fact);
@@ -571,13 +564,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const { text, fields } = buildFull();
       if (!OUTPUTS[tool].safeParse({ text, ...fields }).success) return withheld(WITHHELD.notValid);
       const folder = await keepAnswer(deps.answerFiles, tool, answerInputs(source.query, fact), { guide: text, fields, summary: plainText("summary"), details: plainText("details") });
-      return folder === null ? withheld(WITHHELD.notWritten) : { folder, line: redaction.redact(answerFilesLine(folder, fields)) };
+      return folder === null ? withheld(WITHHELD.notWritten) : { folder, line: redaction.redact(answerPointer(folder)) };
     };
     const kept = await keepFiles();
     const siblings = kept.folder === undefined ? meta : { ...meta, [ANSWER_FILES_META]: kept.folder };
-    const closed = (text: string): string => `${text}\n${kept.line}`;
+    const closed = (detail: ResponseMode): string => `${plainText(detail)}\n${kept.line}`;
     return emit(
-      closed(plainText(mode)),
+      closed(mode),
       {
         mode,
         status: fact.status,
@@ -585,7 +578,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(recovery === undefined ? {} : { recovery }),
         ...(fact.status === "unknown" ? { reason: fact.reason } : {}),
       },
-      () => closed(plainText("summary")),
+      () => closed("summary"),
       siblings,
     );
   }
@@ -633,7 +626,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     const full = composeFull(result);
     if (!output.safeParse(full).success) return withheld(WITHHELD.notValid);
     const folder = await keepAnswer(deps.answerFiles, "compose", { identity: verification.identity, ...(result.delivery === undefined ? {} : { delivery: result.delivery }) }, { guide: renderComposition(result, "full"), fields: full, summary: renderComposition(result, "summary"), details: renderComposition(result, "details") });
-    return folder === null ? withheld(WITHHELD.notWritten) : { folder, line: redaction.redact(answerFilesLine(folder, full)) };
+    return folder === null ? withheld(WITHHELD.notWritten) : { folder, line: redaction.redact(answerPointer(folder)) };
   }
 
   server.registerTool("ye_ast_compose", {
@@ -651,8 +644,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const siblings = kept.folder === undefined ? {} : { [ANSWER_FILES_META]: kept.folder };
       const closed = (mode: ResponseMode): string => `${renderComposition(result.value, mode)}\n${kept.line}`;
       if (deps.answerBytes === undefined) return delivered(closed(input.mode), fields, siblings);
-      const bounded = boundedProjection((mode) => `${closed(mode)}\nResult JSON fields are in structuredContent.`, input.mode, "per-source", ["queries", "scope", "focus", "mode: summary"], { bytes: deps.answerBytes });
-      return bounded.kind === "refused" ? boundRefusal(bounded, siblings) : { content: [{ type: "text", text: bounded.text }], structuredContent: fields, ...(Object.keys(siblings).length ? { _meta: siblings } : {}) };
+      const bounded = boundedProjection(closed, input.mode, "per-source", ["queries", "scope", "focus", "mode: summary"], { bytes: deps.answerBytes });
+      return bounded.kind === "refused" ? boundRefusal(bounded, siblings) : delivered(bounded.text, fields, siblings);
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
     }
@@ -674,7 +667,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_impact",
     {
       title: "Impact of a change",
-      description: "Diff from merge-base(base, head): changed declarations, incoming dependents, reached and added/removed/altered entrypoints. base required; head=HEAD, or trusted live. workspace adds incoming/outgoing links. For unchanged symbols use callers.",
+      description: "Diff from merge-base(base, head): changed declarations, incoming dependents (no JVM/TypeScript test files; importers lists them), reached and added/removed/altered entrypoints. base required; head=HEAD, or trusted live. workspace adds incoming/outgoing links. For unchanged symbols use callers.",
       inputSchema: compactInput(TOOL_INPUTS.impact, REPLAY_GUIDE),
       annotations,
     },
@@ -686,7 +679,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_callers",
     {
       title: "Callers of symbols or line ranges",
-      description: "Incoming dependents and reaching entrypoints with locations. Targets are names (all matching declarations) or inclusive ranges; unknown name is an error. workspace adds incoming cross-repo calls. For diffs use impact.",
+      description: "Incoming dependents (no JVM/TypeScript test files; importers lists them) and reaching entrypoints with locations. Targets are names (all matching declarations) or inclusive ranges; unknown name is an error. workspace adds incoming cross-repo calls. For diffs use impact.",
       inputSchema: compactInput(TOOL_INPUTS.callers, REPLAY_GUIDE),
       annotations,
     },

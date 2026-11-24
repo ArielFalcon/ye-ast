@@ -18,7 +18,7 @@ import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import { composeCli, composeQueries, mcpCommandFor } from "./compose.ts";
 import { installedVersion } from "./installed-versions.ts";
-import { createMcpServer, RESULT_JSON_LABEL } from "../mcp/server.ts";
+import { createMcpServer, RESULT_META } from "../mcp/server.ts";
 import { openSession } from "../mcp/test-session.testing.ts";
 import { fullReply, memoryAnswerFiles } from "../mcp/answer-files.testing.ts";
 
@@ -451,11 +451,8 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
     const answer = fullReply(await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {} }), answers.folders);
     assert.notEqual(answer.isError, true);
     assert.equal(answer.structuredContent, undefined);
-    const content = answer.content.map(block => block.text).join("\n");
-    const marker = `\n${RESULT_JSON_LABEL}`;
-    const at = content.lastIndexOf(marker);
-    assert.ok(at >= 0);
-    const structured = JSON.parse(content.slice(at + marker.length)) as Record<string, unknown>;
+    const structured = answer._meta?.[RESULT_META] as Record<string, unknown>;
+    assert.ok(structured !== undefined);
     assert.equal(structured["mode"], "full");
     assert.deepEqual(structured["freshness"], redaction.redactValue([{ repo: "orders", url, freshness: { status: "verified" } }]));
     assert.equal((structured["resolution"] as { sha?: string }[])[0]?.sha, remoteSha);
